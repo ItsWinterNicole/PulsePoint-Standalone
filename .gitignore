@@ -1,7 +1,8 @@
 #env
 .env
 .env.*
-
+# Database and media storage
+data
 # Logs
 /logs
 *.log
