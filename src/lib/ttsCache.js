@@ -6,7 +6,7 @@
 
 const DB_NAME = "tts_audio_cache";
 const STORE_NAME = "chunks";
-const DB_VERSION = 5; // bumped to clear stale cache after podcast-style TTS tuning
+const DB_VERSION = 10; // clear stale cache after feminine more-lift voice selection
 
 let dbPromise = null;
 

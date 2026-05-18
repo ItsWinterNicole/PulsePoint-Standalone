@@ -1,6 +1,12 @@
 import { useState, useRef } from "react";
 import { Play, Pause, Square, ChevronDown, Download } from "lucide-react";
-import { cleanTextForSpeech, splitIntoChunks } from "./TTSButton";
+import {
+  cleanTextForSpeech,
+  splitIntoChunks,
+  TTS_CACHE_VOICE_PROFILE,
+  TTS_SPEED,
+  VOICE_INSTRUCTIONS,
+} from "./TTSButton";
 import { fmtSecondsInText } from "@/utils/formatSeconds";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
@@ -8,6 +14,8 @@ import { idbGet, idbSet } from "@/lib/ttsCache";
 const OAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const estimateDuration = (text) => Math.max(1, Math.round(text.split(/\s+/).filter(Boolean).length / 2.25));
+const ttsCacheKey = (chunk) => `${TTS_CACHE_VOICE_PROFILE}|${VOICE_INSTRUCTIONS.trim()}|${chunk}`;
 
 const getTtsErrorMessage = (err) => {
   const raw =
@@ -33,12 +41,15 @@ const getTtsStatus = (err) => {
   return err?.status || err?.response?.status || err?.data?.status || 500;
 };
 
-async function callTTSWithRetries(payload, attempts = 7) {
+async function callTTSWithRetries(payload, attempts = 7, meta = {}) {
   let lastError;
+  const startedAt = performance.now();
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
+      const requestStartedAt = performance.now();
       const response = await base44.functions.invoke("openaiTTS", payload);
+      const latencyMs = Math.round(performance.now() - requestStartedAt);
 
       if (response?.data?.error) {
         const error = new Error(getTtsErrorMessage(response));
@@ -54,6 +65,18 @@ async function callTTSWithRetries(payload, attempts = 7) {
         throw error;
       }
 
+      console.info("[TTS] chunk success", {
+        chunkIndex: meta.chunkIndex,
+        charCount: payload.text?.length || 0,
+        estimatedDurationSec: estimateDuration(payload.text || ""),
+        model: response?.data?.model || "server-default",
+        voice: payload.voice,
+        speed: payload.speed,
+        latencyMs,
+        retries: attempt,
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+
       return response;
     } catch (err) {
       lastError = err;
@@ -62,6 +85,16 @@ async function callTTSWithRetries(payload, attempts = 7) {
       const retryable = [408, 429, 500, 502, 503, 504].includes(status);
 
       if (!retryable || attempt === attempts - 1) {
+        console.error("[TTS] chunk failed", {
+          chunkIndex: meta.chunkIndex,
+          charCount: payload.text?.length || 0,
+          estimatedDurationSec: estimateDuration(payload.text || ""),
+          voice: payload.voice,
+          speed: payload.speed,
+          retries: attempt,
+          status,
+          error: getTtsErrorMessage(err),
+        });
         throw err;
       }
 
@@ -93,13 +126,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     return valid;
   });
   const [showVoicePicker, setShowVoicePicker] = useState(false);
-  // speed slider kept for UI state but not sent to API (tts-1-hd doesn't support it)
-  const [speed, setSpeed] = useState(1.0);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
-  const speedRef = useRef(parseFloat(localStorage.getItem("tts_speed") || "1.0"));
+  const speedRef = useRef(TTS_SPEED);
 
   const stateRef = useRef("idle");
   const currentParaRef = useRef(-1);
@@ -110,16 +141,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const chunkQueueRef = useRef([]);
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
   const voiceRef = useRef(voice);
+  const chunkCounterRef = useRef(0);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
   // Prefetch cache: chunk text → decoded AudioBuffer (keyed by gen+chunk for staleness)
   const prefetchCacheRef = useRef(new Map()); // key: `${gen}:${chunk}` → Promise<AudioBuffer>
   const playbackTimeRef = useRef(0); // track playback time in seconds
-  const chunkStartTimeRef = useRef(0); // AudioContext time when current chunk started
   const wordRefs = useRef(new Map()); // map of word element refs for auto-scroll
   const updateIntervalRef = useRef(null); // track update interval to clear it
-  // Global TTS request serializer — ensures only one fetch runs at a time
-  const fetchQueueRef = useRef(Promise.resolve());
 
 
   const getAudioCtx = () => {
@@ -146,7 +175,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   };
 
   const stopSource = () => {
-    if (sourceRef.current) { try { sourceRef.current.stop(); } catch (_) {} sourceRef.current = null; }
+    if (sourceRef.current) { try { sourceRef.current.stop(); } catch {} sourceRef.current = null; }
   };
 
   const stop = () => {
@@ -203,18 +232,25 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const promise = (async () => {
       try {
         // Check IndexedDB persistent cache first
-        let mp3Buffer = await idbGet(chunk, voiceRef.current, 1.0);
+        const cacheText = ttsCacheKey(chunk);
+        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
 
         if (!mp3Buffer) {
           setRequestStatus({ type: "fetching", msg: "Fetching audio…" });
-          const response = await callTTSWithRetries({ text: chunk, voice: voiceRef.current });
+          const chunkIndex = ++chunkCounterRef.current;
+          const response = await callTTSWithRetries({
+            text: chunk,
+            voice: voiceRef.current,
+            speed: TTS_SPEED,
+            instructions: VOICE_INSTRUCTIONS,
+          }, 7, { chunkIndex });
           if (response.data?.error) throw new Error(response.data.error);
           const base64 = response.data.audio;
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
           mp3Buffer = bytes.buffer;
-          idbSet(chunk, voiceRef.current, 1.0, mp3Buffer); // fire-and-forget
+          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
           setRequestStatus({ type: "ok", msg: "Audio ready" });
         } else {
           setRequestStatus({ type: "ok", msg: "Audio ready (cached)" });
@@ -366,7 +402,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       if (wordEl) {
         try {
           wordEl.scrollIntoView({ behavior: "auto", block: "center" });
-        } catch (e) {
+        } catch {
           // Silently handle scroll errors
         }
       }
@@ -389,6 +425,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
     remainingParasRef.current = paragraphs.map((_, i) => i).filter(i => i >= paraIdx);
+    chunkCounterRef.current = 0;
     setCP(paraIdx);
     setS("playing");
     setBufferingPara(paraIdx);
@@ -444,18 +481,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     voiceRef.current = v;
     localStorage.setItem("tts_oai_voice", v);
     setShowVoicePicker(false);
-  };
-
-  const changeSpeed = (v) => {
-    speedRef.current = v;
-    setSpeed(v);
-    localStorage.setItem("tts_speed", String(v));
-    prefetchCacheRef.current.clear();
-    // If currently playing, restart from the current paragraph at new speed
-    if (stateRef.current === "playing" || stateRef.current === "paused") {
-      const para = currentParaRef.current >= 0 ? currentParaRef.current : 0;
-      startFrom(para);
-    }
   };
 
   const isActive = state === "playing" || state === "paused" || state === "buffering";
@@ -528,20 +553,24 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         allChunks.push(...chunks);
       }
 
-      // Fetch MP3 chunks in parallel (max 3 concurrent) for speed
       const mp3Chunks = new Array(allChunks.length);
       setDownloadProgress({ current: 0, total: allChunks.length });
       let completed = 0;
-      const CONCURRENCY = 2;
 
       const fetchChunk = async (i) => {
         const chunk = allChunks[i];
 
         // Check IndexedDB persistent cache first
-        let mp3Buffer = await idbGet(chunk, voiceRef.current, 1.0);
+        const cacheText = ttsCacheKey(chunk);
+        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
 
         if (!mp3Buffer) {
-          const res = await callTTSWithRetries({ text: chunk, voice: voiceRef.current });
+          const res = await callTTSWithRetries({
+            text: chunk,
+            voice: voiceRef.current,
+            speed: TTS_SPEED,
+            instructions: VOICE_INSTRUCTIONS,
+          }, 7, { chunkIndex: i + 1 });
           if (res.data?.error) throw new Error(res.data.error);
           if (!res.data?.audio) throw new Error(`TTS request failed (status ${res.status})`);
           const base64 = res.data.audio;
@@ -549,7 +578,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           const bytes = new Uint8Array(binary.length);
           for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
           mp3Buffer = bytes.buffer;
-          idbSet(chunk, voiceRef.current, 1.0, mp3Buffer); // fire-and-forget
+          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
         }
 
         mp3Chunks[i] = new Uint8Array(mp3Buffer);

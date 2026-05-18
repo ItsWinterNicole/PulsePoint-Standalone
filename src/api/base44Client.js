@@ -40,7 +40,17 @@ async function invokeFunction(name, payload) {
     for (let i = 0; i < bytes.length; i += chunkSize) {
       binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
     }
-    return { status: response.status, data: { audio: btoa(binary) } };
+    return {
+      status: response.status,
+      data: {
+        audio: btoa(binary),
+        model: response.headers.get('x-tts-model') || undefined,
+        voice: response.headers.get('x-tts-voice') || undefined,
+        speed: response.headers.get('x-tts-speed') || undefined,
+        latency_ms: response.headers.get('x-tts-latency-ms') || undefined,
+        retries: response.headers.get('x-tts-retries') || undefined,
+      },
+    };
   }
 
   const data = contentType.includes('application/json') ? await response.json() : await response.text();

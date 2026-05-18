@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen } from "lucide-react";
+import InstallAppButton from "./InstallAppButton";
 
 const navItems = [
 { path: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -68,7 +69,8 @@ export default function Layout() {
               <Link
                 key={path}
                 to={path}
-                onClick={() => setOpen(false)} className="text-[#ffffff] px-3 py-2.5 text-sm font-medium rounded-lg flex items-center gap-3 transition-colors hover:bg-muted hover:text-foreground">
+                onClick={() => setOpen(false)}
+                className={`text-[#ffffff] px-3 py-2.5 text-sm font-medium rounded-lg flex items-center gap-3 transition-colors hover:bg-muted hover:text-foreground ${isActive ? "bg-muted text-foreground" : ""}`}>
 
 
 
@@ -79,8 +81,9 @@ export default function Layout() {
                 {label}
               </Link>);
 
-          })}
+            })}
         </nav>
+        <InstallAppButton />
       </aside>
 
       <main className="flex-1 pt-14 overflow-auto">

@@ -4,8 +4,12 @@ import {
   LineChart, Line, BarChart, Bar, ScatterChart, Scatter,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
+import { Link } from "react-router-dom";
 import moment from "moment";
-import { TrendingUp, Heart, Zap, Activity, BarChart2 } from "lucide-react";
+import {
+  TrendingUp, Heart, Zap, Activity, BarChart2, Sparkles, ClipboardList,
+  ArrowUpRight, AlertCircle, CheckCircle2, CalendarClock, Target, Gauge,
+} from "lucide-react";
 import EventSummaryCard from "../components/EventSummaryCard";
 import HRPerformanceMetrics from "../components/HRPerformanceMetrics";
 import EventHRCorrelationView from "../components/EventHRCorrelationView";
@@ -33,6 +37,82 @@ function StatCard({ label, value, sub, icon: Icon, color = "primary" }) {
 
 function SectionTitle({ children }) {
   return <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">{children}</h2>;
+}
+
+const briefToneStyles = {
+  primary: "border-primary/25 bg-primary/10 text-primary",
+  accent: "border-accent/25 bg-accent/10 text-accent",
+  good: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
+  warn: "border-amber-500/25 bg-amber-500/10 text-amber-300",
+  muted: "border-border bg-muted/40 text-muted-foreground",
+};
+
+function compactDate(date) {
+  return date ? moment(date).format("MMM D") : "Unknown date";
+}
+
+function sessionTitle(session) {
+  if (!session) return "No session";
+  const pieces = [compactDate(session.date)];
+  if (session.duration_minutes) pieces.push(`${session.duration_minutes}m`);
+  if (session.satisfaction) pieces.push(`${session.satisfaction}/10 satisfaction`);
+  return pieces.join(" · ");
+}
+
+function averageMetric(rows, key) {
+  const values = rows.map((row) => Number(row[key])).filter(Number.isFinite);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+function signedDelta(value, suffix = "") {
+  if (value == null || Number.isNaN(value)) return "No comparison yet";
+  if (Math.abs(value) < 0.05) return "steady vs previous 5";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}${suffix} vs previous 5`;
+}
+
+function bestLabelFromCounts(items, fallback = "Keep logging") {
+  const top = Object.entries(items).sort((a, b) => b[1] - a[1])[0];
+  return top ? top[0] : fallback;
+}
+
+function SignalCard({ icon: Icon, label, value, detail, tone = "primary" }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-center gap-2">
+        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border ${briefToneStyles[tone] || briefToneStyles.primary}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      </div>
+      <p className="mt-3 text-2xl font-bold tracking-tight">{value ?? "—"}</p>
+      {detail && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</p>}
+    </div>
+  );
+}
+
+function ReviewRow({ icon: Icon = AlertCircle, title, detail, to, tone = "warn" }) {
+  const body = (
+    <>
+      <span className={`mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${briefToneStyles[tone] || briefToneStyles.warn}`}>
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium leading-snug text-foreground">{title}</span>
+        {detail && <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{detail}</span>}
+      </span>
+      {to && <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+    </>
+  );
+
+  if (to) {
+    return (
+      <Link to={to} className="flex items-start gap-3 rounded-lg border border-border/70 bg-muted/25 p-3 transition hover:border-primary/40 hover:bg-muted/40">
+        {body}
+      </Link>
+    );
+  }
+
+  return <div className="flex items-start gap-3 rounded-lg border border-border/70 bg-muted/25 p-3">{body}</div>;
 }
 
 const CustomTooltip = ({ active, payload, label }) => {
@@ -176,6 +256,127 @@ export default function Dashboard() {
       ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length)
       : null;
     return { avgRecoveryRate, durationData, totalWithDuration, avgGap, count: recoverySessions.length };
+  }, [sessions]);
+
+  const dashboardBrief = useMemo(() => {
+    if (!sessions.length) return {};
+
+    const sorted = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const latest = sorted[0];
+    const recent = sorted.slice(0, 5);
+    const previous = sorted.slice(5, 10);
+    const recentSatisfaction = averageMetric(recent, "satisfaction");
+    const previousSatisfaction = averageMetric(previous, "satisfaction");
+    const recentIntensity = averageMetric(recent, "intensity");
+    const previousIntensity = averageMetric(previous, "intensity");
+    const satisfactionDelta = recentSatisfaction != null && previousSatisfaction != null
+      ? recentSatisfaction - previousSatisfaction
+      : null;
+    const intensityDelta = recentIntensity != null && previousIntensity != null
+      ? recentIntensity - previousIntensity
+      : null;
+
+    const topSessions = sorted
+      .filter((session) => session.satisfaction || session.intensity)
+      .sort((a, b) => {
+        const satDiff = (b.satisfaction || 0) - (a.satisfaction || 0);
+        return satDiff || ((b.intensity || 0) - (a.intensity || 0));
+      })
+      .slice(0, 8);
+
+    const methodCounts = {};
+    const moodCounts = {};
+    const buildCounts = {};
+    topSessions.forEach((session) => {
+      (session.methods || []).forEach((method) => {
+        methodCounts[method] = (methodCounts[method] || 0) + 1;
+      });
+      if (session.mood) moodCounts[session.mood] = (moodCounts[session.mood] || 0) + 1;
+      if (session.build_type) buildCounts[session.build_type] = (buildCounts[session.build_type] || 0) + 1;
+    });
+
+    const bestMethod = bestLabelFromCounts(methodCounts);
+    const bestMood = bestLabelFromCounts(moodCounts, null);
+    const bestBuild = bestLabelFromCounts(buildCounts, null);
+    const peakHR = Math.max(
+      ...sessions
+        .map((session) => Number(session.max_hr || session.hr_at_climax || 0))
+        .filter((value) => value > 0)
+    );
+    const recentPeak = recent.find((session) => Number(session.max_hr || session.hr_at_climax || 0) === peakHR);
+
+    const missingAi = sorted.filter((session) => !session.ai_analysis?.summary && !session.ai_summary).slice(0, 3);
+    const missingMarkers = sorted
+      .filter((session) => !session.no_climax && session.climax_offset_s == null && session.recovery_offset_s == null)
+      .slice(0, 3);
+    const highEffortLowReward = sorted
+      .filter((session) => Number(session.intensity) >= 8 && Number(session.satisfaction) <= 6)
+      .slice(0, 2);
+    const noHrData = sorted
+      .filter((session) => !session.avg_hr && !session.max_hr && !session.hr_at_climax)
+      .slice(0, 2);
+
+    const reviewItems = [];
+    if (missingAi.length) {
+      reviewItems.push({
+        icon: Sparkles,
+        title: `${missingAi.length} session${missingAi.length > 1 ? "s" : ""} ready for AI analysis`,
+        detail: `Start with ${sessionTitle(missingAi[0])}.`,
+        to: `/sessions/${missingAi[0].id}`,
+        tone: "primary",
+      });
+    }
+    if (missingMarkers.length) {
+      reviewItems.push({
+        icon: Target,
+        title: `${missingMarkers.length} session${missingMarkers.length > 1 ? "s" : ""} missing climax or recovery markers`,
+        detail: `First one is ${sessionTitle(missingMarkers[0])}.`,
+        to: `/sessions/${missingMarkers[0].id}`,
+        tone: "warn",
+      });
+    }
+    if (highEffortLowReward.length) {
+      reviewItems.push({
+        icon: AlertCircle,
+        title: "High intensity with lower satisfaction",
+        detail: `${sessionTitle(highEffortLowReward[0])} may be worth reviewing for friction points.`,
+        to: `/sessions/${highEffortLowReward[0].id}`,
+        tone: "warn",
+      });
+    }
+    if (noHrData.length) {
+      reviewItems.push({
+        icon: Heart,
+        title: `${noHrData.length} session${noHrData.length > 1 ? "s" : ""} without heart-rate data`,
+        detail: `Add physiology when available, starting with ${compactDate(noHrData[0].date)}.`,
+        to: `/sessions/${noHrData[0].id}`,
+        tone: "muted",
+      });
+    }
+
+    const bestRecent = recent
+      .filter((session) => session.satisfaction || session.intensity)
+      .sort((a, b) => ((b.satisfaction || 0) - (a.satisfaction || 0)) || ((b.intensity || 0) - (a.intensity || 0)))[0];
+
+    const briefLine = latest
+      ? `Latest: ${sessionTitle(latest)}. Your recent average is ${recentSatisfaction ? `${recentSatisfaction.toFixed(1)}/10 satisfaction` : "still forming"}${recentIntensity ? ` with ${recentIntensity.toFixed(1)}/10 intensity` : ""}.`
+      : "Start logging sessions to build a useful pulse brief.";
+
+    return {
+      latest,
+      recentSatisfaction,
+      recentIntensity,
+      satisfactionDelta,
+      intensityDelta,
+      bestMethod,
+      bestMood,
+      bestBuild,
+      bestRecent,
+      peakHR: Number.isFinite(peakHR) ? peakHR : null,
+      recentPeak,
+      reviewItems: reviewItems.slice(0, 4),
+      briefLine,
+    };
   }, [sessions]);
 
   // Build the ordered widget renderers (keyed by id)
@@ -371,6 +572,127 @@ export default function Dashboard() {
           onToggle={toggleWidget}
           onReorder={moveWidget}
         />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1.35fr_0.9fr]">
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+              <Sparkles className="h-4.5 w-4.5" />
+            </span>
+            <div>
+              <SectionTitle>Pulse Brief</SectionTitle>
+              <p className="text-xs text-muted-foreground">A quick read on where things stand right now</p>
+            </div>
+          </div>
+          <p className="mt-5 max-w-3xl text-lg font-semibold leading-snug">
+            {dashboardBrief.briefLine}
+          </p>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-border/70 bg-muted/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest Session</p>
+              {dashboardBrief.latest ? (
+                <Link to={`/sessions/${dashboardBrief.latest.id}`} className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-foreground hover:text-primary">
+                  {compactDate(dashboardBrief.latest.date)}
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
+              ) : (
+                <p className="mt-1 text-sm text-muted-foreground">No latest session</p>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {dashboardBrief.latest?.duration_minutes ? `${dashboardBrief.latest.duration_minutes} minutes` : "Duration not logged"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Best Recent</p>
+              {dashboardBrief.bestRecent ? (
+                <Link to={`/sessions/${dashboardBrief.bestRecent.id}`} className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-foreground hover:text-primary">
+                  {compactDate(dashboardBrief.bestRecent.date)}
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
+              ) : (
+                <p className="mt-1 text-sm text-muted-foreground">Still forming</p>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {dashboardBrief.bestRecent?.satisfaction ? `${dashboardBrief.bestRecent.satisfaction}/10 satisfaction` : "No rating yet"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-muted/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Reliable Ingredient</p>
+              <p className="mt-1 truncate text-sm font-medium text-foreground">{dashboardBrief.bestMethod}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {dashboardBrief.bestMood || dashboardBrief.bestBuild
+                  ? [dashboardBrief.bestMood, dashboardBrief.bestBuild].filter(Boolean).join(" · ")
+                  : "Based on top-rated sessions"}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent">
+                <ClipboardList className="h-4.5 w-4.5" />
+              </span>
+              <div>
+                <SectionTitle>Review Queue</SectionTitle>
+                <p className="text-xs text-muted-foreground">Small things that would make the data sharper</p>
+              </div>
+            </div>
+            <span className="rounded-full bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground">
+              {dashboardBrief.reviewItems?.length || 0}
+            </span>
+          </div>
+          <div className="mt-4 space-y-2">
+            {dashboardBrief.reviewItems?.length ? (
+              dashboardBrief.reviewItems.map((item) => (
+                <ReviewRow key={`${item.title}-${item.to}`} {...item} />
+              ))
+            ) : (
+              <ReviewRow
+                icon={CheckCircle2}
+                title="Nothing urgent to clean up"
+                detail="Your recent sessions have enough detail to keep the dashboard useful."
+                tone="good"
+              />
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div>
+        <SectionTitle>Signals</SectionTitle>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <SignalCard
+            icon={TrendingUp}
+            label="Satisfaction"
+            value={dashboardBrief.recentSatisfaction != null ? `${dashboardBrief.recentSatisfaction.toFixed(1)}/10` : null}
+            detail={signedDelta(dashboardBrief.satisfactionDelta)}
+            tone={dashboardBrief.satisfactionDelta == null ? "muted" : dashboardBrief.satisfactionDelta >= 0 ? "good" : "warn"}
+          />
+          <SignalCard
+            icon={Zap}
+            label="Intensity"
+            value={dashboardBrief.recentIntensity != null ? `${dashboardBrief.recentIntensity.toFixed(1)}/10` : null}
+            detail={signedDelta(dashboardBrief.intensityDelta)}
+            tone="primary"
+          />
+          <SignalCard
+            icon={Gauge}
+            label="Peak HR"
+            value={dashboardBrief.peakHR ? `${dashboardBrief.peakHR} bpm` : null}
+            detail={dashboardBrief.recentPeak ? `Matched recently on ${compactDate(dashboardBrief.recentPeak.date)}` : "All-time observed peak"}
+            tone="accent"
+          />
+          <SignalCard
+            icon={CalendarClock}
+            label="Recovery Window"
+            value={physioStats.avgGap ? (physioStats.avgGap >= 60 ? `${Math.floor(physioStats.avgGap / 60)}m ${physioStats.avgGap % 60}s` : `${physioStats.avgGap}s`) : null}
+            detail={physioStats.count ? `Averaged across ${physioStats.count} marked sessions` : "Add climax and recovery markers"}
+            tone="muted"
+          />
+        </div>
       </div>
 
       {/* Render widgets in user-defined order */}

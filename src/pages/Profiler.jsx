@@ -13,6 +13,64 @@ function fmtSec(s) {
   return v >= 60 ? `${Math.floor(v / 60)}m${v % 60}s` : `${v}s`;
 }
 
+function briefText(value, max = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function aiErrorMessage(error) {
+  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
+  try {
+    const parsed = JSON.parse(raw);
+    const nested = parsed?.error?.message || parsed?.message || parsed?.error;
+    if (nested) return nested;
+  } catch {
+    // use raw text below
+  }
+  return raw;
+}
+
+function compactSessionLine(s) {
+  const methods = [...(s.methods || []), ...(s.custom_methods || [])].filter(Boolean).slice(0, 5).join(", ") || "none";
+  const context = [s.mood, s.environment, s.build_type, s.substances].filter(Boolean).join(", ") || "no context";
+  const markers = [
+    s.pre_climax_offset_s != null ? `pre ${fmtSec(s.pre_climax_offset_s)}` : null,
+    s.climax_offset_s != null ? `climax ${fmtSec(s.climax_offset_s)}` : s.no_climax ? "no climax" : null,
+    s.recovery_offset_s != null ? `recovery ${fmtSec(s.recovery_offset_s)}` : null,
+  ].filter(Boolean).join("; ");
+  const hr = [
+    s.avg_hr ? `avg ${s.avg_hr}` : null,
+    s.max_hr ? `max ${s.max_hr}` : null,
+    s.hr_at_climax ? `climax ${s.hr_at_climax}` : null,
+  ].filter(Boolean).join("/");
+  const events = (s.event_timeline || [])
+    .slice(0, 4)
+    .map((e) => `${fmtSec(e.time_s)} ${briefText(e.note, 70)}`)
+    .join(" | ");
+  return [
+    `${s.date?.slice(0, 10) || "unknown"}: ${s.duration_minutes || "?"}m`,
+    `methods ${methods}`,
+    `ratings I${s.intensity ?? "?"}/S${s.satisfaction ?? "?"}/build${s.build_quality ?? "?"}`,
+    `HR ${hr || "none"}`,
+    `markers ${markers || "none"}`,
+    `context ${context}`,
+    s.discomfort ? `discomfort ${briefText(s.discomfort, 90)}` : null,
+    s.unusual_sensations ? `sensations ${briefText(s.unusual_sensations, 90)}` : null,
+    s.notes ? `notes ${briefText(s.notes, 120)}` : null,
+    events ? `events ${events}` : null,
+  ].filter(Boolean).join("; ");
+}
+
+function CompactError({ message }) {
+  if (!message) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>{message}</span>
+    </div>
+  );
+}
+
 // Import-equivalent: NCE keyword list for note corroboration (mirrored from NearClimaxEvents)
 const NCE_KEYWORDS = [
   "tension", "tense", "tight", "tighten", "clench", "grip",
@@ -171,6 +229,7 @@ function SectionCard({ icon, title, color, children, defaultCollapsed = false })
 function AIProfilePanel({ sessions, userProfile, journals }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -181,50 +240,16 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
   const analyze = async () => {
     setLoading(true);
     setResult(null);
+    setError("");
 
-    const sessionSummaries = sessions.map((s) => ({
-      date: s.date?.slice(0, 10),
-      duration_minutes: s.duration_minutes,
-      methods: s.methods,
-      custom_methods: s.custom_methods,
-      foley_size: s.foley_size,
-      foley_type: s.foley_type,
-      estim_notes: s.estim_notes,
-      sleeve_type: s.sleeve_type,
-      tens_placement: s.tens_placement,
-      build_type: s.build_type,
-      custom_build_type: s.custom_build_type,
-      climax_duration: s.climax_duration,
-      no_climax: s.no_climax,
-      intensity: s.intensity,
-      build_quality: s.build_quality,
-      satisfaction: s.satisfaction,
-      avg_hr: s.avg_hr,
-      max_hr: s.max_hr,
-      hr_at_climax: s.hr_at_climax,
-      hr_avg_pre_to_climax: s.hr_avg_pre_to_climax,
-      hr_avg_at_climax_window: s.hr_avg_at_climax_window,
-      pre_climax_offset_s: s.pre_climax_offset_s,
-      climax_offset_s: s.climax_offset_s,
-      recovery_offset_s: s.recovery_offset_s,
-      mood: s.mood,
-      environment: s.environment,
-      hydration: s.hydration,
-      substances: s.substances,
-      ejaculate_volume: s.ejaculate_volume,
-      discomfort: s.discomfort,
-      discomfort_entries: s.discomfort_entries?.length > 0 ? s.discomfort_entries : undefined,
-      unusual_sensations: s.unusual_sensations,
-      refractory_notes: s.refractory_notes,
-      notes: s.notes,
-      tags: s.tags,
-      is_favorite: s.is_favorite,
-      event_timeline: s.event_timeline?.length > 0 ? s.event_timeline.map(e => ({
-        time_s: e.time_s,
-        category: Array.isArray(e.category) ? e.category : [e.category].filter(Boolean),
-        note: e.note,
-      })) : undefined,
-    }));
+    try {
+    const sortedSessions = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const topSessions = [...sessions]
+      .filter((s) => s.satisfaction || s.intensity)
+      .sort((a, b) => ((b.satisfaction || 0) - (a.satisfaction || 0)) || ((b.intensity || 0) - (a.intensity || 0)))
+      .slice(0, 8);
+    const signalSessions = [...new Map([...sortedSessions.slice(0, 14), ...topSessions].map((s) => [s.id, s])).values()];
+    const sessionSummaries = signalSessions.map(compactSessionLine).join("\n");
 
     const profileContext = userProfile ? `
 USER PROFILE & NOTES:
@@ -239,17 +264,17 @@ Arousal notes: ${userProfile.arousal_notes || "none"}
     // Build journal context from all available journal entries
     const journalContext = (journals || []).length > 0 ? `
 
-SESSION JOURNALS (${journals.length} entries — the person's own subjective post-session reflections, ordered most recent first):
-${(journals || []).slice(0, 20).map((j, i) => {
+SESSION JOURNALS (${Math.min(journals.length, 8)} recent entries — subjective post-session reflections):
+${(journals || []).slice(0, 8).map((j) => {
   const ai = j.ai_journal;
   const date = j.session_date ? new Date(j.session_date).toISOString().slice(0, 10) : "unknown date";
   if (!ai && !j.voice_transcript) return null;
   return `[Session ${date}]:
-${ai?.emotional_reflection ? `  Emotional: ${ai.emotional_reflection}` : ""}
-${ai?.physiological_observations ? `  Physiological: ${ai.physiological_observations}` : ""}
-${ai?.insights ? `  Insights: ${ai.insights}` : ""}
-${ai?.next_session_intentions ? `  Intentions: ${ai.next_session_intentions}` : ""}
-${j.voice_transcript && !ai ? `  Notes: ${j.voice_transcript}` : ""}`.trim();
+${ai?.emotional_reflection ? `  Emotional: ${briefText(ai.emotional_reflection, 220)}` : ""}
+${ai?.physiological_observations ? `  Physiological: ${briefText(ai.physiological_observations, 220)}` : ""}
+${ai?.insights ? `  Insights: ${briefText(ai.insights, 220)}` : ""}
+${ai?.next_session_intentions ? `  Intentions: ${briefText(ai.next_session_intentions, 180)}` : ""}
+${j.voice_transcript && !ai ? `  Notes: ${briefText(j.voice_transcript, 220)}` : ""}`.trim();
 }).filter(Boolean).join("\n\n")}
 
 Use the journals to surface recurring emotional themes, evolving insights, and subjective experiences that the raw session metrics alone cannot reveal. Note where the person's own reflections align with or diverge from the physiological data.` : "";
@@ -266,8 +291,8 @@ CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Avoid jargon—explain concepts clearly as if speaking aloud
 - Use commas and periods to create natural speech cadence
 ${profileContext}${journalContext}
-SESSION DATA (${sessions.length} sessions):
-${JSON.stringify(sessionSummaries, null, 2)}
+SESSION DATA SUMMARY (${sessions.length} total sessions; using the newest and highest-signal sessions to stay under rate limits):
+${sessionSummaries}
 
 Generate a rich, holistic profile. Your job is NOT to restate what was already logged — the person already knows what they did. Instead, offer your own interpretations, inferences, hypotheses, and conclusions drawn FROM the data. Go beyond the surface. Make observations they may not have noticed themselves. Point out cross-session patterns, contradictions, and surprising findings. Be willing to form opinions and state them directly.
 
@@ -314,7 +339,12 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
     } else {
       await base44.entities.SessionClusterAnalysis.create({ result: parsed, session_count: sessions.length });
     }
-    setLoading(false);
+    } catch (err) {
+      console.error("AI profile generation failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const SECTIONS = [
@@ -358,6 +388,8 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
           <AlertCircle className="w-3.5 h-3.5" /> Need at least 2 sessions to generate a profile.
         </p>
       )}
+
+      <CompactError message={error} />
 
       {!result && !loading && sessions.length >= 2 && (
         <p className="text-xs text-muted-foreground">
@@ -415,14 +447,13 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
 function NearClimaxPanel({ sessions, allTimelines }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const [savedId, setSavedId] = useState(null);
   const [eventStats, setEventStats] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
       if (rows[0]?.near_climax_result) {
         setResult(rows[0].near_climax_result);
-        setSavedId(rows[0].id);
       }
     });
   }, []);
@@ -430,7 +461,9 @@ function NearClimaxPanel({ sessions, allTimelines }) {
   const analyze = async () => {
     setLoading(true);
     setResult(null);
+    setError("");
 
+    try {
     // Detect events across all sessions with HR data
     const sessionEvents = [];
     for (const session of sessions) {
@@ -444,7 +477,7 @@ function NearClimaxPanel({ sessions, allTimelines }) {
           climax_offset_s: session.climax_offset_s,
           methods: session.methods,
           intensity: session.intensity,
-          near_climax_events: events,
+          near_climax_events: events.slice(0, 4),
           event_count: events.length,
           total_time_in_events_s: Math.round(events.reduce((a, e) => a + e.duration_s, 0)),
           avg_rise_bpm: Math.round(events.reduce((a, e) => a + e.rise_bpm, 0) / events.length),
@@ -474,7 +507,7 @@ CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 A "near-climax event" is defined as: an erratic yet somewhat sustained climb in heart rate (eight or more beats per minute rise within forty-five seconds), followed by a notable drop — similar in shape to the climax cascade (ever-increasing HR with an apex and fall) but not as sustained. These events occur outside of the actual climax window.
 
 Detected event data across ${sessionEvents.length} sessions (out of ${sessions.length} total):
-${JSON.stringify(sessionEvents, null, 2)}
+${sessionEvents.slice(0, 12).map((s) => `${s.date}: ${s.event_count} events, ${fmtSec(s.total_time_in_events_s)} total, avg rise ${s.avg_rise_bpm} bpm, max peak ${s.max_peak_hr} bpm, methods ${(s.methods || []).join(", ") || "none"}, climax ${fmtSec(s.climax_offset_s)}. Events: ${s.near_climax_events.map((e) => `${fmtSec(e.start_offset_s)}-${fmtSec(e.end_offset_s)}, peak ${e.peak_hr}, rise ${e.rise_bpm}, confidence ${e.confidence}`).join(" | ")}`).join("\n")}
 
 Provide a rich, interpretive narrative analysis. Focus on:
 1. What these events physiologically represent for you — are they arousal plateaus, mini-edging responses, parasympathetic interruptions, or something else?
@@ -506,12 +539,15 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
     const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
     if (existing[0]) {
       await base44.entities.SessionClusterAnalysis.update(existing[0].id, { near_climax_result: { ...parsed, _stats: stats, _session_events: sessionEvents } });
-      setSavedId(existing[0].id);
     } else {
-      const created = await base44.entities.SessionClusterAnalysis.create({ near_climax_result: { ...parsed, _stats: stats, _session_events: sessionEvents } });
-      setSavedId(created.id);
+      await base44.entities.SessionClusterAnalysis.create({ near_climax_result: { ...parsed, _stats: stats, _session_events: sessionEvents } });
     }
-    setLoading(false);
+    } catch (err) {
+      console.error("Near-climax analysis failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const savedStats = result?._stats;
@@ -529,6 +565,8 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
             <><Brain className="w-3 h-3" />{result ? "Re-run" : "Analyze"}</>}
         </Button>
       </div>
+
+      <CompactError message={error} />
 
       {displayStats &&
       <div className="grid grid-cols-3 gap-2">
@@ -630,6 +668,7 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
 function StimulationMethodsPanel({ sessions, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -640,44 +679,16 @@ function StimulationMethodsPanel({ sessions, userProfile }) {
   const analyze = async () => {
     setLoading(true);
     setResult(null);
+    setError("");
 
+    try {
     // Build per-method aggregates
     const methodMap = {};
     for (const s of sessions) {
       const methods = [...(s.methods || []), ...(s.custom_methods || [])];
       for (const m of methods) {
         if (!methodMap[m]) methodMap[m] = [];
-        methodMap[m].push({
-          date: s.date?.slice(0, 10),
-          intensity: s.intensity,
-          satisfaction: s.satisfaction,
-          build_quality: s.build_quality,
-          build_type: s.build_type,
-          climax_duration: s.climax_duration,
-          no_climax: s.no_climax || false,
-          avg_hr: s.avg_hr,
-          max_hr: s.max_hr,
-          hr_at_climax: s.hr_at_climax,
-          hr_avg_pre_to_climax: s.hr_avg_pre_to_climax,
-          pre_climax_offset_s: s.pre_climax_offset_s,
-          climax_offset_s: s.climax_offset_s,
-          recovery_offset_s: s.recovery_offset_s,
-          ejaculate_volume: s.ejaculate_volume,
-          discomfort_entries: s.discomfort_entries?.length ? s.discomfort_entries : undefined,
-          unusual_sensations: s.unusual_sensations || undefined,
-          mood: s.mood,
-          hydration: s.hydration,
-          duration_minutes: s.duration_minutes,
-          foley_size: s.foley_size || undefined,
-          foley_type: s.foley_type || undefined,
-          estim_notes: s.estim_notes || undefined,
-          sleeve_type: s.sleeve_type || undefined,
-          other_methods_used: methods.filter(x => x !== m),
-          event_highlights: s.event_timeline?.length
-            ? s.event_timeline.slice(0, 8).map(e => ({ time_s: e.time_s, category: Array.isArray(e.category) ? e.category : [e.category].filter(Boolean), note: e.note }))
-            : undefined,
-          notes: s.notes || undefined,
-        });
+        methodMap[m].push(s);
       }
     }
 
@@ -685,6 +696,10 @@ function StimulationMethodsPanel({ sessions, userProfile }) {
     const methodStats = Object.entries(methodMap).map(([method, sessionList]) => {
       const withClimax = sessionList.filter(s => !s.no_climax);
       const avg = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10 : null;
+      const examples = [...sessionList]
+        .sort((a, b) => ((b.satisfaction || 0) - (a.satisfaction || 0)) || ((b.intensity || 0) - (a.intensity || 0)))
+        .slice(0, 4)
+        .map(compactSessionLine);
       return {
         method,
         session_count: sessionList.length,
@@ -695,8 +710,8 @@ function StimulationMethodsPanel({ sessions, userProfile }) {
         avg_max_hr: avg(sessionList.map(s => s.max_hr).filter(Boolean)),
         avg_hr_at_climax: avg(withClimax.map(s => s.hr_at_climax).filter(Boolean)),
         discomfort_rate_pct: Math.round((sessionList.filter(s => s.discomfort_entries?.length).length / sessionList.length) * 100),
-        common_combos: [...new Set(sessionList.flatMap(s => s.other_methods_used))].slice(0, 5),
-        sessions: sessionList,
+        common_combos: [...new Set(sessionList.flatMap(s => [...(s.methods || []), ...(s.custom_methods || [])].filter(x => x !== method)))].slice(0, 5),
+        examples,
       };
     }).sort((a, b) => b.session_count - a.session_count);
 
@@ -714,10 +729,10 @@ CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 ${profileContext}
 
 METHOD PERFORMANCE DATA (${sessions.length} sessions across ${methodStats.length} methods):
-${JSON.stringify(methodStats.map(m => ({ ...m, sessions: undefined, method: m.method, session_count: m.session_count, climax_rate_pct: m.climax_rate_pct, avg_intensity: m.avg_intensity, avg_satisfaction: m.avg_satisfaction, avg_build_quality: m.avg_build_quality, avg_max_hr: m.avg_max_hr, avg_hr_at_climax: m.avg_hr_at_climax, discomfort_rate_pct: m.discomfort_rate_pct, common_combos: m.common_combos })), null, 2)}
-
-FULL SESSION DATA PER METHOD (for deep analysis):
-${JSON.stringify(methodStats.map(m => ({ method: m.method, sessions: m.sessions })), null, 2)}
+${methodStats.map((m) => [
+  `${m.method}: ${m.session_count} sessions, ${m.climax_rate_pct}% climax, avg intensity ${m.avg_intensity ?? "?"}, avg satisfaction ${m.avg_satisfaction ?? "?"}, avg build ${m.avg_build_quality ?? "?"}, avg max HR ${m.avg_max_hr ?? "?"}, discomfort ${m.discomfort_rate_pct}%, common combos ${m.common_combos.join(", ") || "none"}.`,
+  `Best examples: ${m.examples.join(" || ")}`,
+].join("\n")).join("\n\n")}
 
 Provide a deep, interpretive analysis. Do NOT simply restate the numbers — interpret what they reveal about this person's physiology, nerve response, and arousal dynamics. Be direct, opinionated, and specific.
 
@@ -755,7 +770,12 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
     } else {
       await base44.entities.SessionClusterAnalysis.create({ stimulation_methods_result: parsed });
     }
-    setLoading(false);
+    } catch (err) {
+      console.error("Stimulation methods analysis failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const SECTIONS = [
@@ -822,6 +842,8 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
       {!result && !loading && sessions.length >= 2 && (
         <p className="text-xs text-muted-foreground">Click Analyze Methods to generate a deep physiological interpretation of each stimulation method. Uses Claude Sonnet.</p>
       )}
+
+      <CompactError message={error} />
 
       {result && (
         <TTSReader

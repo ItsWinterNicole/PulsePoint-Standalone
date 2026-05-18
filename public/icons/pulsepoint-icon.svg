@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PulsePoint">
+  <defs>
+    <linearGradient id="bg" x1="78" y1="58" x2="434" y2="454" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#152033"/>
+      <stop offset="1" stop-color="#090D14"/>
+    </linearGradient>
+    <linearGradient id="pulse" x1="108" y1="257" x2="404" y2="257" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2DD4BF"/>
+      <stop offset="0.52" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#F472B6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="172" fill="#0F172A" stroke="#223146" stroke-width="18"/>
+  <path d="M106 264h58l34-72 56 164 58-204 39 112h55" fill="none" stroke="url(#pulse)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="256" r="205" fill="none" stroke="#2DD4BF" stroke-opacity=".18" stroke-width="18"/>
+</svg>

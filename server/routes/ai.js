@@ -46,6 +46,6 @@ aiRouter.post('/invoke', async (req, res) => {
     }
   } catch (error) {
     console.error('AI invoke failed:', error);
-    res.status(502).json({ error: error.message || String(error) });
+    res.status(error.status || 502).json({ error: error.message || String(error) });
   }
 });

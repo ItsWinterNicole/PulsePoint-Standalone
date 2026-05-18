@@ -16,15 +16,81 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
   finally { clearTimeout(t); }
 }
 
-function clampSpeed(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getTTSInstructions(voice, requestedInstructions) {
+function clampSpeed(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 0.94;
+}
+
+const VOICE_INSTRUCTIONS = `
+Read in a warm, calm, clinically intelligent tone.
+Sound like a distinctly feminine, thoughtful physiology podcast narrator with excellent bedside manner.
+Use relaxed pacing and natural conversational rhythm.
+Be soothing, emotionally grounded, and subtly expressive.
+Add gentle, audible enthusiasm at meaningful turning points, especially when describing notable physiological shifts, climax approach, release, or recovery.
+Let those key moments sound a little more alive, impressed, and engaged, while returning to calm narration afterward.
+Use a touch more feminine liveliness and forward motion, while staying calm, intelligent, and never bubbly.
+Keep the delivery intimate and human, but not overtly flirtatious or performative.
+Maintain consistent tone, pacing, and emotional energy across all segments.
+Do not sound robotic, flat, exaggerated, overly cheerful, customer-service-like, melodramatic, or clinical-dictation-like.
+`;
+
+const TTS_SPEED = Number(process.env.OPENAI_TTS_SPEED || 0.97);
+
+function getTTSInstructions(requestedInstructions) {
   if (requestedInstructions) return String(requestedInstructions);
-  if (process.env.OPENAI_TTS_INSTRUCTIONS) return process.env.OPENAI_TTS_INSTRUCTIONS;
-  return 'Read as a warm, natural podcast-style narrator: emotionally present, lightly enthusiastic, curious, and conversational. Use natural inflection, gentle emphasis on meaningful findings, and brief pauses between ideas. Avoid sounding flat, clinical, robotic, intimate-whispery, or theatrical.';
+  return process.env.OPENAI_TTS_INSTRUCTIONS || VOICE_INSTRUCTIONS;
+}
+
+function supportsTTSInstructions(model) {
+  return !String(model || '').startsWith('tts-1');
+}
+
+async function callOpenAITTS(body, meta) {
+  const maxAttempts = Number(process.env.OPENAI_TTS_BACKEND_ATTEMPTS || 3);
+  let lastStatus = 502;
+  let lastMessage = 'Unknown OpenAI TTS error';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const startedAt = Date.now();
+    try {
+      const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, Number(process.env.OPENAI_TTS_TIMEOUT_MS || 30000));
+      const latencyMs = Date.now() - startedAt;
+
+      if (response.ok) {
+        console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt });
+        return { response, latencyMs, retries: attempt };
+      }
+
+      lastStatus = response.status;
+      lastMessage = await response.text();
+      const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+      console.warn('[openaiTTS] upstream error', { ...meta, status: response.status, latencyMs, attempt: attempt + 1, retryable, message: lastMessage.slice(0, 300) });
+      if (!retryable || attempt === maxAttempts - 1) break;
+
+      const retryAfter = response.headers.get('retry-after');
+      const delay = retryAfter
+        ? Math.min(Math.max(Number(retryAfter) * 1000, 1000), 8000)
+        : Math.min(900 * 2 ** attempt, 8000) + Math.floor(Math.random() * 400);
+      await sleep(delay);
+    } catch (error) {
+      lastMessage = error.message || String(error);
+      console.warn('[openaiTTS] exception', { ...meta, attempt: attempt + 1, message: lastMessage });
+      if (attempt === maxAttempts - 1) break;
+      await sleep(Math.min(900 * 2 ** attempt, 8000));
+    }
+  }
+
+  const error = new Error(lastMessage);
+  error.status = lastStatus;
+  throw error;
 }
 
 functionsRouter.post('/saveTimelineData', (req, res) => {
@@ -64,7 +130,7 @@ functionsRouter.post('/purgeEMGData', (req, res) => {
 functionsRouter.post('/openaiTTS', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
-    const { text, voice = 'nova', speed = 1.0, instructions: requestedInstructions } = req.body || {};
+    const { text, voice = 'nova', speed = TTS_SPEED, instructions: requestedInstructions } = req.body || {};
     const input = String(text || '').trim();
     if (!input) return res.status(400).json({ error: 'Missing text' });
     const maxChars = Number(process.env.OPENAI_TTS_MAX_CHARS || 2500);
@@ -72,27 +138,36 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       return res.status(413).json({ error: 'Text chunk too large', length: input.length, maxLength: maxChars });
     }
     const model = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts';
-    const instructions = getTTSInstructions(voice, requestedInstructions);
+    const finalSpeed = clampSpeed(speed);
     const body = {
       model,
       input,
       voice,
       response_format: 'mp3',
-      speed: clampSpeed(speed),
+      speed: finalSpeed,
     };
-    if (instructions) body.instructions = instructions;
-    const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }, 30000);
-    if (!response.ok) return res.status(response.status).json({ error: await response.text() });
+    const instructions = getTTSInstructions(requestedInstructions);
+    if (instructions && supportsTTSInstructions(model)) body.instructions = instructions;
+    const meta = {
+      chunkIndex: req.body?.chunkIndex,
+      charCount: input.length,
+      estimatedDurationSec: Math.max(1, Math.round(input.split(/\s+/).filter(Boolean).length / 2.25)),
+      model,
+      voice,
+      speed: finalSpeed,
+    };
+    const { response, latencyMs, retries } = await callOpenAITTS(body, meta);
     const buffer = Buffer.from(await response.arrayBuffer());
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-TTS-Model', model);
+    res.setHeader('X-TTS-Voice', voice);
+    res.setHeader('X-TTS-Speed', String(finalSpeed));
+    res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
+    res.setHeader('X-TTS-Retries', String(retries));
     res.send(buffer);
   } catch (error) {
-    res.status(502).json({ error: error.message || String(error), retryable: true });
+    res.status(error.status || 502).json({ error: error.message || String(error), retryable: true });
   }
 });
 
