@@ -240,6 +240,9 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   const [videoDuration, setVideoDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [playerHeight, setPlayerHeight] = useState(68);
+  const [playerWidth, setPlayerWidth] = useState(66);
+  const layoutRef = useRef(null);
+  const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
 
@@ -262,6 +265,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   const [newSec, setNewSec] = useState("");
   const [autoTagging, setAutoTagging] = useState(false);
   const [autoTagSuggestion, setAutoTagSuggestion] = useState(null);
+  const [autoTagSuggestionNote, setAutoTagSuggestionNote] = useState("");
   const [autoTagError, setAutoTagError] = useState("");
   const [newCatsTouched, setNewCatsTouched] = useState(false);
 
@@ -341,6 +345,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     if (!addingNew || newCatsTouched || isListening || interimText || note.length < 8) {
       if (note.length < 8) {
         setAutoTagSuggestion(null);
+        setAutoTagSuggestionNote("");
         setAutoTagError("");
       }
       return undefined;
@@ -353,6 +358,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
       const suggestion = await classifyEventNoteWithAI(note);
       if (cancelled) return;
       setAutoTagSuggestion(suggestion);
+      setAutoTagSuggestionNote(note);
       setNewCats(suggestion.categories);
       setAutoTagging(false);
     }, 900);
@@ -400,7 +406,8 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     try {
       setAutoTagging(true);
       setAutoTagError("");
-      const classification = newCatsTouched && autoTagSuggestion
+      const hasFreshSuggestion = autoTagSuggestion && autoTagSuggestionNote === cleanNote;
+      const classification = hasFreshSuggestion
         ? autoTagSuggestion
         : await classifyEventNoteWithAI(cleanNote);
       const m = parseInt(newMin, 10) || 0;
@@ -421,6 +428,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
       setNewNote(""); setNewMin(""); setNewSec(""); setNewCats([categories[0] || "other"]);
       setNewCatsTouched(false);
       setAutoTagSuggestion(null);
+      setAutoTagSuggestionNote("");
       setAutoTagError("");
       setAutoTagging(false);
       setAddingNew(false);
@@ -442,6 +450,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     setNewCats([lastUsedCat]);
     setNewCatsTouched(false);
     setAutoTagSuggestion(null);
+    setAutoTagSuggestionNote("");
     setAutoTagError("");
     setAutoTagging(false);
     setAddingNew(true);
@@ -572,6 +581,30 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     if (videoRef.current) videoRef.current.playbackRate = speed;
   };
 
+  const handleWidthDragStart = useCallback((e) => {
+    if (!layoutRef.current) return;
+    e.preventDefault();
+    const rect = layoutRef.current.getBoundingClientRect();
+    widthDragStartRef.current = {
+      x: e.clientX,
+      width: playerWidth,
+      layoutWidth: rect.width || 1,
+    };
+
+    const onMove = (ev) => {
+      const { x, width, layoutWidth } = widthDragStartRef.current;
+      const delta = ((ev.clientX - x) / layoutWidth) * 100;
+      setPlayerWidth(Math.max(48, Math.min(78, Math.round(width + delta))));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [playerWidth]);
+
   const handleTimelineScrub = (e) => {
     const v = videoRef.current;
     if (!v || !videoDuration) return;
@@ -609,6 +642,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
             setAddingNew(false);
             setAutoTagging(false);
             setAutoTagSuggestion(null);
+            setAutoTagSuggestionNote("");
             setAutoTagError("");
             setNewCatsTouched(false);
           }
@@ -748,9 +782,12 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Video player */}
-        <div className="space-y-4">
-          <div className="space-y-3">
+        <div ref={layoutRef} className="flex flex-col xl:flex-row gap-4 items-start">
+          {/* Video player */}
+          <div
+            className="w-full min-w-0 space-y-3"
+            style={{ flex: `0 1 ${playerWidth}%` }}
+          >
         {videoSrc ? (
           <div className="space-y-3">
             <div
@@ -765,17 +802,31 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                 onClick={() => videoRef.current && (videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause())}
               />
             </div>
-            <div className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2">
-              <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Player height</span>
-              <Slider
-                value={[playerHeight]}
-                min={38}
-                max={82}
-                step={2}
-                onValueChange={([value]) => setPlayerHeight(value)}
-                className="flex-1"
-              />
-              <span className="text-[10px] font-mono text-muted-foreground w-10 text-right">{playerHeight}vh</span>
+            <div className="flex flex-col md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
+              <label className="flex items-center gap-3 flex-1 min-w-[220px]">
+                <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Height</span>
+                <Slider
+                  value={[playerHeight]}
+                  min={38}
+                  max={82}
+                  step={2}
+                  onValueChange={([value]) => setPlayerHeight(value)}
+                  className="flex-1"
+                />
+                <span className="text-[10px] font-mono text-muted-foreground w-10 text-right">{playerHeight}vh</span>
+              </label>
+              <label className="hidden xl:flex items-center gap-3 flex-1 min-w-[220px]">
+                <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Width</span>
+                <Slider
+                  value={[playerWidth]}
+                  min={48}
+                  max={78}
+                  step={1}
+                  onValueChange={([value]) => setPlayerWidth(value)}
+                  className="flex-1"
+                />
+                <span className="text-[10px] font-mono text-muted-foreground w-10 text-right">{playerWidth}%</span>
+              </label>
             </div>
             {/* Video timeline scrubber */}
             {videoDuration > 0 && (
@@ -867,8 +918,21 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
         )}
           </div>
 
+          {(chartData.length > 0 || events.length > 0) && (
+            <div
+              onMouseDown={handleWidthDragStart}
+              className="hidden xl:flex self-stretch w-3 cursor-ew-resize items-center justify-center group"
+              title="Drag to resize player and sidebar"
+            >
+              <div className="h-24 w-1 rounded-full bg-border group-hover:bg-primary transition-colors" />
+            </div>
+          )}
+
           {/* HR Timeline + event context */}
-          <div className="space-y-4">
+          <aside
+            className="w-full xl:min-w-[320px] xl:max-w-[560px] shrink-0 space-y-4 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
+            style={{ flex: `1 1 ${100 - playerWidth}%` }}
+          >
             {/* HR Timeline */}
             {chartData.length > 0 && (
               <div>
@@ -1066,7 +1130,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                 </div>
               );
             })()}
-          </div>
+          </aside>
         </div>
 
         {/* Playhead status bar */}

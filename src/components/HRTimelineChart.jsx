@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from "recharts";
@@ -107,6 +107,14 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
     climax: savedMarkers.climax_offset_s ?? null,
     recovery: savedMarkers.recovery_offset_s ?? null,
   });
+
+  useEffect(() => {
+    setLocalMarkers({
+      pre_climax: savedMarkers.pre_climax_offset_s ?? null,
+      climax: savedMarkers.climax_offset_s ?? null,
+      recovery: savedMarkers.recovery_offset_s ?? null,
+    });
+  }, [savedMarkers.pre_climax_offset_s, savedMarkers.climax_offset_s, savedMarkers.recovery_offset_s]);
 
   const visibleRows = useMemo(() => {
     if (window === "full") return rows;

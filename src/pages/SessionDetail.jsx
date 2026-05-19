@@ -18,6 +18,7 @@ import NearClimaxSessionOverview from "../components/NearClimaxSessionOverview";
 import SessionAIPanel from "../components/SessionAIPanel";
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
+import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
 import ArousalEventChart from "../components/ArousalEventChart";
 import UnifiedSessionTimeline from "../components/UnifiedSessionTimeline";
 import InteractiveSessionTimeline from "../components/InteractiveSessionTimeline";
@@ -413,6 +414,16 @@ export default function SessionDetail() {
                   highlightRange={highlightRange}
                   noClimax={!!s.no_climax}
                   nearClimaxEvents={nearClimaxEvents}
+                />
+              )}
+              {timelineRows.length > 0 && !s.no_climax && (
+                <AIPhaseMarkerSuggester
+                  session={s}
+                  timelineRows={timelineRows}
+                  onApply={async (updates) => {
+                    await base44.entities.Session.update(id, updates);
+                    setSession((prev) => ({ ...prev, ...updates }));
+                  }}
                 />
               )}
               {timelineRows.length > 0 && !s.no_climax && (

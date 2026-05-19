@@ -4,8 +4,11 @@ import { base44 } from "@/api/base44Client";
 
 export const VOICE_INSTRUCTIONS = `Read naturally in a warm, calm, feminine human voice.
 Sound soothing, emotionally intelligent, relaxed, and subtly intimate.
+Keep the delivery conversational and observant, with gentle interest and a little more warmth at meaningful moments.
 Think excellent bedside manner, thoughtful podcast host, or trusted human narrator.
+Stay calm, smooth, and lightly voiced overall, never rushed or overly bright.
 Maintain consistent warmth and pacing across all chunks.
+Continue through paragraph and section starts as part of the same ongoing thought; do not punch, restart, or over-emphasize opening words like "you", "your", "this", or "the".
 Do not sound robotic, theatrical, overly analytical, documentary-like, exaggerated, customer-service-like, or performative.`;
 export const TTS_SPEED = 1.0;
 export const TTS_PLAYBACK_FORMAT = "mp3";
@@ -15,7 +18,7 @@ export const TTS_EXPORT_MIME = "audio/mpeg";
 export const TTS_CHUNK_MAX_CHARS = 2500;
 export const TTS_CHUNK_TARGET_CHARS = 2400;
 export const TTS_CHUNK_MIN_CHARS = 1000;
-export const TTS_CACHE_VOICE_PROFILE = "bright-natural-analysis-mp3-100-v1";
+export const TTS_CACHE_VOICE_PROFILE = "bright-natural-analysis-mp3-100-v3";
 
 // Convert large raw-second values to spoken minutes + seconds
 function secondsToSpeech(n) {

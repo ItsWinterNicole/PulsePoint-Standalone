@@ -339,6 +339,10 @@
       "type": "object",
       "description": "Stored AI session-specific near-climax event narrative and analysis"
     },
+    "phase_marker_ai_suggestion": {
+      "type": "object",
+      "description": "Latest AI-assisted phase marker proposal and evidence"
+    },
     "emg_enabled": {
       "type": "boolean",
       "description": "Whether EMG was recorded this session"
