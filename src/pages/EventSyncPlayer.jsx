@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
 import { Play, Pause, Square, Upload, Volume2, VolumeX, ChevronDown, ChevronLeft, ChevronRight, ZoomOut, Mic, MicOff, Plus, ArrowUp } from "lucide-react";
 import { EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
-import { TTS_CACHE_VOICE_PROFILE, TTS_PLAYBACK_FORMAT, TTS_SPEED, VOICE_INSTRUCTIONS } from "@/components/TTSButton";
+import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine,
@@ -50,19 +50,20 @@ function nearestHR(chartData, time_s) {
   return Math.round(best.hr);
 }
 
-const OAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+const OAI_VOICES = ["nova"];
 const EVENT_COLORS = ["#f59e0b","#a855f7","#10b981","#f43f5e","#0ea5e9","#fb923c","#84cc16","#e879f9","#34d399","#f87171"];
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
 
 async function fetchTTSBase64(text, voice, format = TTS_PLAYBACK_FORMAT) {
-  const cacheKey = `tts_cache:${TTS_CACHE_VOICE_PROFILE}:${voice}:${TTS_SPEED}:${format}:${VOICE_INSTRUCTIONS.trim()}:${text}`;
+  const runtime = getTTSRuntime();
+  const cacheKey = `tts_cache:${runtime.cacheProfile}:${voice}:${runtime.speed}:${format}:${runtime.instructions.trim()}:${text}`;
   try { const c = sessionStorage.getItem(cacheKey); if (c) return c; } catch (_) {}
   const res = await base44.functions.invoke("openaiTTS", {
-    text,
+    text: prepareTTSInput(text),
     voice,
-    speed: TTS_SPEED,
-    instructions: VOICE_INSTRUCTIONS,
+    speed: runtime.speed,
+    instructions: runtime.instructions,
     format,
   });
   const b64 = res.data.audio;
@@ -70,11 +71,11 @@ async function fetchTTSBase64(text, voice, format = TTS_PLAYBACK_FORMAT) {
   return b64;
 }
 
-async function decodeToBuffer(ctx, b64) {
+function base64ToAudioBytes(b64) {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return ctx.decodeAudioData(bytes.buffer.slice(0));
+  return bytes.buffer.slice(0);
 }
 
 // ── AI Text paragraph renderer (synced) ───────────────────────────────────────
@@ -116,7 +117,7 @@ export default function EventSyncPlayer() {
   const videoUrlRef = useRef(null);
 
   // TTS
-  const [voice, setVoice] = useState(() => localStorage.getItem("tts_oai_voice") || "nova");
+  const [voice, setVoice] = useState("nova");
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [ttsMode, setTtsMode] = useState("events"); // "events" | "cascade" | "analysis"
@@ -125,7 +126,6 @@ export default function EventSyncPlayer() {
   const [bufferingPara, setBufferingPara] = useState(-1);
 
   // TTS internals
-  const audioCtxRef = useRef(null);
   const ttsSourceRef = useRef(null);
   const firedEventsRef = useRef(new Set());
   const voiceRef = useRef(voice);
@@ -220,19 +220,21 @@ export default function EventSyncPlayer() {
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { ttsModeRef.current = ttsMode; }, [ttsMode]);
 
-  // ── Audio ctx ─────────────────────────────────────────────────────────────
-
-  const getCtx = () => {
-    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
-      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    return audioCtxRef.current;
-  };
-
   const stopTTS = useCallback(() => {
     aiGenRef.current++;
     aiReadingRef.current = false;
-    if (ttsSourceRef.current) { try { ttsSourceRef.current.stop(); } catch (_) {} ttsSourceRef.current = null; }
+    if (ttsSourceRef.current) {
+      try {
+        if (ttsSourceRef.current.audio) {
+          ttsSourceRef.current.audio.pause();
+          ttsSourceRef.current.audio.src = "";
+          if (ttsSourceRef.current.url) URL.revokeObjectURL(ttsSourceRef.current.url);
+        } else {
+          ttsSourceRef.current.stop();
+        }
+      } catch (_) {}
+      ttsSourceRef.current = null;
+    }
     setActivePara(-1);
     setBufferingPara(-1);
   }, []);
@@ -241,15 +243,17 @@ export default function EventSyncPlayer() {
   const speakText = useCallback(async (text) => {
     if (!ttsEnabledRef.current) { stopTTS(); return; }
     stopTTS();
-    const ctx = getCtx();
-    if (ctx.state === "suspended") await ctx.resume();
     const b64 = await fetchTTSBase64(text, voiceRef.current);
-    const buffer = await decodeToBuffer(ctx, b64);
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(ctx.destination);
-    src.start(0);
-    ttsSourceRef.current = src;
+    const url = URL.createObjectURL(new Blob([base64ToAudioBytes(b64)], { type: getTTSMime(TTS_PLAYBACK_FORMAT) }));
+    const audio = new Audio(url);
+    audio.preload = "auto";
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      ttsSourceRef.current = null;
+    };
+    audio.onerror = audio.onended;
+    ttsSourceRef.current = { audio, url };
+    await audio.play();
   }, [stopTTS]);
 
   // Read AI paragraphs sequentially
@@ -263,21 +267,23 @@ export default function EventSyncPlayer() {
     for (let i = fromIdx; i < paras.length; i++) {
       if (gen !== aiGenRef.current) return;
       setBufferingPara(i);
-      const ctx = getCtx();
-      if (ctx.state === "suspended") await ctx.resume();
       const b64 = await fetchTTSBase64(paras[i], voiceRef.current);
-      if (gen !== aiGenRef.current) return;
-      const buffer = await decodeToBuffer(ctx, b64);
       if (gen !== aiGenRef.current) return;
       setBufferingPara(-1);
       setActivePara(i);
       await new Promise((resolve) => {
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        src.connect(ctx.destination);
-        src.onended = resolve;
-        src.start(0);
-        ttsSourceRef.current = src;
+        const url = URL.createObjectURL(new Blob([base64ToAudioBytes(b64)], { type: getTTSMime(TTS_PLAYBACK_FORMAT) }));
+        const audio = new Audio(url);
+        audio.preload = "auto";
+        const done = () => {
+          URL.revokeObjectURL(url);
+          if (ttsSourceRef.current?.audio === audio) ttsSourceRef.current = null;
+          resolve();
+        };
+        audio.onended = done;
+        audio.onerror = done;
+        ttsSourceRef.current = { audio, url };
+        audio.play().catch(done);
       });
       if (gen !== aiGenRef.current) return;
     }
@@ -690,7 +696,7 @@ export default function EventSyncPlayer() {
                     <div className="absolute left-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg py-1 min-w-[100px]">
                       {OAI_VOICES.map((v) => (
                         <button key={v} className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted capitalize ${voice === v ? "text-primary font-medium" : "text-foreground"}`}
-                          onClick={() => { setVoice(v); voiceRef.current = v; localStorage.setItem("tts_oai_voice", v); setShowVoicePicker(false); }}>
+                          onClick={() => { setVoice(v); voiceRef.current = v; setShowVoicePicker(false); }}>
                           {v}
                         </button>
                       ))}

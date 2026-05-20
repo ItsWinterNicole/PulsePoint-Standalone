@@ -1,25 +1,31 @@
-import { useState, useRef } from "react";
-import { Play, Pause, Square, ChevronDown, Download } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Play, Pause, Square, Download, Settings, RotateCcw, Save } from "lucide-react";
 import {
   cleanTextForSpeech,
+  DEFAULT_TTS_SETTINGS,
+  getTTSRuntime,
+  getTTSMime,
+  loadTTSSettings,
+  normalizeTTSSettings,
+  prepareTTSInput,
+  saveTTSSettings,
   splitIntoChunks,
-  TTS_CACHE_VOICE_PROFILE,
   TTS_CHUNK_TARGET_CHARS,
   TTS_EXPORT_FORMAT,
+  TTS_EXPORT_MIME,
   TTS_PLAYBACK_FORMAT,
-  TTS_SPEED,
-  VOICE_INSTRUCTIONS,
 } from "./TTSButton";
+import { Slider } from "@/components/ui/slider";
 import { fmtSecondsInText } from "@/utils/formatSeconds";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 
-const OAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
+const TTS_SAMPLE_TEXT = "Your build phase begins quietly, with stimulation becoming more focused while your body starts to organize around arousal. As climax approaches, the shift is meaningful: sensation, muscle tone, and heart rate begin telling the same story, then recovery arrives as stimulation stops and the body settles.";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
-const ttsCacheKey = (chunk, format = TTS_PLAYBACK_FORMAT) =>
-  `${TTS_CACHE_VOICE_PROFILE}|${format}|${VOICE_INSTRUCTIONS.trim()}|${chunk}`;
+const ttsCacheKey = (chunk, format, runtime) =>
+  `${runtime.cacheProfile}|${format}|${runtime.instructions.trim()}|${chunk}`;
 
 function splitForTTS(text) {
   return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
@@ -48,12 +54,12 @@ function buildSpeechUnits(paragraphs, startIdx = 0) {
     if (!cleaned) continue;
 
     for (const part of splitForTTS(cleaned)) {
-      const nextText = currentText ? `${currentText}\n\n${part}` : part;
+      const nextText = currentText ? `${currentText} ${part}` : part;
       if (currentText && nextText.length > TTS_UNIT_MAX_CHARS) {
         push();
       }
 
-      currentText = currentText ? `${currentText}\n\n${part}` : part;
+      currentText = currentText ? `${currentText} ${part}` : part;
       if (currentStart < 0) currentStart = i;
       currentEnd = i;
     }
@@ -139,29 +145,25 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [state, setState] = useState("idle"); // idle | buffering | playing | paused
   const [currentPara, setCurrentPara] = useState(-1);
   const [bufferingPara, setBufferingPara] = useState(-1); // which paragraph is currently fetching
-  const [voice, setVoice] = useState(() => {
-    const saved = localStorage.getItem("tts_oai_voice") || "nova";
-    const valid = OAI_VOICES.includes(saved) ? saved : "alloy";
-    if (valid !== saved) localStorage.setItem("tts_oai_voice", valid);
-    return valid;
-  });
-  const [showVoicePicker, setShowVoicePicker] = useState(false);
-  const [speed, setSpeed] = useState(1.0);
+  const [ttsSettings, setTtsSettings] = useState(() => loadTTSSettings());
+  const [draftSettings, setDraftSettings] = useState(() => loadTTSSettings());
+  const [showSettings, setShowSettings] = useState(false);
+  const [sampleState, setSampleState] = useState("idle");
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
-  const speedRef = useRef(TTS_SPEED);
 
   const stateRef = useRef("idle");
   const currentParaRef = useRef(-1);
   const userPausedRef = useRef(false); // true only when the user explicitly paused
-  const audioCtxRef = useRef(null);
   const sourceRef = useRef(null);
   const remainingParasRef = useRef([]);
   const chunkQueueRef = useRef([]);
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
-  const voiceRef = useRef(voice);
+  const voiceRef = useRef("nova");
+  const runtimeRef = useRef(getTTSRuntime(ttsSettings));
+  const sampleAudioRef = useRef(null);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
   // Prefetch cache: chunk text → decoded AudioBuffer (keyed by gen+chunk for staleness)
@@ -170,20 +172,22 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const wordRefs = useRef(new Map()); // map of word element refs for auto-scroll
   const updateIntervalRef = useRef(null); // track update interval to clear it
 
+  useEffect(() => {
+    const runtime = getTTSRuntime(ttsSettings);
+    runtimeRef.current = runtime;
+  }, [ttsSettings]);
 
-  const getAudioCtx = () => {
-    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      // Auto-resume if browser suspends context while we intend to be playing (not user-paused)
-      ctx.addEventListener("statechange", () => {
-        if (ctx.state === "suspended" && stateRef.current === "playing" && !userPausedRef.current) {
-          ctx.resume().catch(() => {});
-        }
-      });
-      audioCtxRef.current = ctx;
-    }
-    return audioCtxRef.current;
-  };
+  useEffect(() => {
+    const sync = (event) => {
+      const next = normalizeTTSSettings(event?.detail || loadTTSSettings());
+      setTtsSettings(next);
+      setDraftSettings(next);
+      runtimeRef.current = getTTSRuntime(next);
+      prefetchCacheRef.current.clear();
+    };
+    window.addEventListener("pulsepoint:tts-settings", sync);
+    return () => window.removeEventListener("pulsepoint:tts-settings", sync);
+  }, []);
 
   const setS = (s) => { stateRef.current = s; setState(s); };
   const setCP = (i) => {
@@ -195,12 +199,78 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   };
 
   const stopSource = () => {
-    if (sourceRef.current) { try { sourceRef.current.stop(); } catch {} sourceRef.current = null; }
+    if (sourceRef.current) {
+      try {
+        if (sourceRef.current.audio) {
+          sourceRef.current.audio.pause();
+          sourceRef.current.audio.src = "";
+          if (sourceRef.current.url) URL.revokeObjectURL(sourceRef.current.url);
+        } else {
+          sourceRef.current.stop();
+        }
+      } catch {}
+      sourceRef.current = null;
+    }
+  };
+
+  const stopSample = () => {
+    if (sampleAudioRef.current) {
+      try {
+        sampleAudioRef.current.audio.pause();
+        sampleAudioRef.current.audio.src = "";
+        URL.revokeObjectURL(sampleAudioRef.current.url);
+      } catch {}
+      sampleAudioRef.current = null;
+    }
+    setSampleState("idle");
+  };
+
+  const playSettingsSample = async () => {
+    stopSample();
+    setSampleState("loading");
+    try {
+      const runtime = getTTSRuntime(draftSettings);
+      const response = await callTTSWithRetries({
+        text: prepareTTSInput(TTS_SAMPLE_TEXT),
+        voice: "nova",
+        speed: runtime.speed,
+        instructions: runtime.instructions,
+        format: TTS_PLAYBACK_FORMAT,
+      }, 4);
+      const binary = atob(response.data.audio);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(response.data?.format || TTS_PLAYBACK_FORMAT) }));
+      const audio = new Audio(url);
+      audio.onended = stopSample;
+      audio.onerror = stopSample;
+      sampleAudioRef.current = { audio, url };
+      setSampleState("playing");
+      await audio.play();
+    } catch (err) {
+      console.error("TTS sample failed:", err);
+      setSampleState("idle");
+      setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
+    }
+  };
+
+  const applyTTSSettings = () => {
+    const saved = saveTTSSettings(draftSettings);
+    setTtsSettings(saved);
+    runtimeRef.current = getTTSRuntime(saved);
+    prefetchCacheRef.current.clear();
+    setRequestStatus({ type: "ok", msg: "TTS settings saved" });
+  };
+
+  const resetTTSSettings = () => {
+    const reset = normalizeTTSSettings(DEFAULT_TTS_SETTINGS);
+    setDraftSettings(reset);
   };
 
   const stop = () => {
     genRef.current++; // invalidate any in-flight async chain
     stopSource();
+    stopSample();
     remainingParasRef.current = [];
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
@@ -240,7 +310,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     playNextChunk(gen);
   };
 
-  // Fetch a chunk and decode it, using the prefetch cache when available.
+  // Fetch a chunk and cache the original MP3 bytes when available.
   // Each chunk fetch runs independently (not serialized) so prefetched chunks
   // are ready before the current one finishes — eliminating inter-chunk gaps.
   const fetchDecoded = async (chunk, gen) => {
@@ -251,16 +321,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const promise = (async () => {
       try {
         // Check IndexedDB persistent cache first
-        const cacheText = ttsCacheKey(chunk, TTS_PLAYBACK_FORMAT);
-        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
+        const runtime = runtimeRef.current;
+        const cacheText = ttsCacheKey(chunk, TTS_PLAYBACK_FORMAT, runtime);
+        let mp3Buffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
 
         if (!mp3Buffer) {
           setRequestStatus({ type: "fetching", msg: "Fetching audio…" });
           const response = await callTTSWithRetries({
-            text: chunk,
+            text: prepareTTSInput(chunk),
             voice: voiceRef.current,
-            speed: TTS_SPEED,
-            instructions: VOICE_INSTRUCTIONS,
+            speed: runtime.speed,
+            instructions: runtime.instructions,
             format: TTS_PLAYBACK_FORMAT,
           });
           if (response.data?.error) throw new Error(response.data.error);
@@ -269,15 +340,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
           mp3Buffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
+          idbSet(cacheText, voiceRef.current, runtime.speed, mp3Buffer); // fire-and-forget
           setRequestStatus({ type: "ok", msg: "Audio ready" });
         } else {
           setRequestStatus({ type: "ok", msg: "Audio ready (cached)" });
         }
 
-        const ctx = getAudioCtx();
-        const decoded = await ctx.decodeAudioData(mp3Buffer.slice(0));
-        return decoded;
+        return mp3Buffer.slice(0);
       } catch (err) {
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
         setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
@@ -325,9 +394,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     setBufferingPara(currentParaRef.current);
 
-    let decoded;
+    let mp3Buffer;
     try {
-      decoded = await fetchDecoded(chunk, gen);
+      mp3Buffer = await fetchDecoded(chunk, gen);
     } catch (err) {
       console.error("TTS fetch failed:", err);
       setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
@@ -340,60 +409,41 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     setBufferingPara(-1);
 
-    const ctx = getAudioCtx();
-    if (ctx.state === "suspended") await ctx.resume();
-
     if (gen !== genRef.current) return;
 
-    const source = ctx.createBufferSource();
-    source.buffer = decoded;
-    source.connect(ctx.destination);
-    
-    // Store chunk duration
-    const chunkDuration = decoded.duration;
-    let audioStartTime = null; // Will be set when audio actually starts
-    
-    source.onended = () => { 
+    const url = URL.createObjectURL(new Blob([mp3Buffer], { type: getTTSMime(TTS_PLAYBACK_FORMAT) }));
+    const audio = new Audio(url);
+    audio.preload = "auto";
+
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
       sourceRef.current = null;
       // Move to next chunk after this one finishes
       playNextChunk(gen);
     };
-    sourceRef.current = source;
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      sourceRef.current = null;
+      setRequestStatus({ type: "error", msg: "Audio playback failed" });
+      stop();
+    };
+    sourceRef.current = { audio, url };
     
     // Clear previous interval if it exists
     if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
     
     // Track playback time during this chunk
-    // Wait for audio to actually start playing before syncing to AudioContext time
-    let hasStarted = false;
-    let lastCtxTime = ctx.currentTime;
-    
     updateIntervalRef.current = setInterval(() => {
       if (gen !== genRef.current || stateRef.current !== "playing") {
         clearInterval(updateIntervalRef.current);
         updateIntervalRef.current = null;
         return;
       }
-      
-      const currentCtxTime = ctx.currentTime;
-      
-      // Detect when audio actually starts (ctx.currentTime advances)
-      if (!hasStarted && currentCtxTime > lastCtxTime) {
-        hasStarted = true;
-        audioStartTime = currentCtxTime;
-      }
-      
-      lastCtxTime = currentCtxTime;
-      
-      // Only update highlighting after audio has started
-      if (hasStarted && audioStartTime !== null) {
-        const elapsed = currentCtxTime - audioStartTime;
-        playbackTimeRef.current = Math.max(0, Math.min(elapsed, chunkDuration));
-        updateWordHighlight();
-      }
+      playbackTimeRef.current = Math.max(0, audio.currentTime || 0);
+      updateWordHighlight();
     }, 50);
     
-    source.start(0);
+    await audio.play();
 
     // Kick off background prefetch of the next chunk as soon as this one starts
     prefetchNext(gen);
@@ -435,11 +485,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     stopSource();
     prefetchCacheRef.current.clear();
-    // Suspend then resume to immediately silence any audio still playing
-    const ctx = getAudioCtx();
-    if (ctx.state === "running") await ctx.suspend();
-    if (gen !== genRef.current) return; // another startFrom raced us
-    await ctx.resume();
 
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
@@ -452,10 +497,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const handlePlayPause = async () => {
     if (state === "playing") {
-      // Suspend the AudioContext to freeze playback at exact position
       userPausedRef.current = true;
-      const ctx = getAudioCtx();
-      await ctx.suspend();
+      try { sourceRef.current?.audio?.pause(); } catch {}
       setS("paused");
       return;
     }
@@ -469,11 +512,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
     if (state === "paused") {
       userPausedRef.current = false;
-      const ctx = getAudioCtx();
-      if (ctx.state === "suspended" && sourceRef.current) {
-        // Audio is suspended mid-playback — resume the context first
+      if (sourceRef.current?.audio) {
         setS("playing"); // update state immediately
-        await ctx.resume().catch(() => {}); // ensure context resumes even if it fails
+        await sourceRef.current.audio.play().catch(() => {});
       } else {
         // Was paused during buffering — re-fetch the current chunk
         const gen = genRef.current;
@@ -481,7 +522,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         if (currentChunkRef.current) {
           await fetchAndPlay(currentChunkRef.current, gen);
         } else {
-          await ctx.resume();
           playNextChunk(gen);
         }
       }
@@ -489,24 +529,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
     // idle → start
     await startFrom(0);
-  };
-
-  const changeVoice = (v) => {
-    setVoice(v);
-    voiceRef.current = v;
-    localStorage.setItem("tts_oai_voice", v);
-    setShowVoicePicker(false);
-  };
-
-  const changeSpeed = (v) => {
-    speedRef.current = v;
-    setSpeed(v);
-    localStorage.setItem("tts_speed", String(v));
-    prefetchCacheRef.current.clear();
-    if (stateRef.current === "playing" || stateRef.current === "paused") {
-      const para = currentParaRef.current >= 0 ? currentParaRef.current : 0;
-      startFrom(para);
-    }
   };
 
   const isActive = state === "playing" || state === "paused" || state === "buffering";
@@ -583,15 +605,16 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         const chunk = allChunks[i];
 
         // Check IndexedDB persistent cache first
-        const cacheText = ttsCacheKey(chunk, TTS_EXPORT_FORMAT);
-        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
+        const runtime = runtimeRef.current;
+        const cacheText = ttsCacheKey(chunk, TTS_EXPORT_FORMAT, runtime);
+        let mp3Buffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
 
         if (!mp3Buffer) {
           const res = await callTTSWithRetries({
-            text: chunk,
+            text: prepareTTSInput(chunk),
             voice: voiceRef.current,
-            speed: TTS_SPEED,
-            instructions: VOICE_INSTRUCTIONS,
+            speed: runtime.speed,
+            instructions: runtime.instructions,
             format: TTS_EXPORT_FORMAT,
           });
           if (res.data?.error) throw new Error(res.data.error);
@@ -601,7 +624,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           const bytes = new Uint8Array(binary.length);
           for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
           mp3Buffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
+          idbSet(cacheText, voiceRef.current, runtime.speed, mp3Buffer); // fire-and-forget
         }
 
         mp3Chunks[i] = new Uint8Array(mp3Buffer);
@@ -644,7 +667,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       mp3WithMeta.set(id3, 0);
       mp3WithMeta.set(combined, id3.length);
 
-      const mp3Blob = new Blob([mp3WithMeta], { type: "audio/mpeg" });
+      const mp3Blob = new Blob([mp3WithMeta], { type: TTS_EXPORT_MIME });
 
       // Trigger download
       const url = URL.createObjectURL(mp3Blob);
@@ -655,7 +678,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       setTimeout(() => URL.revokeObjectURL(url), 100);
 
       const approxDuration = (combined.length * 8) / 128000;
-      const file = new File([mp3Blob], fileName, { type: "audio/mpeg" });
+      const file = new File([mp3Blob], fileName, { type: TTS_EXPORT_MIME });
       const uploadRes = await base44.integrations.Core.UploadFile({ file });
 
       await base44.entities.AudioExport.create({
@@ -663,7 +686,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         file_url: uploadRes.file_url,
         duration_seconds: Math.round(approxDuration),
         voice: voiceRef.current,
-        speed: speedRef.current,
+        speed: runtimeRef.current.speed,
       });
 
       setRequestStatus({ type: "ok", msg: "Download complete" });
@@ -727,32 +750,74 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           )}
         </button>
 
-
-
-        {/* Voice picker */}
-        <div className="relative ml-auto">
-          <button
-            onClick={() => setShowVoicePicker(v => !v)}
-            className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground text-[10px] select-none transition-colors capitalize"
-            style={{ WebkitTapHighlightColor: "transparent" }}
-          >
-            {voice} <ChevronDown className="w-3 h-3" />
-          </button>
-          {showVoicePicker && (
-            <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg py-1 min-w-[120px]">
-              {OAI_VOICES.map((v) => (
-                <button
-                  key={v}
-                  className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors capitalize ${voice === v ? "text-primary font-medium" : "text-foreground"}`}
-                  onClick={() => changeVoice(v)}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <button
+          onClick={() => setShowSettings((v) => !v)}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground active:opacity-70 transition-colors text-xs font-medium select-none"
+          style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
+          title="TTS settings"
+        >
+          <Settings className="w-3.5 h-3.5" /> TTS
+        </button>
       </div>
+
+      {showSettings && (
+        <div className="rounded-xl border border-border bg-muted/25 p-3 mb-2 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">TTS Settings</p>
+              <p className="text-[10px] text-muted-foreground">Nova voice. Saved settings apply everywhere in PulsePoint.</p>
+            </div>
+            <span className="text-[10px] rounded-full bg-primary/10 px-2 py-1 text-primary font-medium">Nova</span>
+          </div>
+
+          {[
+            ["speed", "Speed", 0.94, 1.04, 0.01],
+            ["warmth", "Warmth", 0, 10, 1],
+            ["enthusiasm", "Enthusiasm", 0, 10, 1],
+            ["soothing", "Soothing", 0, 10, 1],
+            ["lightness", "Lightness", 0, 10, 1],
+            ["femininity", "Femininity", 0, 10, 1],
+            ["continuity", "Section Flow", 0, 10, 1],
+          ].map(([key, label, min, max, step]) => (
+            <label key={key} className="grid grid-cols-[86px_1fr_42px] items-center gap-3 text-[11px]">
+              <span className="font-medium text-muted-foreground">{label}</span>
+              <Slider
+                value={[draftSettings[key]]}
+                min={min}
+                max={max}
+                step={step}
+                onValueChange={([value]) => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, [key]: value }))}
+              />
+              <span className="font-mono text-right text-muted-foreground">{draftSettings[key]}</span>
+            </label>
+          ))}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={sampleState === "playing" ? stopSample : playSettingsSample}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 text-xs font-medium"
+            >
+              {sampleState === "loading"
+                ? <><span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />Preparing…</>
+                : sampleState === "playing"
+                  ? <><Square className="w-3.5 h-3.5" />Stop Sample</>
+                  : <><Play className="w-3.5 h-3.5" />Play Sample</>}
+            </button>
+            <button
+              onClick={applyTTSSettings}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium"
+            >
+              <Save className="w-3.5 h-3.5" />Save
+            </button>
+            <button
+              onClick={resetTTSSettings}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground text-xs font-medium"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />Reset
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* API Request Status */}
       {requestStatus && (
