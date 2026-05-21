@@ -1,101 +1,18 @@
 import express from 'express';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { bulkCreate, deleteEntity, listEntities } from '../db.js';
 import { aiInvokeInternal } from './internalAi.js';
+import { renderTTSExport } from '../services/ttsRenderer.js';
+import {
+  TTS_CONTENT_TYPES,
+  synthesizeTTSChunk,
+} from '../services/ttsCore.js';
 
 export const functionsRouter = express.Router();
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '../..');
-const uploadDir = path.resolve(root, process.env.UPLOAD_DIR || './data/uploads');
-const ttsWorkDir = path.resolve(root, process.env.TTS_RENDER_DIR || './data/tts-render-work');
 const ttsRenderJobs = new Map();
 
 function b64ToBuffer(b64) {
   const clean = String(b64 || '').replace(/^data:.*?;base64,/, '');
   return Buffer.from(clean, 'base64');
-}
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try { return await fetch(url, { ...options, signal: controller.signal }); }
-  finally { clearTimeout(t); }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function clampSpeed(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
-}
-
-const TTS_CONTENT_TYPES = {
-  mp3: 'audio/mpeg',
-  opus: 'audio/ogg',
-  aac: 'audio/aac',
-  flac: 'audio/flac',
-  wav: 'audio/wav',
-  pcm: 'application/octet-stream',
-};
-
-function normalizeTTSFormat(value) {
-  const format = String(value || process.env.OPENAI_TTS_FORMAT || 'mp3').toLowerCase();
-  return TTS_CONTENT_TYPES[format] ? format : 'mp3';
-}
-
-function normalizeTTSModel(value) {
-  const requested = String(value || process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts');
-  return ['gpt-4o-mini-tts', 'tts-1-hd', 'tts-1'].includes(requested)
-    ? requested
-    : 'gpt-4o-mini-tts';
-}
-
-function supportsTTSInstructions(model) {
-  return !String(model || '').startsWith('tts-1');
-}
-
-function normalizeTTSExportFormat(value) {
-  const format = String(value || 'mp3').toLowerCase();
-  return ['mp3', 'm4a', 'wav'].includes(format) ? format : 'mp3';
-}
-
-function ttsExportMime(format) {
-  if (format === 'wav') return 'audio/wav';
-  if (format === 'm4a') return 'audio/mp4';
-  return 'audio/mpeg';
-}
-
-function slugifyFilePart(value) {
-  return String(value || 'pulsepoint-tts')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80) || 'pulsepoint-tts';
-}
-
-function q(str) {
-  return `'${String(str).replace(/'/g, "'\\''")}'`;
-}
-
-function runProcess(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, ...options });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (data) => { stdout += data.toString(); });
-    child.stderr?.on('data', (data) => { stderr += data.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${command} exited with ${code}: ${stderr || stdout}`));
-    });
-  });
 }
 
 function setTtsRenderProgress(jobId, patch) {
@@ -111,67 +28,6 @@ function setTtsRenderProgress(jobId, patch) {
   if (['complete', 'error'].includes(next.phase)) {
     setTimeout(() => ttsRenderJobs.delete(jobId), 10 * 60 * 1000).unref?.();
   }
-}
-
-async function callOpenAITTS(body, meta) {
-  const maxAttempts = Number(process.env.OPENAI_TTS_BACKEND_ATTEMPTS || 3);
-  let lastStatus = 502;
-  let lastMessage = 'Unknown OpenAI TTS error';
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const startedAt = Date.now();
-    try {
-      const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }, Number(process.env.OPENAI_TTS_TIMEOUT_MS || 45000));
-      const latencyMs = Date.now() - startedAt;
-
-      if (response.ok) {
-        console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt });
-        return { response, latencyMs, retries: attempt };
-      }
-
-      lastStatus = response.status;
-      lastMessage = await response.text();
-      const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
-      console.warn('[openaiTTS] upstream error', { ...meta, status: response.status, latencyMs, attempt: attempt + 1, retryable, message: lastMessage.slice(0, 300) });
-      if (!retryable || attempt === maxAttempts - 1) break;
-
-      const retryAfter = response.headers.get('retry-after');
-      const delay = retryAfter
-        ? Math.min(Math.max(Number(retryAfter) * 1000, 1000), 8000)
-        : Math.min(900 * 2 ** attempt, 8000) + Math.floor(Math.random() * 400);
-      await sleep(delay);
-    } catch (error) {
-      lastMessage = error.message || String(error);
-      console.warn('[openaiTTS] exception', { ...meta, attempt: attempt + 1, message: lastMessage });
-      if (attempt === maxAttempts - 1) break;
-      await sleep(Math.min(900 * 2 ** attempt, 8000));
-    }
-  }
-
-  const error = new Error(lastMessage);
-  error.status = lastStatus;
-  throw error;
-}
-
-function buildChunkInstructions(baseInstructions, previousContext, supportsInstructionsForModel) {
-  const base = String(baseInstructions || '').trim();
-  if (!supportsInstructionsForModel) return '';
-  const context = String(previousContext || '').trim();
-  if (!context) return base;
-  return `${base}
-
-CONTEXT ONLY — DO NOT READ:
-Previous narration:
-"${context}"
-
-Continue seamlessly from the previous narration.
-This is the same continuous thought.
-Do NOT restart energy, tone, pacing, or emphasis.
-Read only the input text.`;
 }
 
 function normalizeGeneratedJournal(value) {
@@ -248,46 +104,33 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       instructions: requestedInstructions,
       format: requestedFormat,
     } = req.body || {};
-    const input = String(text || '').trim();
-    if (!input) return res.status(400).json({ error: 'Missing text' });
-    const maxChars = Number(process.env.OPENAI_TTS_MAX_CHARS || 2500);
-    if (input.length > maxChars) {
-      return res.status(413).json({ error: 'Text chunk too large', length: input.length, maxLength: maxChars });
-    }
-    const model = normalizeTTSModel(requestedModel);
-    const finalSpeed = clampSpeed(speed);
-    const responseFormat = normalizeTTSFormat(requestedFormat);
-    const body = {
-      model,
-      input,
+    const result = await synthesizeTTSChunk({
+      text,
       voice,
-      response_format: responseFormat,
-      speed: finalSpeed,
-    };
-    const instructions = String(requestedInstructions || process.env.OPENAI_TTS_INSTRUCTIONS || '').trim();
-    if (instructions && supportsTTSInstructions(model)) body.instructions = instructions;
-    const meta = {
-      chunkIndex: req.body?.chunkIndex,
-      charCount: input.length,
-      estimatedDurationSec: Math.max(1, Math.round(input.split(/\s+/).filter(Boolean).length / 2.25)),
-      model,
-      voice,
-      speed: finalSpeed,
-      format: responseFormat,
-    };
-    const { response, latencyMs, retries } = await callOpenAITTS(body, meta);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    res.setHeader('Content-Type', TTS_CONTENT_TYPES[responseFormat]);
+      model: requestedModel,
+      speed,
+      instructions: requestedInstructions,
+      format: requestedFormat,
+      meta: {
+        chunkIndex: req.body?.chunkIndex,
+      },
+    });
+    res.setHeader('Content-Type', TTS_CONTENT_TYPES[result.format]);
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-TTS-Model', model);
-    res.setHeader('X-TTS-Voice', voice);
-    res.setHeader('X-TTS-Speed', String(finalSpeed));
-    res.setHeader('X-TTS-Format', responseFormat);
-    res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
-    res.setHeader('X-TTS-Retries', String(retries));
-    res.send(buffer);
+    res.setHeader('X-TTS-Model', result.model);
+    res.setHeader('X-TTS-Voice', result.voice);
+    res.setHeader('X-TTS-Speed', String(result.speed));
+    res.setHeader('X-TTS-Format', result.format);
+    res.setHeader('X-TTS-Latency-Ms', String(result.latencyMs));
+    res.setHeader('X-TTS-Retries', String(result.retries));
+    res.send(result.buffer);
   } catch (error) {
-    res.status(error.status || 502).json({ error: error.message || String(error), retryable: true });
+    res.status(error.status || 502).json({
+      error: error.message || String(error),
+      length: error.length,
+      maxLength: error.maxLength,
+      retryable: true,
+    });
   }
 });
 
@@ -306,170 +149,13 @@ functionsRouter.get('/ttsRenderProgress/:jobId', (req, res) => {
 });
 
 functionsRouter.post('/renderTTSExport', async (req, res) => {
-  let workDir = null;
-  let jobId = null;
+  const jobId = String(req.body?.jobId || crypto.randomUUID());
   try {
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
-    const {
-      chunks = [],
-      title = 'PulsePoint TTS Export',
-      voice = 'nova',
-      model: requestedModel,
-      speed = 1.0,
-      instructions = '',
-      outputFormat: requestedOutputFormat = 'mp3',
-      normalize = false,
-      jobId: requestedJobId,
-    } = req.body || {};
-    jobId = String(requestedJobId || crypto.randomUUID());
-
-    const model = normalizeTTSModel(requestedModel);
-    const finalSpeed = clampSpeed(speed);
-    const outputFormat = normalizeTTSExportFormat(requestedOutputFormat);
-    const supportsInstructionsForModel = supportsTTSInstructions(model);
-    const normalizedChunks = (Array.isArray(chunks) ? chunks : [])
-      .map((chunk) => ({
-        text: String(chunk?.text || '').trim(),
-        previousContext: String(chunk?.previousContext || '').trim(),
-      }))
-      .filter((chunk) => chunk.text);
-
-    if (!normalizedChunks.length) {
-      setTtsRenderProgress(jobId, { phase: 'error', current: 0, total: 0, message: 'No TTS chunks provided' });
-      return res.status(400).json({ error: 'No TTS chunks provided' });
-    }
-    if (normalizedChunks.length > 120) {
-      setTtsRenderProgress(jobId, { phase: 'error', current: 0, total: normalizedChunks.length, message: 'Too many TTS chunks' });
-      return res.status(413).json({ error: 'Too many TTS chunks', count: normalizedChunks.length, max: 120 });
-    }
-
-    setTtsRenderProgress(jobId, {
-      phase: 'starting',
-      current: 0,
-      total: normalizedChunks.length,
-      message: `Preparing ${normalizedChunks.length} chunks…`,
-      model,
-      voice,
-      format: outputFormat,
-    });
-
-    await fs.mkdir(uploadDir, { recursive: true });
-    await fs.mkdir(ttsWorkDir, { recursive: true });
-    workDir = path.join(ttsWorkDir, `${Date.now()}-${crypto.randomUUID()}`);
-    await fs.mkdir(workDir, { recursive: true });
-
-    const sourceFiles = [];
-    for (let i = 0; i < normalizedChunks.length; i++) {
-      const chunk = normalizedChunks[i];
-      setTtsRenderProgress(jobId, {
-        phase: 'generating',
-        current: i,
-        total: normalizedChunks.length,
-        message: `Generating chunk ${i + 1} of ${normalizedChunks.length}…`,
-      });
-      const body = {
-        model,
-        input: chunk.text,
-        voice,
-        response_format: 'wav',
-        speed: finalSpeed,
-      };
-      const chunkInstructions = buildChunkInstructions(instructions, chunk.previousContext, supportsInstructionsForModel);
-      if (chunkInstructions) body.instructions = chunkInstructions;
-      const meta = {
-        chunkIndex: i,
-        charCount: chunk.text.length,
-        estimatedDurationSec: Math.max(1, Math.round(chunk.text.split(/\s+/).filter(Boolean).length / 2.25)),
-        model,
-        voice,
-        speed: finalSpeed,
-        format: 'wav',
-        render: 'server',
-      };
-      const { response } = await callOpenAITTS(body, meta);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);
-      await fs.writeFile(chunkPath, buffer);
-      sourceFiles.push(chunkPath);
-      setTtsRenderProgress(jobId, {
-        phase: 'generating',
-        current: i + 1,
-        total: normalizedChunks.length,
-        message: `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
-      });
-    }
-
-    setTtsRenderProgress(jobId, {
-      phase: 'encoding',
-      current: normalizedChunks.length,
-      total: normalizedChunks.length,
-      message: `Encoding final ${outputFormat.toUpperCase()} with ffmpeg…`,
-    });
-
-    const concatPath = path.join(workDir, 'concat.txt');
-    await fs.writeFile(concatPath, sourceFiles.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
-
-    const outputBase = `${slugifyFilePart(title)}-${Date.now()}`;
-    const finalFilename = `${outputBase}.${outputFormat}`;
-    const finalPath = path.join(uploadDir, finalFilename);
-    const filterArgs = normalize
-      ? ['-af', 'loudnorm=I=-18:TP=-1.5:LRA=11']
-      : [];
-    const encodeArgs = outputFormat === 'wav'
-      ? (normalize ? ['-c:a', 'pcm_s16le'] : ['-c:a', 'copy'])
-      : outputFormat === 'm4a'
-        ? ['-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart']
-        : ['-c:a', 'libmp3lame', '-b:a', '320k', '-compression_level', '0'];
-
-    await runProcess('ffmpeg', [
-      '-hide_banner',
-      '-y',
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', concatPath,
-      ...filterArgs,
-      ...encodeArgs,
-      finalPath,
-    ]);
-
-    const stat = await fs.stat(finalPath);
-    let durationSeconds = 0;
-    try {
-      const probe = await runProcess('ffprobe', [
-        '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
-        finalPath,
-      ]);
-      durationSeconds = Math.round(Number(probe.stdout.trim()) || 0);
-    } catch {}
-
-    res.json({
-      ok: true,
+    const result = await renderTTSExport({ ...req.body, jobId }, {
       jobId,
-      file_url: `/uploads/${finalFilename}`,
-      filename: finalFilename,
-      size: stat.size,
-      format: outputFormat,
-      mime: ttsExportMime(outputFormat),
-      duration_seconds: durationSeconds,
-      model,
-      voice,
-      speed: finalSpeed,
-      chunks: normalizedChunks.length,
-      normalized: Boolean(normalize),
+      onProgress: (progress) => setTtsRenderProgress(jobId, progress),
     });
-    setTtsRenderProgress(jobId, {
-      phase: 'complete',
-      current: normalizedChunks.length,
-      total: normalizedChunks.length,
-      message: `Complete: ${finalFilename}`,
-      file_url: `/uploads/${finalFilename}`,
-      filename: finalFilename,
-      format: outputFormat,
-      size: stat.size,
-      duration_seconds: durationSeconds,
-    });
+    res.json(result);
   } catch (error) {
     console.error('[renderTTSExport] failed', error);
     setTtsRenderProgress(jobId, {
@@ -477,10 +163,6 @@ functionsRouter.post('/renderTTSExport', async (req, res) => {
       message: error.message || String(error),
     });
     res.status(error.status || 502).json({ error: error.message || String(error), retryable: true });
-  } finally {
-    if (workDir) {
-      fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
-    }
   }
 });
 

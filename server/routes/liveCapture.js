@@ -1,21 +1,16 @@
 import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse } from 'csv-parse/sync';
 import { bulkCreate, upsertEntity } from '../db.js';
+import { liveCaptureConfig, uploadDir } from '../config.js';
 
 export const liveCaptureRouter = express.Router();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '../..');
-const desktopRoot = path.resolve(root, '..');
-
-const HR_WS_URL = process.env.HR_CAPTURE_WS_URL || 'ws://127.0.0.1:8765';
-const HR_RECORDINGS_DIR = path.resolve(process.env.HR_RECORDINGS_DIR || path.join(desktopRoot, 'HeartRate', 'recordings'));
-const EMG_TEXT_DIR = path.resolve(process.env.EMG_TEXT_DIR || path.join(desktopRoot, 'EMG'));
-const EMG_SESSIONS_DIR = path.resolve(process.env.EMG_SESSIONS_DIR || path.join(desktopRoot, 'EMG', 'emg_sessions'));
-const uploadDir = path.resolve(root, process.env.UPLOAD_DIR || './data/uploads');
+const HR_WS_URL = liveCaptureConfig.hrWsUrl;
+const HR_RECORDINGS_DIR = liveCaptureConfig.hrRecordingsDir;
+const EMG_TEXT_DIR = liveCaptureConfig.emgTextDir;
+const EMG_SESSIONS_DIR = liveCaptureConfig.emgSessionsDir;
 
 const clients = new Set();
 let hrSocket = null;
@@ -500,7 +495,7 @@ function startEmgPolling() {
     readEmgTextTelemetry().catch((error) => {
       state.emg.error = error.message || String(error);
     });
-  }, Number(process.env.EMG_POLL_MS || 250));
+  }, liveCaptureConfig.emgPollMs);
   emgPollTimer.unref?.();
 }
 

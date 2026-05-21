@@ -52,23 +52,29 @@ function limitRows(rows, limit, skip = 0) {
   return rows.slice(start, start + lim);
 }
 
+function publicEntity(entity, doc) {
+  if (entity !== 'ProcessingJob' || !doc) return doc;
+  const { payload: _payload, ...rest } = doc;
+  return rest;
+}
+
 entitiesRouter.get('/:entity', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const rows = sortRows(listEntities(entity), req.query.sort);
-  res.json(limitRows(rows, req.query.limit, req.query.skip));
+  res.json(limitRows(rows, req.query.limit, req.query.skip).map((row) => publicEntity(entity, row)));
 });
 
 entitiesRouter.post('/:entity/filter', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const { criteria = {}, sort, limit, skip } = req.body || {};
   const rows = sortRows(listEntities(entity).filter((r) => matches(r, criteria)), sort);
-  res.json(limitRows(rows, limit, skip));
+  res.json(limitRows(rows, limit, skip).map((row) => publicEntity(entity, row)));
 });
 
 entitiesRouter.post('/:entity', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const doc = upsertEntity(entity, req.body?.id || crypto.randomUUID(), req.body || {});
-  res.json(doc);
+  res.json(publicEntity(entity, doc));
 });
 
 entitiesRouter.post('/:entity/bulk', (req, res) => {
@@ -82,7 +88,7 @@ entitiesRouter.patch('/:entity/:id', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const existing = getEntity(entity, req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  res.json(upsertEntity(entity, req.params.id, { ...existing, ...(req.body || {}) }));
+  res.json(publicEntity(entity, upsertEntity(entity, req.params.id, { ...existing, ...(req.body || {}) })));
 });
 
 entitiesRouter.delete('/:entity/:id', (req, res) => {

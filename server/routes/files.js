@@ -1,10 +1,9 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'node:path';
 import fs from 'node:fs';
+import { uploadDir } from '../config.js';
 
 export const filesRouter = express.Router();
-const uploadDir = path.resolve(process.cwd(), process.env.UPLOAD_DIR || './data/uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({

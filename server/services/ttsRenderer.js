@@ -1,138 +1,18 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '../..');
-const uploadDir = path.resolve(root, process.env.UPLOAD_DIR || './data/uploads');
-const ttsWorkDir = path.resolve(root, process.env.TTS_RENDER_DIR || './data/tts-render-work');
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try { return await fetch(url, { ...options, signal: controller.signal }); }
-  finally { clearTimeout(t); }
-}
-
-function clampSpeed(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
-}
-
-function normalizeTTSModel(value) {
-  const requested = String(value || process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts');
-  return ['gpt-4o-mini-tts', 'tts-1-hd', 'tts-1'].includes(requested)
-    ? requested
-    : 'gpt-4o-mini-tts';
-}
-
-function supportsTTSInstructions(model) {
-  return !String(model || '').startsWith('tts-1');
-}
-
-function normalizeTTSExportFormat(value) {
-  const format = String(value || 'mp3').toLowerCase();
-  return ['mp3', 'm4a', 'wav'].includes(format) ? format : 'mp3';
-}
-
-function ttsExportMime(format) {
-  if (format === 'wav') return 'audio/wav';
-  if (format === 'm4a') return 'audio/mp4';
-  return 'audio/mpeg';
-}
-
-function slugifyFilePart(value) {
-  return String(value || 'pulsepoint-tts')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80) || 'pulsepoint-tts';
-}
-
-function q(str) {
-  return `'${String(str).replace(/'/g, "'\\''")}'`;
-}
-
-function runProcess(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, ...options });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (data) => { stdout += data.toString(); });
-    child.stderr?.on('data', (data) => { stderr += data.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${command} exited with ${code}: ${stderr || stdout}`));
-    });
-  });
-}
-
-function buildChunkInstructions(baseInstructions, previousContext, supportsInstructionsForModel) {
-  const base = String(baseInstructions || '').trim();
-  if (!supportsInstructionsForModel) return '';
-  const context = String(previousContext || '').trim();
-  if (!context) return base;
-  return `${base}
-
-CONTEXT ONLY — DO NOT READ:
-Previous narration:
-"${context}"
-
-Continue seamlessly from the previous narration.
-This is the same continuous thought.
-Do NOT restart energy, tone, pacing, or emphasis.
-Read only the input text.`;
-}
-
-async function callOpenAITTS(body, meta) {
-  const maxAttempts = Number(process.env.OPENAI_TTS_BACKEND_ATTEMPTS || 3);
-  let lastStatus = 502;
-  let lastMessage = 'Unknown OpenAI TTS error';
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const startedAt = Date.now();
-    try {
-      const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }, Number(process.env.OPENAI_TTS_TIMEOUT_MS || 45000));
-      const latencyMs = Date.now() - startedAt;
-
-      if (response.ok) {
-        console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt });
-        return { response, latencyMs, retries: attempt };
-      }
-
-      lastStatus = response.status;
-      lastMessage = await response.text();
-      const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
-      console.warn('[openaiTTS] upstream error', { ...meta, status: response.status, latencyMs, attempt: attempt + 1, retryable, message: lastMessage.slice(0, 300) });
-      if (!retryable || attempt === maxAttempts - 1) break;
-
-      const retryAfter = response.headers.get('retry-after');
-      const delay = retryAfter
-        ? Math.min(Math.max(Number(retryAfter) * 1000, 1000), 8000)
-        : Math.min(900 * 2 ** attempt, 8000) + Math.floor(Math.random() * 400);
-      await sleep(delay);
-    } catch (error) {
-      lastMessage = error.message || String(error);
-      console.warn('[openaiTTS] exception', { ...meta, attempt: attempt + 1, message: lastMessage });
-      if (attempt === maxAttempts - 1) break;
-      await sleep(Math.min(900 * 2 ** attempt, 8000));
-    }
-  }
-
-  const error = new Error(lastMessage);
-  error.status = lastStatus;
-  throw error;
-}
+import { uploadDir, ttsRenderDir } from '../config.js';
+import {
+  buildChunkInstructions,
+  callOpenAITTS,
+  clampSpeed,
+  normalizeTTSExportFormat,
+  normalizeTTSModel,
+  q,
+  runProcess,
+  slugifyFilePart,
+  supportsTTSInstructions,
+  ttsExportMime,
+} from './ttsCore.js';
 
 export async function renderTTSExport(payload = {}, options = {}) {
   let workDir = null;
@@ -190,8 +70,8 @@ export async function renderTTSExport(payload = {}, options = {}) {
     });
 
     await fs.mkdir(uploadDir, { recursive: true });
-    await fs.mkdir(ttsWorkDir, { recursive: true });
-    workDir = path.join(ttsWorkDir, `${Date.now()}-${crypto.randomUUID()}`);
+    await fs.mkdir(ttsRenderDir, { recursive: true });
+    workDir = path.join(ttsRenderDir, `${Date.now()}-${crypto.randomUUID()}`);
     await fs.mkdir(workDir, { recursive: true });
 
     const sourceFiles = [];

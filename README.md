@@ -26,7 +26,7 @@ npm install
 Create a local environment file:
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 ```
 
 At minimum, configure API keys used by the AI and TTS features:
@@ -88,6 +88,19 @@ Important local data areas:
 Heavy work such as premium TTS exports and long AI analysis can run on the backend as background jobs. The frontend starts a job, polls status, and can reconnect to active jobs after refresh or focus changes.
 
 This helps avoid duplicate OpenAI/Claude requests when Android or Chrome refreshes an installed app while a render is still running.
+
+Queued AI and TTS jobs keep their local payload in SQLite so they can resume after a server restart. Older in-flight job records created before that payload was persisted are marked recoverable instead of silently restarting with missing context.
+
+## Local Configuration
+
+`server/config.js` centralizes local paths. The defaults keep the current sibling-folder capture layout working, while `.env` can override it:
+
+- `DATABASE_PATH`, `UPLOAD_DIR`, and `TTS_RENDER_DIR` control local app storage.
+- `HR_CAPTURE_WS_URL` points Live Capture at the heart-rate relay WebSocket.
+- `HR_RECORDINGS_DIR` points at heart-rate CSV recordings.
+- `EMG_TEXT_DIR` points at live EMG telemetry text files.
+- `EMG_SESSIONS_DIR` points at EMG CSV session exports.
+- `BACKGROUND_JOB_CONCURRENCY` keeps local background queue throughput explicit.
 
 ## Notes
 

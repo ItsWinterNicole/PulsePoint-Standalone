@@ -16,9 +16,15 @@ function publicJob(job) {
   return rest;
 }
 
+function persistedJob(job) {
+  if (!job) return null;
+  const { abortController: _abortController, ...rest } = job;
+  return rest;
+}
+
 function saveJob(job) {
   if (!job?.id) return;
-  upsertEntity('ProcessingJob', job.id, publicJob(job));
+  upsertEntity('ProcessingJob', job.id, persistedJob(job));
 }
 
 function patchJob(job, patch = {}) {
@@ -47,6 +53,7 @@ function runNext() {
       patchJob(job, {
         status: 'error',
         error: `No background job handler registered for ${job.type}`,
+        payload: null,
         finishedAt: nowIso(),
       });
       continue;
@@ -73,6 +80,7 @@ function runNext() {
           status: 'complete',
           result,
           error: null,
+          payload: null,
           finishedAt: nowIso(),
         });
         patchProgress(job, {
@@ -85,6 +93,7 @@ function runNext() {
         patchJob(job, {
           status: cancelled ? 'cancelled' : 'error',
           error: cancelled ? 'Cancelled' : (error?.message || String(error)),
+          payload: null,
           finishedAt: nowIso(),
         });
         patchProgress(job, {
@@ -136,16 +145,89 @@ export function createJob(type, payload = {}, meta = {}) {
   return publicJob(job);
 }
 
+function hydratePersistedJob(record) {
+  if (!record?.id) return null;
+  return {
+    ...record,
+    payload: record.payload || null,
+    abortController: new AbortController(),
+  };
+}
+
+export function restorePersistedJobs() {
+  const recoverable = listEntities('ProcessingJob')
+    .filter((record) => ['queued', 'running'].includes(record?.status));
+
+  for (const record of recoverable) {
+    const handler = handlers.get(record.type);
+    if (!handler) {
+      upsertEntity('ProcessingJob', record.id, {
+        ...record,
+        status: 'error',
+        error: `No background job handler registered for ${record.type}`,
+        payload: null,
+        progress: {
+          ...(record.progress || {}),
+          phase: 'error',
+          message: `No background job handler registered for ${record.type}`,
+          updatedAt: nowIso(),
+        },
+        updatedAt: nowIso(),
+        finishedAt: nowIso(),
+      });
+      continue;
+    }
+
+    if (!record.payload) {
+      upsertEntity('ProcessingJob', record.id, {
+        ...record,
+        status: 'error',
+        error: 'Server restarted before this job could be resumed. Please start it again.',
+        payload: null,
+        progress: {
+          ...(record.progress || {}),
+          phase: 'recoverable',
+          message: 'Server restarted before this job could be resumed. Please start it again.',
+          updatedAt: nowIso(),
+        },
+        updatedAt: nowIso(),
+        finishedAt: nowIso(),
+      });
+      continue;
+    }
+
+    const job = hydratePersistedJob({
+      ...record,
+      status: 'queued',
+      startedAt: null,
+      finishedAt: null,
+      progress: {
+        ...(record.progress || {}),
+        phase: 'queued',
+        message: 'Recovered after server restart; queued to resume...',
+        updatedAt: nowIso(),
+      },
+      updatedAt: nowIso(),
+    });
+    jobs.set(job.id, job);
+    queue.push(job);
+    saveJob(job);
+  }
+
+  if (queue.length) queueMicrotask(runNext);
+}
+
 export function getJob(id) {
   const job = jobs.get(id);
   if (job) return publicJob(job);
-  return getEntity('ProcessingJob', id);
+  return publicJob(getEntity('ProcessingJob', id));
 }
 
 export function listJobs({ type, status, limit = 20, meta = {} } = {}) {
   const merged = new Map();
   for (const job of listEntities('ProcessingJob')) {
-    if (job?.id) merged.set(job.id, job);
+    const pub = publicJob(job);
+    if (pub?.id) merged.set(pub.id, pub);
   }
   for (const job of jobs.values()) {
     const pub = publicJob(job);
@@ -168,7 +250,28 @@ export function listJobs({ type, status, limit = 20, meta = {} } = {}) {
 
 export function cancelJob(id) {
   const job = jobs.get(id);
-  if (!job) return getEntity('ProcessingJob', id);
+  if (!job) {
+    const persisted = getEntity('ProcessingJob', id);
+    if (!persisted) return null;
+    if (['queued', 'running'].includes(persisted.status)) {
+      const updated = upsertEntity('ProcessingJob', id, {
+        ...persisted,
+        status: 'cancelled',
+        error: 'Cancelled',
+        payload: null,
+        progress: {
+          ...(persisted.progress || {}),
+          phase: 'cancelled',
+          message: 'Cancelled',
+          updatedAt: nowIso(),
+        },
+        updatedAt: nowIso(),
+        finishedAt: nowIso(),
+      });
+      return publicJob(updated);
+    }
+    return publicJob(persisted);
+  }
   if (job.status === 'queued') {
     const index = queue.findIndex((queued) => queued.id === id);
     if (index >= 0) queue.splice(index, 1);
@@ -178,6 +281,7 @@ export function cancelJob(id) {
     patchJob(job, {
       status: 'cancelled',
       error: 'Cancelled',
+      payload: null,
       finishedAt: nowIso(),
     });
     patchProgress(job, {

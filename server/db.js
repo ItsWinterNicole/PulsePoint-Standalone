@@ -1,11 +1,9 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { databasePath } from './config.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '..');
-const dbPath = path.resolve(root, process.env.DATABASE_PATH || './data/pulsepoint.sqlite');
+const dbPath = databasePath;
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 export const db = new Database(dbPath);
@@ -45,8 +43,8 @@ export function initDb() {
     const now = new Date().toISOString();
     upsertEntity('User', 'local-user', {
       id: 'local-user',
-      email: 'benjamin@linkedresponder.com',
-      full_name: 'Benjamin M',
+      email: 'local@example.com',
+      full_name: 'Local User',
       created_date: now,
       updated_date: now,
     });
