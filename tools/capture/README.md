@@ -4,13 +4,14 @@ This folder keeps the helper software used by PulsePoint Live Capture next to th
 
 ## Heart Rate
 
-`heart-rate/` contains the local Node relay and OBS overlay assets used with HeartRateOnStream telemetry.
+`heart-rate/` contains the standalone Node relay and OBS overlay assets used with HeartRateOnStream telemetry.
 
-- `server.js` runs the WebSocket relay expected by PulsePoint at `ws://127.0.0.1:8765`.
+- PulsePoint now starts the same relay behavior inside `npm run server` by default.
+- `server.js` remains available when you want to run the relay separately at `ws://127.0.0.1:8765`.
 - `recordings/` is created locally when the relay writes HR CSV data.
 - `overlay.html` and `control.html` are OBS/browser helper surfaces.
 
-Install and run from the repo root:
+Install and run the standalone relay from the repo root only when you need that fallback:
 
 ```bash
 npm run capture:hr:install
@@ -29,14 +30,21 @@ npm run capture:hr
 Install Python requirements in the Python environment used for the capture scripts:
 
 ```bash
-py -m pip install -r tools/capture/emg/requirements.txt
+npm run capture:emg:install
+```
+
+Run dual-channel or single-channel EMG from the repo root:
+
+```bash
+npm run capture:emg:dual
+npm run capture:emg:single
 ```
 
 The Python files keep serial port, OBS host, OBS password, and calibration settings near the top because those values are hardware- and workstation-specific.
 
 ## PulsePoint Paths
 
-The local API still defaults to the older sibling-folder layout so an existing capture setup keeps working.
+The local API still defaults to the older sibling-folder layout so an existing capture setup keeps working. The embedded relay writes HR CSVs into the configured `HR_RECORDINGS_DIR`.
 
 To have PulsePoint read repo-local helper output, set:
 

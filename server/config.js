@@ -9,9 +9,14 @@ export const ttsRenderDir = path.resolve(rootDir, process.env.TTS_RENDER_DIR || 
 export const databasePath = path.resolve(rootDir, process.env.DATABASE_PATH || './data/pulsepoint.sqlite');
 
 const desktopRoot = path.resolve(rootDir, '..');
+const hrRelayPort = Number(process.env.HR_CAPTURE_RELAY_PORT || 8765);
 
 export const liveCaptureConfig = {
-  hrWsUrl: process.env.HR_CAPTURE_WS_URL || 'ws://127.0.0.1:8765',
+  hrWsUrl: process.env.HR_CAPTURE_WS_URL || `ws://127.0.0.1:${hrRelayPort}`,
+  hrRelayEnabled: process.env.HR_CAPTURE_RELAY_ENABLED !== 'false',
+  hrRelayPort,
+  hrObsWsUrl: process.env.OBS_WS_URL || 'ws://127.0.0.1:4455',
+  hrObsPassword: process.env.OBS_PASSWORD || '',
   hrRecordingsDir: path.resolve(process.env.HR_RECORDINGS_DIR || path.join(desktopRoot, 'HeartRate', 'recordings')),
   emgTextDir: path.resolve(process.env.EMG_TEXT_DIR || path.join(desktopRoot, 'EMG')),
   emgSessionsDir: path.resolve(process.env.EMG_SESSIONS_DIR || path.join(desktopRoot, 'EMG', 'emg_sessions')),

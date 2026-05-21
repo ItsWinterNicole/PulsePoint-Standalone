@@ -52,9 +52,10 @@ PulsePoint can work from manually entered sessions and imported files alone. The
 
 - **HeartRateOnStream** for live heart-rate telemetry
 - the currently tested wearable source is a **Samsung Galaxy Watch 7**
-- the in-repo heart-rate relay under [`tools/capture/heart-rate`](tools/capture/heart-rate)
+- the PulsePoint local API, which now starts the heart-rate relay by default
+- the in-repo standalone relay and OBS helper assets under [`tools/capture/heart-rate`](tools/capture/heart-rate) when you need the fallback pieces directly
 
-The heart-rate relay receives live telemetry, exposes the WebSocket feed used by Live Capture, and writes HR CSV recordings when the OBS-driven recording flow is active.
+The heart-rate relay receives live telemetry, exposes the WebSocket feed used by Live Capture, and writes HR CSV recordings when the OBS-driven recording flow is active. In the default setup it lives inside `npm run server`, so HR capture does not need its own extra terminal.
 
 ### Used for EMG capture
 
@@ -126,15 +127,16 @@ Default local URLs:
 
 ### Heart-rate relay
 
-Install the heart-rate helper dependencies once:
+The PulsePoint API starts the HR relay by default:
+
+```bash
+npm run server
+```
+
+The standalone helper is still available for troubleshooting or older workflows:
 
 ```bash
 npm run capture:hr:install
-```
-
-Run the relay:
-
-```bash
 npm run capture:hr
 ```
 
@@ -145,19 +147,19 @@ The relay package and OBS overlay files live in `tools/capture/heart-rate/`.
 The EMG scripts are Python helpers. Install their Python requirements in the environment you use for the MyoWare capture scripts:
 
 ```bash
-py -m pip install -r tools/capture/emg/requirements.txt
+npm run capture:emg:install
 ```
 
 Run the helper that matches the setup:
 
 ```bash
-py tools/capture/emg/emg_dual_obs.py
+npm run capture:emg:dual
 ```
 
 or
 
 ```bash
-py tools/capture/emg/emg_single.py
+npm run capture:emg:single
 ```
 
 Those scripts still expose their practical hardware and OBS knobs near the top of each file, including serial port, OBS host, and calibration behavior.
@@ -215,7 +217,9 @@ Important local data areas:
 `server/config.js` centralizes local paths. The defaults keep the current sibling-folder capture layout working, while `.env` can override it:
 
 - `DATABASE_PATH`, `UPLOAD_DIR`, and `TTS_RENDER_DIR` control local app storage.
-- `HR_CAPTURE_WS_URL` points Live Capture at the heart-rate relay WebSocket.
+- `HR_CAPTURE_RELAY_ENABLED` controls the embedded HR relay started with the API.
+- `HR_CAPTURE_RELAY_PORT` and `HR_CAPTURE_WS_URL` keep its WebSocket address configurable.
+- `OBS_WS_URL` and `OBS_PASSWORD` let the embedded relay follow OBS recording state.
 - `HR_RECORDINGS_DIR` points at heart-rate CSV recordings.
 - `EMG_TEXT_DIR` points at live EMG telemetry text files.
 - `EMG_SESSIONS_DIR` points at EMG CSV session exports.
