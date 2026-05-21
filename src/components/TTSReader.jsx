@@ -21,6 +21,7 @@ import { Slider } from "@/components/ui/slider";
 import { fmtSecondsInText } from "@/utils/formatSeconds";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
+import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 
 const TTS_SAMPLE_TEXT = "Your build phase begins quietly, with stimulation becoming more focused while your body starts to organize around arousal. As climax approaches, the shift is meaningful: sensation, muscle tone, and heart rate begin telling the same story, then recovery arrives as stimulation stops and the body settles.";
 
@@ -29,6 +30,8 @@ const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
 const TTS_PREFETCH_AHEAD = 2;
 const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
   `${runtime.cacheProfile}|${format}|${buildTTSInstructions(runtime.instructions, previousContext).trim()}|${chunk}`;
+const ttsExportStorageKey = (sessionId, title = "") =>
+  `pulsepoint.ttsExport.${sessionId || String(title || "global").replace(/[^a-z0-9]+/gi, "_").slice(0, 80)}`;
 
 function splitForTTS(text) {
   return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
@@ -253,6 +256,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
+  const [completedRender, setCompletedRender] = useState(null);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
 
   const stateRef = useRef("idle");
@@ -696,7 +700,174 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     return tag;
   };
 
+  const getDownloadDisplayTitle = () => {
+    const dateObj = sessionDate ? new Date(sessionDate) : new Date();
+    const monthName = dateObj.toLocaleDateString("en-US", { month: "long" });
+    const dayNum = dateObj.getDate();
+    const yearNum = dateObj.getFullYear();
+    const friendlyDate = `${monthName} ${dayNum} ${yearNum}`;
+    const titleHasDate = title && /\d{4}|\bjan\b|\bfeb\b|\bmar\b|\bapr\b|\bmay\b|\bjun\b|\bjul\b|\baug\b|\bsep\b|\boct\b|\bnov\b|\bdec\b/i.test(title);
+    return title
+      ? (titleHasDate ? title : `${friendlyDate} – ${title}`)
+      : `PhysioLog Analysis – ${friendlyDate}`;
+  };
+
+  const clearSavedExportJob = () => {
+    try {
+      localStorage.removeItem(ttsExportStorageKey(sessionId, title));
+    } catch {
+      // localStorage may be unavailable in rare private browsing states.
+    }
+  };
+
+  const saveActiveExportJob = (job, meta = {}) => {
+    try {
+      localStorage.setItem(ttsExportStorageKey(sessionId, title), JSON.stringify({
+        jobId: job.id,
+        savedAt: new Date().toISOString(),
+        ...meta,
+      }));
+    } catch {
+      // If storage fails, the server-side job still continues and can be found by session id.
+    }
+  };
+
+  const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
+    if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
+    const a = document.createElement("a");
+    a.href = rendered.file_url;
+    a.download = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
+    a.click();
+
+    await base44.entities.AudioExport.create({
+      title: displayTitle,
+      file_url: rendered.file_url,
+      duration_seconds: Math.round(rendered.duration_seconds || 0),
+      voice: voiceRef.current,
+      speed: runtime.speed,
+      model: runtime.model,
+      format: rendered.format || exportFormat,
+      size: rendered.size,
+    });
+
+    clearSavedExportJob();
+    setCompletedRender(null);
+    setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded` });
+  };
+
+  const resumeExportJob = async (jobId, saved = {}) => {
+    if (!jobId) return;
+    setDownloading(true);
+    setRequestStatus({ type: "fetching", msg: "Reconnected to server audio render..." });
+    try {
+      const completedJob = await waitForBackgroundJob(jobId, {
+        intervalMs: 1200,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const current = Number(progress.current || 0);
+          const total = Number(progress.total || saved.total || saved.chunks || 0);
+          if (total) setDownloadProgress({ current, total });
+          setRequestStatus({
+            type: job.status === "complete" ? "ok" : "fetching",
+            msg: progress.message || `Server render ${job.status || "running"}...`,
+          });
+        },
+      });
+      const rendered = completedJob.result;
+      if (rendered?.file_url) {
+        setCompletedRender({
+          ...rendered,
+          displayTitle: saved.displayTitle || completedJob.meta?.title || getDownloadDisplayTitle(),
+          exportFormat: rendered.format || saved.exportFormat || runtimeRef.current.format,
+        });
+        setRequestStatus({ type: "ok", msg: "Audio render finished on the server. Tap Download to save it." });
+      }
+    } catch (err) {
+      console.error("Could not resume TTS export job:", err);
+      setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Could not reconnect to audio render" });
+      clearSavedExportJob();
+    } finally {
+      setDownloadProgress({ current: 0, total: 0 });
+      setDownloading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const reconnect = async () => {
+      const key = ttsExportStorageKey(sessionId, title);
+      let saved = null;
+      try {
+        saved = JSON.parse(localStorage.getItem(key) || "null");
+      } catch {
+        saved = null;
+      }
+
+      try {
+        if (saved?.jobId) {
+          const job = await getBackgroundJob(saved.jobId);
+          if (cancelled || !job) return;
+          if (["queued", "running"].includes(job.status)) {
+            resumeExportJob(job.id, saved);
+            return;
+          }
+          if (job.status === "complete" && job.result?.file_url) {
+            setCompletedRender({
+              ...job.result,
+              displayTitle: saved.displayTitle || job.meta?.title || getDownloadDisplayTitle(),
+              exportFormat: job.result.format || saved.exportFormat || runtimeRef.current.format,
+            });
+            setRequestStatus({ type: "ok", msg: "Audio render finished while the app was away. Tap Download to save it." });
+            return;
+          }
+          clearSavedExportJob();
+        }
+
+        if (!sessionId) return;
+        const recent = await listBackgroundJobs({
+          type: "tts_export",
+          status: "queued,running",
+          metaSessionId: sessionId,
+          metaSource: "TTSReader",
+          limit: 1,
+        });
+        const job = recent?.jobs?.[0];
+        if (!cancelled && job?.id) {
+          saveActiveExportJob(job, {
+            displayTitle: job.meta?.title || getDownloadDisplayTitle(),
+            exportFormat: runtimeRef.current.format,
+            chunks: job.meta?.chunks || 0,
+          });
+          resumeExportJob(job.id, job.meta || {});
+        }
+      } catch {
+        // Server may be offline during purely local reading; avoid noisy UI on mount.
+      }
+    };
+    reconnect();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, title]);
+
   const downloadAudio = async () => {
+    if (completedRender?.file_url) {
+      try {
+        setDownloading(true);
+        await triggerRenderedDownload(
+          completedRender,
+          completedRender.displayTitle || getDownloadDisplayTitle(),
+          completedRender.exportFormat || runtimeRef.current.format,
+          runtimeRef.current
+        );
+      } catch (err) {
+        setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Download failed" });
+      } finally {
+        setDownloading(false);
+      }
+      return;
+    }
+
     setDownloading(true);
     if (renderProgressTimerRef.current) {
       clearInterval(renderProgressTimerRef.current);
@@ -706,40 +877,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       const allChunks = buildSpeechChunks(paragraphs, 0);
       setDownloadProgress({ current: 0, total: allChunks.length });
       setRequestStatus({ type: "fetching", msg: `Rendering premium audio on server (${allChunks.length} chunks)…` });
-      const jobId = crypto.randomUUID();
-      renderProgressTimerRef.current = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/functions/ttsRenderProgress/${encodeURIComponent(jobId)}`);
-          if (!res.ok) return;
-          const progress = await res.json();
-          const current = Number(progress.current || 0);
-          const total = Number(progress.total || allChunks.length || 0);
-          if (total) setDownloadProgress({ current, total });
-          const type = progress.phase === "error" ? "error" : progress.phase === "complete" ? "ok" : "fetching";
-          setRequestStatus({
-            type,
-            msg: progress.message || `Rendering chunk ${current} of ${total || allChunks.length}…`,
-          });
-        } catch {
-          // Progress polling is best-effort; the render request itself remains authoritative.
-        }
-      }, 1200);
-
-      const dateObj = sessionDate ? new Date(sessionDate) : new Date();
-      const monthName = dateObj.toLocaleDateString("en-US", { month: "long" });
-      const dayNum = dateObj.getDate();
-      const yearNum = dateObj.getFullYear();
-      const friendlyDate = `${monthName} ${dayNum} ${yearNum}`;
-      // If title already contains the date (e.g. CompareAIPanel passes "Session Comparison – Apr 3 & May 1"),
-      // don't prepend the date again. Otherwise prepend it.
-      const titleHasDate = title && /\d{4}|\bjan\b|\bfeb\b|\bmar\b|\bapr\b|\bmay\b|\bjun\b|\bjul\b|\baug\b|\bsep\b|\boct\b|\bnov\b|\bdec\b/i.test(title);
-      const displayTitle = title
-        ? (titleHasDate ? title : `${friendlyDate} – ${title}`)
-        : `PhysioLog Analysis – ${friendlyDate}`;
+      const displayTitle = getDownloadDisplayTitle();
       const exportFormat = runtimeRef.current.format;
       const runtime = runtimeRef.current;
-      const renderRes = await base44.functions.invoke("renderTTSExport", {
-        jobId,
+      const renderPayload = {
         title: displayTitle,
         chunks: allChunks.map((chunk) => ({
           text: prepareTTSInput(getChunkText(chunk)),
@@ -751,32 +892,38 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         instructions: runtime.instructions,
         outputFormat: exportFormat,
         normalize: runtime.settings.normalizeExport,
+      };
+
+      const startedJob = await startBackgroundJob("tts_export", renderPayload, {
+        title: displayTitle,
+        chunks: allChunks.length,
+        source: "TTSReader",
+        sessionId,
+      });
+      saveActiveExportJob(startedJob, { displayTitle, exportFormat, chunks: allChunks.length });
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1200,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const current = Number(progress.current || 0);
+          const total = Number(progress.total || allChunks.length || 0);
+          if (total) setDownloadProgress({ current, total });
+          const type = job.status === "error" ? "error" : job.status === "complete" ? "ok" : "fetching";
+          setRequestStatus({
+            type,
+            msg: progress.message || `Rendering chunk ${current} of ${total || allChunks.length}…`,
+          });
+        },
       });
 
-      if (renderRes?.data?.error) throw new Error(renderRes.data.error);
-      const rendered = renderRes?.data || renderRes;
+      const rendered = completedJob.result;
       if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
       if (renderProgressTimerRef.current) {
         clearInterval(renderProgressTimerRef.current);
         renderProgressTimerRef.current = null;
       }
 
-      // Trigger download
-      const a = document.createElement("a");
-      a.href = rendered.file_url;
-      a.download = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
-      a.click();
-
-      await base44.entities.AudioExport.create({
-        title: displayTitle,  // e.g. "April 23 Cascade Overview"
-        file_url: rendered.file_url,
-        duration_seconds: Math.round(rendered.duration_seconds || 0),
-        voice: voiceRef.current,
-        speed: runtimeRef.current.speed,
-        model: runtime.model,
-        format: rendered.format || exportFormat,
-        size: rendered.size,
-      });
+      await triggerRenderedDownload(rendered, displayTitle, exportFormat, runtime);
 
       setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render complete` });
       setDownloadProgress({ current: 0, total: 0 });
@@ -788,6 +935,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       }
       console.error("Download failed:", err);
       setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Download failed" });
+      if (["error", "cancelled"].includes(err?.job?.status)) clearSavedExportJob();
       setDownloadProgress({ current: 0, total: 0 });
       setDownloading(false);
     }
@@ -838,7 +986,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             </>
           ) : (
             <>
-              <Download className="w-3.5 h-3.5" /> Download
+              <Download className="w-3.5 h-3.5" /> {completedRender?.file_url ? "Download Ready" : "Download"}
             </>
           )}
         </button>

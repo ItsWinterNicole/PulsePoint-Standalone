@@ -174,6 +174,35 @@ Do NOT restart energy, tone, pacing, or emphasis.
 Read only the input text.`;
 }
 
+function normalizeGeneratedJournal(value) {
+  const source = value?.generated_entry && typeof value.generated_entry === 'object'
+    ? value.generated_entry
+    : value;
+  const journal = {
+    title: source?.title || 'Session Journal',
+    emotional_reflection: String(source?.emotional_reflection || '').trim(),
+    physiological_observations: String(source?.physiological_observations || '').trim(),
+    experience_narrative: String(source?.experience_narrative || '').trim(),
+    key_moments: Array.isArray(source?.key_moments) ? source.key_moments.filter(Boolean) : [],
+    insights: String(source?.insights || '').trim(),
+    next_session_intentions: String(source?.next_session_intentions || '').trim(),
+  };
+  const missing = [
+    'emotional_reflection',
+    'physiological_observations',
+    'experience_narrative',
+    'insights',
+    'next_session_intentions',
+  ].filter((key) => !journal[key]);
+  if (!journal.key_moments.length) missing.push('key_moments');
+  if (missing.length) {
+    const error = new Error(`AI journal was incomplete: missing ${missing.join(', ')}`);
+    error.status = 502;
+    throw error;
+  }
+  return journal;
+}
+
 functionsRouter.post('/saveTimelineData', (req, res) => {
   const { session_id, entity, rows = [], action } = req.body || {};
   if (!session_id || !['HeartRateTimeline', 'EMGTimeline'].includes(entity)) {
@@ -557,7 +586,7 @@ Write a structured journal entry using EXACTLY these JSON keys. All fields are r
 - key_moments: array of 2-4 brief strings, one per notable moment
 - insights: 1-2 sentences of meaningful insight
 - next_session_intentions: 1-2 sentences of intentions for next time`;
-    const rawResult = await aiInvokeInternal({ model: 'claude_sonnet_4_6', prompt, response_json_schema: {
+    let rawResult = await aiInvokeInternal({ model: 'claude_sonnet_4_6', max_tokens: 4096, prompt, response_json_schema: {
       type: 'object',
       properties: {
         title: { type: 'string' },
@@ -570,16 +599,30 @@ Write a structured journal entry using EXACTLY these JSON keys. All fields are r
       },
       required: ['title', 'emotional_reflection', 'physiological_observations', 'experience_narrative', 'key_moments', 'insights', 'next_session_intentions'],
     }});
-    const result = rawResult?.response ?? rawResult;
-    const journal = {
-      title: result?.title || 'Session Journal',
-      emotional_reflection: result?.emotional_reflection || '',
-      physiological_observations: result?.physiological_observations || '',
-      experience_narrative: result?.experience_narrative || '',
-      key_moments: Array.isArray(result?.key_moments) ? result.key_moments : [],
-      insights: result?.insights || '',
-      next_session_intentions: result?.next_session_intentions || '',
-    };
+    let result = rawResult?.response ?? rawResult;
+    let journal;
+    try {
+      journal = normalizeGeneratedJournal(result);
+    } catch {
+      rawResult = await aiInvokeInternal({ model: 'claude_sonnet_4_6', max_tokens: 4096, prompt: `${prompt}
+
+IMPORTANT COMPLETENESS CHECK:
+Return a complete object this time. Do not return only a title. Every required string field must contain full prose, and key_moments must contain at least two items.`, response_json_schema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          emotional_reflection: { type: 'string' },
+          physiological_observations: { type: 'string' },
+          experience_narrative: { type: 'string' },
+          key_moments: { type: 'array', items: { type: 'string' } },
+          insights: { type: 'string' },
+          next_session_intentions: { type: 'string' },
+        },
+        required: ['title', 'emotional_reflection', 'physiological_observations', 'experience_narrative', 'key_moments', 'insights', 'next_session_intentions'],
+      }});
+      result = rawResult?.response ?? rawResult;
+      journal = normalizeGeneratedJournal(result);
+    }
     res.json({ journal });
   } catch (error) {
     res.status(502).json({ error: error.message || String(error) });

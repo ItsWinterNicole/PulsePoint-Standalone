@@ -1,0 +1,122 @@
+import express from 'express';
+import { cancelJob, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
+import { renderTTSExport } from '../services/ttsRenderer.js';
+import { aiInvokeInternal } from './internalAi.js';
+
+export const jobsRouter = express.Router();
+
+registerJobHandler('tts_export', async (payload, context) => {
+  return renderTTSExport(payload, {
+    jobId: context.jobId,
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('ai_invoke', async (payload, context) => {
+  const {
+    prompt,
+    response_json_schema,
+    model,
+    max_tokens,
+    temperature,
+    label = 'AI analysis',
+  } = payload || {};
+  if (!prompt) throw new Error('AI job is missing a prompt');
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 3,
+    message: `${label}: preparing prompt (${String(prompt).length.toLocaleString()} characters)…`,
+    model: model || process.env.ANTHROPIC_MODEL || 'claude_sonnet_4_6',
+  });
+  if (context.signal?.aborted) throw new Error('Cancelled');
+
+  context.updateProgress({
+    phase: 'requesting',
+    current: 1,
+    total: 3,
+    message: `${label}: waiting for Claude to finish the full response…`,
+  });
+  let result;
+  try {
+    result = await aiInvokeInternal({
+      prompt,
+      response_json_schema,
+      model,
+      max_tokens,
+      temperature,
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    const canRetryForLength = response_json_schema && /cut off|max_tokens|malformed JSON/i.test(message);
+    if (!canRetryForLength) throw error;
+    const retryMaxTokens = Math.max(Number(max_tokens || 0), Number(process.env.ANTHROPIC_LONG_MAX_TOKENS || 20000));
+    context.updateProgress({
+      phase: 'retrying',
+      current: 1,
+      total: 3,
+      message: `${label}: response was incomplete, retrying with a larger output budget…`,
+      retry_reason: message.slice(0, 240),
+      max_tokens: retryMaxTokens,
+    });
+    result = await aiInvokeInternal({
+      prompt,
+      response_json_schema,
+      model,
+      max_tokens: retryMaxTokens,
+      temperature,
+    });
+  }
+  if (context.signal?.aborted) throw new Error('Cancelled');
+
+  context.updateProgress({
+    phase: 'saving',
+    current: 2,
+    total: 3,
+    message: `${label}: validating structured output…`,
+  });
+  return result;
+});
+
+jobsRouter.post('/start', (req, res) => {
+  try {
+    const { type, payload = {}, meta = {} } = req.body || {};
+    if (!type) return res.status(400).json({ error: 'Job type is required' });
+    const job = createJob(type, payload, meta);
+    res.status(202).json(job);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || String(error) });
+  }
+});
+
+jobsRouter.get('/', (req, res) => {
+  try {
+    const { type, status, limit, metaSessionId, metaSource } = req.query || {};
+    const meta = {};
+    if (metaSessionId) meta.sessionId = metaSessionId;
+    if (metaSource) meta.source = metaSource;
+    res.json({
+      jobs: listJobs({
+        type,
+        status,
+        limit,
+        meta,
+      }),
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
+
+jobsRouter.get('/:jobId', (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+jobsRouter.post('/:jobId/cancel', (req, res) => {
+  const job = cancelJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});

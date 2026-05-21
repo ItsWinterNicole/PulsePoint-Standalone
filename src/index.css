@@ -20,7 +20,7 @@
     --secondary: 220 0% 100%;
     --secondary-foreground: 220 20% 20%;
     --muted: 220 0% 100%;
-    --muted-foreground: 220 10% 46%;
+    --muted-foreground: 220 11% 38%;
     --accent: 262 52% 55%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 72% 51%;
@@ -56,7 +56,7 @@
     --secondary: 220 15% 16%;
     --secondary-foreground: 220 10% 85%;
     --muted: 220 15% 14%;
-    --muted-foreground: 220 10% 55%;
+    --muted-foreground: 220 11% 72%;
     --accent: 262 52% 60%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 62% 45%;
@@ -86,5 +86,21 @@
   }
   body {
     @apply bg-background text-foreground font-inter;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer utilities {
+  @media (max-width: 640px) {
+    .text-\[9px\],
+    .text-\[10px\] {
+      font-size: 0.72rem;
+      line-height: 1rem;
+    }
+
+    .text-xs {
+      font-size: 0.8125rem;
+      line-height: 1.15rem;
+    }
   }
 }

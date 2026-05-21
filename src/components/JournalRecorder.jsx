@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Mic, MicOff, Brain, BookOpen, ChevronDown, ChevronUp, Trash2, Save } from "lucide-react";
 import TTSReader from "./TTSReader";
 import JournalPrompts from "./JournalPrompts";
+import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 
 const WHISPER_PROMPT =
   "Post-session reflection. Physiological sensations. Arousal buildup. Climax experience. Heart rate. Muscle tension. Pelvic floor. E-stim. Foley catheter. Refractory period. Emotional state. What worked well. What to try next time.";
@@ -42,11 +43,13 @@ export default function JournalRecorder({ session, timelineRows = [], userProfil
 
   // Load existing journal for this session on mount
   useEffect(() => {
-    base44.entities.Journal.filter({ session_id: session.id }, "-created_date", 1).then((rows) => {
+    base44.entities.Journal.filter({ session_id: session.id }, "-created_date", 10).then((rows) => {
       if (rows[0]) {
-        setJournalId(rows[0].id);
-        setJournal(rows[0].ai_journal || null);
-        setTranscript(rows[0].voice_transcript || "");
+        const rowWithStoryline = rows.find((row) => journalHasStoryline(row.ai_journal));
+        const selected = rowWithStoryline || rows[0];
+        setJournalId(selected.id);
+        setJournal(normalizeJournalEntry(selected.ai_journal));
+        setTranscript(rows.find((row) => row.voice_transcript)?.voice_transcript || "");
       }
     });
   }, [session.id]);
@@ -135,7 +138,7 @@ export default function JournalRecorder({ session, timelineRows = [], userProfil
       session_data:     sessionData,
     });
 
-    const ai_journal = res.data?.journal;
+    const ai_journal = normalizeJournalEntry(res.data?.journal);
     if (!ai_journal) {
       setError(res.data?.error || "Generation failed — no journal returned.");
       setGenerating(false);

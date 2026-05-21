@@ -9,6 +9,8 @@ import { aiRouter } from './routes/ai.js';
 import { filesRouter } from './routes/files.js';
 import { functionsRouter } from './routes/functions.js';
 import { authRouter } from './routes/auth.js';
+import { jobsRouter } from './routes/jobs.js';
+import { liveCaptureRouter } from './routes/liveCapture.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -26,6 +28,8 @@ app.use('/api/entities', entitiesRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/functions', functionsRouter);
+app.use('/api/jobs', jobsRouter);
+app.use('/api/live-capture', liveCaptureRouter);
 app.use('/api/auth', authRouter);
 
 app.listen(port, () => {

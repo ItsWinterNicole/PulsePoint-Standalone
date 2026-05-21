@@ -268,6 +268,11 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   const [autoTagSuggestionNote, setAutoTagSuggestionNote] = useState("");
   const [autoTagError, setAutoTagError] = useState("");
   const [newCatsTouched, setNewCatsTouched] = useState(false);
+  const [savingEvent, setSavingEvent] = useState(false);
+  const autoTagPromiseRef = useRef(null);
+  const autoTagPromiseNoteRef = useRef("");
+  const autoTagRequestIdRef = useRef(0);
+  const latestNewNoteRef = useRef("");
 
   // STT — Whisper via MediaRecorder, single-blob transcription on stop
   const [isListening, setIsListening] = useState(false);
@@ -285,6 +290,58 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     "E-stim via TENS unit. Foley catheter in place. Urethral stimulation. " +
     "Edging — arousal near climax. Frenulum contact. Prostate stimulation. " +
     "Ejaculation. Refractory period. Buildup plateau. Involuntary spasm. Discomfort noted.";
+
+  useEffect(() => {
+    latestNewNoteRef.current = newNote.trim();
+  }, [newNote]);
+
+  const getEventClassification = useCallback(async (note) => {
+    const cleanNote = String(note || "").trim();
+    if (!cleanNote) return heuristicTagEventNote(cleanNote);
+    if (autoTagSuggestion && autoTagSuggestionNote === cleanNote) return autoTagSuggestion;
+    if (autoTagPromiseRef.current && autoTagPromiseNoteRef.current === cleanNote) {
+      return autoTagPromiseRef.current;
+    }
+
+    const requestId = autoTagRequestIdRef.current + 1;
+    autoTagRequestIdRef.current = requestId;
+    autoTagPromiseNoteRef.current = cleanNote;
+    setAutoTagging(true);
+    setAutoTagError("");
+
+    const promise = classifyEventNoteWithAI(cleanNote)
+      .then((suggestion) => {
+        if (
+          autoTagRequestIdRef.current === requestId
+          && autoTagPromiseNoteRef.current === cleanNote
+          && latestNewNoteRef.current === cleanNote
+        ) {
+          setAutoTagSuggestion(suggestion);
+          setAutoTagSuggestionNote(cleanNote);
+          if (!newCatsTouched) setNewCats(suggestion.categories);
+        }
+        return suggestion;
+      })
+      .catch((err) => {
+        console.warn("Event classification failed:", err);
+        const fallback = heuristicTagEventNote(cleanNote);
+        if (autoTagRequestIdRef.current === requestId && latestNewNoteRef.current === cleanNote) {
+          setAutoTagSuggestion(fallback);
+          setAutoTagSuggestionNote(cleanNote);
+        }
+        return fallback;
+      })
+      .finally(() => {
+        if (autoTagRequestIdRef.current === requestId) {
+          setAutoTagging(false);
+          autoTagPromiseRef.current = null;
+          autoTagPromiseNoteRef.current = "";
+        }
+      });
+
+    autoTagPromiseRef.current = promise;
+    return promise;
+  }, [autoTagSuggestion, autoTagSuggestionNote, newCatsTouched]);
 
   const stopListening = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -340,35 +397,6 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     }
   }, [isListening, stopListening]);
 
-  useEffect(() => {
-    const note = newNote.trim();
-    if (!addingNew || newCatsTouched || isListening || interimText || note.length < 8) {
-      if (note.length < 8) {
-        setAutoTagSuggestion(null);
-        setAutoTagSuggestionNote("");
-        setAutoTagError("");
-      }
-      return undefined;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      setAutoTagging(true);
-      setAutoTagError("");
-      const suggestion = await classifyEventNoteWithAI(note);
-      if (cancelled) return;
-      setAutoTagSuggestion(suggestion);
-      setAutoTagSuggestionNote(note);
-      setNewCats(suggestion.categories);
-      setAutoTagging(false);
-    }, 900);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [addingNew, interimText, isListening, newCatsTouched, newNote]);
-
   const saveEvents = async (updated) => {
     const sorted = [...updated].sort((a, b) => a.time_s - b.time_s);
     setEvents(sorted);
@@ -401,15 +429,12 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
 
   const commitAdd = async ({ resume = false } = {}) => {
     const cleanNote = newNote.trim();
-    if (!cleanNote) return;
+    if (!cleanNote || savingEvent) return;
     stopListening();
+    setSavingEvent(true);
     try {
-      setAutoTagging(true);
       setAutoTagError("");
-      const hasFreshSuggestion = autoTagSuggestion && autoTagSuggestionNote === cleanNote;
-      const classification = hasFreshSuggestion
-        ? autoTagSuggestion
-        : await classifyEventNoteWithAI(cleanNote);
+      const classification = await getEventClassification(cleanNote);
       const m = parseInt(newMin, 10) || 0;
       const s = Math.min(59, parseInt(newSec, 10) || 0);
       const categories = newCatsTouched ? newCats : classification.categories;
@@ -431,6 +456,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
       setAutoTagSuggestionNote("");
       setAutoTagError("");
       setAutoTagging(false);
+      setSavingEvent(false);
       setAddingNew(false);
       if (resume && videoRef.current) {
         await new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -439,6 +465,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     } catch (err) {
       console.error("Failed to save event:", err);
       setAutoTagging(false);
+      setSavingEvent(false);
       setAutoTagError("Could not save event. Please try again.");
     }
   };
@@ -641,6 +668,10 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
             stopListening();
             setAddingNew(false);
             setAutoTagging(false);
+            setSavingEvent(false);
+            autoTagRequestIdRef.current += 1;
+            autoTagPromiseRef.current = null;
+            autoTagPromiseNoteRef.current = "";
             setAutoTagSuggestion(null);
             setAutoTagSuggestionNote("");
             setAutoTagError("");
@@ -681,7 +712,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                   setNewNote(e.target.value);
                   setAutoTagError("");
                 }}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim() && !autoTagging) commitAdd({ resume: true }); } }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim() && !savingEvent) commitAdd({ resume: true }); } }}
                 placeholder="Describe the event… or tap mic to dictate"
                 rows={3}
                 className="flex-1 text-sm bg-background border border-border rounded px-3 py-2 resize-none"
@@ -728,7 +759,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                 </div>
               ) : (
                 <p className="mt-1 text-[10px] text-muted-foreground/75">
-                  Type a note and PulsePoint will suggest broad categories plus finding/action tags.
+                  Tags are generated once when you save, then added to the event note.
                 </p>
               )}
               {autoTagSuggestion?.rationale && autoTagSuggestion.rationale !== "Local keyword fallback" && (
@@ -757,11 +788,11 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
               </button>
               <button
                 onClick={() => commitAdd({ resume: true })}
-                disabled={!newNote.trim() || autoTagging}
+                disabled={!newNote.trim() || savingEvent}
                 className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-primary text-primary-foreground font-medium disabled:opacity-50"
               >
-                {autoTagging ? <span className="w-3 h-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : <Check className="w-3 h-3" />}
-                Save &amp; Resume
+                {savingEvent || autoTagging ? <span className="w-3 h-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : <Check className="w-3 h-3" />}
+                {savingEvent ? (autoTagging ? "Tagging & Saving…" : "Saving…") : "Save & Resume"}
               </button>
             </div>
           </div>

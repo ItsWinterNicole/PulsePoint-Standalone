@@ -3,8 +3,9 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from "recharts";
 import { Button } from "@/components/ui/button";
-import { ZoomIn, ZoomOut } from "lucide-react";
+import { ZoomIn, ZoomOut, Layers, MapPin } from "lucide-react";
 import { useChartZoom } from "@/hooks/useChartZoom";
+import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 
 const MARKER_COLORS = {
   build: "#f59e0b",
@@ -13,10 +14,20 @@ const MARKER_COLORS = {
 };
 
 const PHASE_COLORS = {
+  build: "#14b8a6",
   pre_climax: "#a855f7",
   climax: "#ef4444",
   recovery: "#3b82f6",
 };
+
+function getCategoryMeta(value) {
+  return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
+}
+
+function getEventColor(event) {
+  const categories = normalizeCategoryArray(event?.category);
+  return getCategoryMeta(categories[0] || "other").color;
+}
 
 function fmtSec(v) {
   const total = Math.round(Number(v));
@@ -82,6 +93,8 @@ function ManualTimeInput({ phase, color, label, currentOffset, maxOffset, onSet 
 
 const WINDOWS = [
   { label: "Full", value: "full" },
+  { label: "Climax", value: "climax" },
+  { label: "Recovery", value: "recovery" },
   { label: "Last 5m", value: 5 },
   { label: "Last 3m", value: 3 },
   { label: "Last 2m", value: 2 },
@@ -90,7 +103,17 @@ const WINDOWS = [
 const MARKING_PHASES = ["pre_climax", "climax", "recovery"];
 const PHASE_LABELS = { pre_climax: "Pre-Climax", climax: "Climax", recovery: "Recovery" };
 
-export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChange, highlightRange = null, noClimax = false, nearClimaxEvents = [] }) {
+export default function HRTimelineChart({
+  rows,
+  savedMarkers = {},
+  onMarkersChange,
+  highlightRange = null,
+  noClimax = false,
+  nearClimaxEvents = [],
+  events = [],
+  selectedEventIndex = null,
+  onSelectEventIndex,
+}) {
   const maxOffsetS = useMemo(() => Math.max(...rows.map((r) => Number(r.time_offset_s) || 0)), [rows]);
   const durationMins = maxOffsetS / 60;
 
@@ -98,6 +121,9 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
+  const [showPhases, setShowPhases] = useState(true);
+  const [showEvents, setShowEvents] = useState(true);
+  const [showNearClimax, setShowNearClimax] = useState(true);
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
   const toggleLine = (key) => setVisibleLines((v) => ({ ...v, [key]: !v[key] }));
   const [markingPhase, setMarkingPhase] = useState(null); // null | 'pre_climax' | 'climax' | 'recovery'
@@ -117,10 +143,24 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
   }, [savedMarkers.pre_climax_offset_s, savedMarkers.climax_offset_s, savedMarkers.recovery_offset_s]);
 
   const visibleRows = useMemo(() => {
+    let nextRows = rows;
     if (window === "full") return rows;
+    if (window === "climax" && localMarkers.climax != null) {
+      const start = Math.max(0, Number(localMarkers.climax) - 180);
+      const end = Math.min(maxOffsetS, Number(localMarkers.climax) + 180);
+      nextRows = rows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
+      return nextRows.length ? nextRows : rows;
+    }
+    if (window === "recovery" && localMarkers.climax != null) {
+      const start = Math.max(0, Number(localMarkers.climax) - 30);
+      const end = Math.min(maxOffsetS, Number(localMarkers.recovery ?? localMarkers.climax + 300) + 180);
+      nextRows = rows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
+      return nextRows.length ? nextRows : rows;
+    }
     const cutoff = maxOffsetS - window * 60;
-    return rows.filter((r) => Number(r.time_offset_s) >= cutoff);
-  }, [rows, window, maxOffsetS]);
+    nextRows = rows.filter((r) => Number(r.time_offset_s) >= cutoff);
+    return nextRows.length ? nextRows : rows;
+  }, [rows, window, maxOffsetS, localMarkers.climax, localMarkers.recovery]);
 
   const visibleMin = useMemo(() => Math.min(...visibleRows.map(r => Number(r.time_offset_s))), [visibleRows]);
   const visibleMax = useMemo(() => Math.max(...visibleRows.map(r => Number(r.time_offset_s))), [visibleRows]);
@@ -268,6 +308,27 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
   const preToClimax = deltaSec(localMarkers.pre_climax, localMarkers.climax);
   const climaxToRecovery = deltaSec(localMarkers.climax, localMarkers.recovery);
 
+  const phaseBands = useMemo(() => {
+    if (noClimax) return [];
+    const pre = localMarkers.pre_climax;
+    const climax = localMarkers.climax;
+    const recovery = localMarkers.recovery;
+    return [
+      pre != null && { key: "build", label: "Build", x1: 0, x2: pre, color: PHASE_COLORS.build, opacity: 0.05 },
+      pre != null && climax != null && { key: "pre_climax", label: "Pre-Climax", x1: pre, x2: climax, color: PHASE_COLORS.pre_climax, opacity: 0.08 },
+      climax != null && { key: "climax", label: "Climax", x1: Math.max(0, climax - 20), x2: climax + 40, color: PHASE_COLORS.climax, opacity: 0.1 },
+      climax != null && recovery != null && { key: "recovery", label: "Recovery", x1: climax, x2: recovery, color: PHASE_COLORS.recovery, opacity: 0.06 },
+    ].filter(Boolean).filter((band) => band.x2 > band.x1);
+  }, [localMarkers, noClimax]);
+
+  const eventsInView = useMemo(() => {
+    if (!showEvents) return [];
+    const [min, max] = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [visibleMin, visibleMax];
+    return events
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => Number(event.time_s) >= min && Number(event.time_s) <= max);
+  }, [events, showEvents, zoomDomain, visibleMin, visibleMax]);
+
   return (
     <div>
       {/* Controls row */}
@@ -278,6 +339,7 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
             size="sm"
             variant={window === value && !zoomDomain ? "default" : "outline"}
             className="h-6 text-[10px] px-2"
+            disabled={(value === "climax" || value === "recovery") && localMarkers.climax == null}
             onClick={() => { setWindow(value); resetZoom(); }}
 
           >
@@ -300,22 +362,24 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
           </span>
         )}
         <div className="w-px h-4 bg-border mx-1" />
-        <Button
-          size="sm"
-          variant={showBuild ? "default" : "outline"}
-          className="h-6 text-[10px] px-2"
-          onClick={() => setShowBuild((b) => !b)}
-        >
-          Build {showBuild ? "ON" : "OFF"}
-        </Button>
-        <Button
-          size="sm"
-          variant={showRecovery ? "default" : "outline"}
-          className="h-6 text-[10px] px-2"
-          onClick={() => setShowRecovery((b) => !b)}
-        >
-          Recovery {showRecovery ? "ON" : "OFF"}
-        </Button>
+        <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Layers className="w-3 h-3" /> Layers</span>
+        {[
+          ["Phases", showPhases, setShowPhases],
+          ["Events", showEvents, setShowEvents],
+          ["Surges", showNearClimax, setShowNearClimax],
+          ["Build", showBuild, setShowBuild],
+          ["Recovery", showRecovery, setShowRecovery],
+        ].map(([label, active, setter]) => (
+          <Button
+            key={label}
+            size="sm"
+            variant={active ? "default" : "outline"}
+            className="h-6 text-[10px] px-2"
+            onClick={() => setter((value) => !value)}
+          >
+            {label}
+          </Button>
+        ))}
       </div>
 
 
@@ -361,8 +425,21 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
               />
             )}
 
+            {/* Phase background bands */}
+            {showPhases && phaseBands.map((band) => (
+              <ReferenceArea
+                key={band.key}
+                x1={band.x1}
+                x2={band.x2}
+                fill={band.color}
+                fillOpacity={band.opacity}
+                stroke={band.color}
+                strokeOpacity={0.12}
+              />
+            ))}
+
             {/* Near-climax event highlights */}
-            {nearClimaxEvents.map((ev, i) => (
+            {showNearClimax && nearClimaxEvents.map((ev, i) => (
               <ReferenceArea
                 key={`nce-${i}`}
                 x1={ev.start_offset_s}
@@ -376,6 +453,24 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
                 onMouseLeave={() => setHoveredEventIdx(null)}
               />
             ))}
+
+            {/* Event pins */}
+            {eventsInView.map(({ event, index }) => {
+              const color = getEventColor(event);
+              const isSelected = selectedEventIndex === index;
+              return (
+                <ReferenceLine
+                  key={`event-${index}`}
+                  x={event.time_s}
+                  stroke={color}
+                  strokeWidth={isSelected ? 2.4 : 1.2}
+                  strokeOpacity={isSelected ? 0.95 : 0.52}
+                  strokeDasharray={isSelected ? "none" : "2 3"}
+                  label={{ value: `E${index + 1}`, fontSize: 8, fill: color, position: "insideTopRight" }}
+                  onClick={() => onSelectEventIndex?.(selectedEventIndex === index ? null : index)}
+                />
+              );
+            })}
 
             {/* Legacy highlight range */}
             {highlightRange && (
@@ -562,10 +657,20 @@ export default function HRTimelineChart({ rows, savedMarkers = {}, onMarkersChan
             <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px dashed #6b7280" }} /> Baseline
           </button>
         )}
+        {showEvents && events.length > 0 && (
+          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+            <MapPin className="w-3 h-3" />{events.length} event pins
+          </span>
+        )}
+        {showPhases && phaseBands.map((band) => (
+          <span key={band.key} className="text-[10px] text-muted-foreground flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full inline-block" style={{ background: band.color }} />{band.label}
+          </span>
+        ))}
         {showBuild && <span className="text-[10px] text-muted-foreground flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: MARKER_COLORS.build }} />build</span>}
-        {!noClimax && Object.entries(PHASE_COLORS).map(([k, v]) => (
+        {!noClimax && MARKING_PHASES.map((k) => (
           <span key={k} className="text-[10px] text-muted-foreground flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full inline-block" style={{ background: v }} />{PHASE_LABELS[k]}
+            <span className="w-2 h-2 rounded-full inline-block" style={{ background: PHASE_COLORS[k] }} />{PHASE_LABELS[k]}
           </span>
         ))}
       </div>

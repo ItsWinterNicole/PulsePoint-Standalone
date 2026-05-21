@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp } from "lucide-react";
 import TTSReader from "../components/TTSReader";
+import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
@@ -338,10 +339,11 @@ Arousal notes: ${userProfile.arousal_notes || "none"}
 ` : "";
 
     // Build journal context from all available journal entries
-    const journalContext = (journals || []).length > 0 ? `
+  const normalizedJournals = (journals || []).map((j) => ({ ...j, ai_journal: normalizeJournalEntry(j.ai_journal) }));
+  const journalContext = normalizedJournals.length > 0 ? `
 
-SESSION JOURNALS (${Math.min(journals.length, 8)} recent entries — subjective post-session reflections):
-${(journals || []).slice(0, 8).map((j) => {
+SESSION JOURNALS (${Math.min(normalizedJournals.length, 8)} recent entries — subjective post-session reflections):
+${normalizedJournals.slice(0, 8).map((j) => {
   const ai = j.ai_journal;
   const date = j.session_date ? new Date(j.session_date).toISOString().slice(0, 10) : "unknown date";
   if (!ai && !j.voice_transcript) return null;

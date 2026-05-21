@@ -1,39 +1,97 @@
-**Welcome to your Base44 project** 
+# PulsePoint Standalone
 
-**About**
+PulsePoint is a local-first physiology analysis app for reviewing sessions with heart-rate data, event notes, video synchronization, AI analysis, live capture, and premium TTS narration.
 
-View and Edit  your app on [Base44.com](http://Base44.com) 
+The project began as a Base44 app and now runs as a standalone local web app with a local API server. It is designed for private experimentation, careful timeline review, and rich post-session analysis.
 
-This project contains everything you need to run your app locally.
+## Core Features
 
-**Edit the code in your local development environment**
+- Session library with detailed subjective metrics, notes, media, and physiology markers.
+- Heart-rate CSV import with timeline visualization, peak/phase markers, and AI-assisted phase suggestions.
+- Video Sync Player for aligning local video with HR data and timestamped event annotations.
+- Live Capture page for real-time HR telemetry, optional EMG telemetry, voice annotation, and capture presets.
+- AI Session Analysis, Cascade Analysis, Profiler, Insights, and journal/storyline generation.
+- Premium TTS narration with Nova voice settings, presets, server-side rendering, and audio export library.
+- Background job processing for heavier AI/TTS tasks so work can continue when the browser is hidden or refreshed.
+- PWA support for installing on mobile and using through Tailscale on a private tailnet.
 
-Any change pushed to the repo will also be reflected in the Base44 Builder.
+## Local Setup
 
-**Prerequisites:** 
+Install dependencies:
 
-1. Clone the repository using the project's Git URL 
-2. Navigate to the project directory
-3. Install dependencies: `npm install`
-4. Create an `.env.local` file and set the right environment variables
-
-```
-VITE_BASE44_APP_ID=your_app_id
-VITE_BASE44_APP_BASE_URL=your_backend_url
-
-e.g.
-VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
-VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
+```bash
+npm install
 ```
 
-Run the app: `npm run dev`
+Create a local environment file:
 
-**Publish your changes**
+```bash
+cp .env.example .env.local
+```
 
-Open [Base44.com](http://Base44.com) and click on Publish.
+At minimum, configure API keys used by the AI and TTS features:
 
-**Docs & Support**
+```bash
+OPENAI_API_KEY=your_openai_key
+ANTHROPIC_API_KEY=your_anthropic_key
+```
 
-Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
+Run the local API server in one terminal:
 
-Support: [https://app.base44.com/support](https://app.base44.com/support)
+```bash
+npm run server
+```
+
+Run the Vite app in another terminal:
+
+```bash
+npm run dev -- --host
+```
+
+Default local URLs:
+
+- App: `http://localhost:5173`
+- API: `http://localhost:8787`
+
+## Useful Commands
+
+Build the frontend:
+
+```bash
+npm run build
+```
+
+Run only the local API:
+
+```bash
+npm run server
+```
+
+Expose privately through Tailscale Serve, for example:
+
+```bash
+tailscale serve --bg --set-path /pulse http://127.0.0.1:5173
+```
+
+## Data And Privacy
+
+PulsePoint is intended to be local-first. Session records, uploaded files, generated audio, and background job records are stored locally by the standalone server. Treat the workspace and `data/` directory as sensitive.
+
+Important local data areas:
+
+- `data/uploads/` stores generated and uploaded files.
+- `ProcessingJob` records track backend AI/TTS job status and results.
+- Browser local storage may contain active TTS job IDs and TTS preferences.
+
+## Background Jobs
+
+Heavy work such as premium TTS exports and long AI analysis can run on the backend as background jobs. The frontend starts a job, polls status, and can reconnect to active jobs after refresh or focus changes.
+
+This helps avoid duplicate OpenAI/Claude requests when Android or Chrome refreshes an installed app while a render is still running.
+
+## Notes
+
+- Nova is the primary tuned TTS voice for the app experience.
+- TTS quality depends on the selected export format and server-side renderer.
+- For private mobile testing, Tailscale is the recommended path.
+- Restart `npm run server` after backend route or job changes.

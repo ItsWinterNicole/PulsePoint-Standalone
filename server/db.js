@@ -22,6 +22,7 @@ export const ENTITY_NAMES = [
   'SessionClusterAnalysis',
   'Journal',
   'CustomMethod',
+  'ProcessingJob',
   'User',
 ];
 

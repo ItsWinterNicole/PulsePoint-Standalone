@@ -11,12 +11,13 @@ import moment from "moment";
 import HRTimelineChart from "../components/HRTimelineChart";
 import EMGTimelineChart from "../components/EMGTimelineChart";
 import HRZoneAnalysis from "../components/HRZoneAnalysis";
-import HREventOverlayChart from "../components/HREventOverlayChart";
 import HRPhysiologicalAnalysis from "../components/HRPhysiologicalAnalysis";
 import NearClimaxEvents, { detectNearClimaxEvents } from "../components/NearClimaxEvents";
 import NearClimaxSessionOverview from "../components/NearClimaxSessionOverview";
 import SessionAIPanel from "../components/SessionAIPanel";
+import SessionEvidencePatternPanel from "../components/SessionEvidencePatternPanel";
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
+import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
 import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
 import ArousalEventChart from "../components/ArousalEventChart";
@@ -26,6 +27,7 @@ import InteractiveTimelinePlayer from "../components/InteractiveTimelinePlayer";
 import NoClimaxAIPanel from "../components/NoClimaxAIPanel";
 import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
 import JournalRecorder from "../components/JournalRecorder";
+import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
 
 function _getCategoryMeta(value) {
@@ -70,6 +72,76 @@ function MetricBadge({ label, value, max = 10 }) {
   );
 }
 
+function getEventCategories(event) {
+  const categories = Array.isArray(event?.category) ? event.category : [event?.category].filter(Boolean);
+  return categories.length ? categories : ["other"];
+}
+
+function EventNotesPanel({
+  events = [],
+  selectedIndex,
+  onSelect,
+  title = "Timeline Notes",
+  helper = "Click a note to highlight its pin.",
+  maxHeight = true,
+}) {
+  if (!events.length) {
+    return (
+      <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+        No event notes logged for this session yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className={`rounded-xl border border-border bg-muted/20 p-3 space-y-3 ${maxHeight ? "xl:max-h-[26rem] xl:overflow-y-auto" : ""}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-primary">{title}</h4>
+          {helper && <p className="text-xs text-muted-foreground">{helper}</p>}
+        </div>
+        <span className="text-xs font-mono text-muted-foreground">{events.length}</span>
+      </div>
+      <div className="space-y-1.5">
+        {events.map((event, index) => {
+          const categories = getEventCategories(event);
+          const primary = _getCategoryMeta(categories[0]);
+          const selected = selectedIndex === index;
+          return (
+            <button
+              key={`${event.time_s}-${index}`}
+              type="button"
+              onClick={() => onSelect(selected ? null : index)}
+              className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                selected ? "bg-primary/10 border-primary/50" : "bg-card/50 border-border hover:border-primary/40"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold" style={{ color: primary.color }}>{_fmtMmSs(event.time_s)}</span>
+                <div className="flex flex-wrap gap-1">
+                  {categories.map((category) => {
+                    const meta = _getCategoryMeta(category);
+                    return (
+                      <span
+                        key={category}
+                        className="rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+                        style={{ color: meta.color, borderColor: `${meta.color}55`, background: `${meta.color}18` }}
+                      >
+                        {meta.label}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="mt-1 text-sm leading-relaxed text-foreground/90">{event.note || "No note"}</p>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function SessionDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -79,6 +151,7 @@ export default function SessionDetail() {
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedNearClimaxIdx, setSelectedNearClimaxIdx] = useState(null);
+  const [selectedEventIdx, setSelectedEventIdx] = useState(null);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [sessionNotes, setSessionNotes] = useState("");
@@ -128,8 +201,9 @@ export default function SessionDetail() {
       const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
 
       // Load journal for this session so it can be factored into AI analyses
-      base44.entities.Journal.filter({ session_id: id }, "-created_date", 1).then((rows) => {
-        if (rows[0]?.ai_journal) setSessionJournal(rows[0].ai_journal);
+      base44.entities.Journal.filter({ session_id: id }, "-created_date", 10).then((rows) => {
+        const rowWithStoryline = rows.find((row) => journalHasStoryline(row.ai_journal));
+        if (rowWithStoryline?.ai_journal) setSessionJournal(normalizeJournalEntry(rowWithStoryline.ai_journal));
       });
       setTimelineRows(rows);
 
@@ -150,8 +224,11 @@ export default function SessionDetail() {
         }
       }
 
-      // Auto-detect phase markers if not already set
-      if (rows.length > 10 && s && !s.climax_offset_s) {
+      const hasEventNotes = (s?.event_timeline || []).some((event) => String(event?.note || "").trim());
+
+      // Auto-detect phase markers if not already set. Use the old HR-only fallback only
+      // when no event notes exist; noted sessions need full timeline context.
+      if (rows.length > 10 && s && !s.climax_offset_s && !hasEventNotes) {
         // Climax: peak HR in last 60% of session
         const startIdx = Math.floor(rows.length * 0.25);
         let peakIdx = startIdx;
@@ -280,7 +357,7 @@ export default function SessionDetail() {
         </Button>
         <div className="flex-1">
           <h1 className="text-lg font-bold">{moment(s.date).format("MMM D, YYYY")}</h1>
-          <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
+          <p className="text-sm text-muted-foreground flex items-center gap-1 flex-wrap">
             {s.start_time && <><Clock className="w-3 h-3" />{s.start_time}</>}
             {s.end_time && ` – ${s.end_time}`}
             {s.duration_minutes && <> · <strong>{s.duration_minutes}m</strong></>}
@@ -330,6 +407,18 @@ export default function SessionDetail() {
           }}
         />
 
+        <PostSessionReviewWizard
+          session={s}
+          timelineRows={timelineRows}
+          emgRows={emgRows}
+          onOpenTab={setActiveTab}
+          onEdit={() => navigate(`/sessions/${id}/edit`)}
+          onUpdate={async (updates) => {
+            await base44.entities.Session.update(id, updates);
+            setSession((prev) => ({ ...prev, ...updates }));
+          }}
+        />
+
         <div className="sticky top-0 z-20 -mx-2 md:-mx-4 px-2 md:px-4 py-2 bg-background/95 backdrop-blur border-y border-border">
           <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted/50 p-1">
             {tabs.map(({ id: tabId, label, icon: Icon }) => (
@@ -337,7 +426,7 @@ export default function SessionDetail() {
                 key={tabId}
                 type="button"
                 onClick={() => setActiveTab(tabId)}
-                className={`min-h-10 rounded-md px-1.5 text-[10px] sm:text-xs font-medium transition-colors flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 ${
+                className={`min-h-10 rounded-md px-1.5 text-xs sm:text-sm font-medium transition-colors flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 ${
                   activeTab === tabId
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
@@ -372,7 +461,7 @@ export default function SessionDetail() {
             {[["Avg", s.avg_hr], ["Max", s.max_hr], ["Climax", s.hr_at_climax]].map(([label, val]) => (
               <div key={label} className="text-center">
                 <p className="text-2xl font-bold font-mono">{val || "—"}</p>
-                <p className="text-[10px] text-muted-foreground uppercase">{label}</p>
+                <p className="text-xs text-muted-foreground uppercase">{label}</p>
               </div>
             ))}
           </div>
@@ -380,13 +469,13 @@ export default function SessionDetail() {
             <div className="grid grid-cols-2 gap-2">
               {s.hr_avg_pre_to_climax && (
                 <div className="flex items-center justify-between rounded-lg bg-chart-2/10 px-3 py-2">
-                  <span className="text-xs text-muted-foreground">Avg HR Pre→Climax</span>
+                  <span className="text-sm text-muted-foreground">Avg HR Pre→Climax</span>
                   <span className="text-sm font-mono font-bold text-chart-2">{s.hr_avg_pre_to_climax} bpm</span>
                 </div>
               )}
               {s.hr_avg_at_climax_window && (
                 <div className="flex items-center justify-between rounded-lg bg-chart-3/10 px-3 py-2">
-                  <span className="text-xs text-muted-foreground">Avg HR ±30s Climax</span>
+                  <span className="text-sm text-muted-foreground">Avg HR ±30s Climax</span>
                   <span className="text-sm font-mono font-bold text-chart-3">{s.hr_avg_at_climax_window} bpm</span>
                 </div>
               )}
@@ -394,69 +483,84 @@ export default function SessionDetail() {
           )}
           {elevatedTime != null && elevatedTime > 0 && (
             <div className="flex items-center justify-between rounded-lg bg-chart-3/10 px-3 py-2">
-              <span className="text-xs text-muted-foreground">Elevated Time <span className="text-[10px]">(Δ &gt; 8)</span></span>
+              <span className="text-sm text-muted-foreground">Elevated Time <span className="text-xs">(Δ &gt; 8)</span></span>
               <span className="text-sm font-mono font-bold text-chart-3">{Math.floor(elevatedTime / 60) > 0 ? `${Math.floor(elevatedTime / 60)}m ${Math.round(elevatedTime % 60)}s` : `${Math.round(elevatedTime)}s`}</span>
             </div>
           )}
           <div className="space-y-3">
               {timelineRows.length > 0 && (
-                <HRTimelineChart
-                  rows={timelineRows}
-                  savedMarkers={{
-                    pre_climax_offset_s: s.pre_climax_offset_s,
-                    climax_offset_s: s.climax_offset_s,
-                    recovery_offset_s: s.recovery_offset_s,
-                  }}
-                  onMarkersChange={async (markers) => {
-                    await base44.entities.Session.update(id, markers);
-                    setSession((prev) => ({ ...prev, ...markers }));
-                  }}
-                  highlightRange={highlightRange}
-                  noClimax={!!s.no_climax}
-                  nearClimaxEvents={nearClimaxEvents}
-                />
-              )}
-              {timelineRows.length > 0 && !s.no_climax && (
-                <AIPhaseMarkerSuggester
-                  session={s}
-                  timelineRows={timelineRows}
-                  userProfile={userProfile}
-                  onApply={async (updates) => {
-                    await base44.entities.Session.update(id, updates);
-                    setSession((prev) => ({ ...prev, ...updates }));
-                  }}
-                />
-              )}
-              {timelineRows.length > 0 && !s.no_climax && (
-                <NearClimaxEvents
-                  timelineRows={timelineRows}
-                  session={s}
-                  selectedIndex={selectedNearClimaxIdx}
-                  onSelectIndex={setSelectedNearClimaxIdx}
-                  onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: refined }))}
-                  userProfile={userProfile}
-                />
-              )}
-              {timelineRows.length > 0 && !s.no_climax && nearClimaxEvents.length > 0 && (
-                <NearClimaxSessionOverview
-                  session={s}
-                  nearClimaxEvents={nearClimaxEvents}
-                  userProfile={userProfile}
-                />
+                <div className="space-y-3">
+                  <HRTimelineChart
+                    rows={timelineRows}
+                    savedMarkers={{
+                      pre_climax_offset_s: s.pre_climax_offset_s,
+                      climax_offset_s: s.climax_offset_s,
+                      recovery_offset_s: s.recovery_offset_s,
+                    }}
+                    onMarkersChange={async (markers) => {
+                      await base44.entities.Session.update(id, markers);
+                      setSession((prev) => ({ ...prev, ...markers }));
+                    }}
+                    highlightRange={highlightRange}
+                    noClimax={!!s.no_climax}
+                    nearClimaxEvents={nearClimaxEvents}
+                    events={s.event_timeline || []}
+                    selectedEventIndex={selectedEventIdx}
+                    onSelectEventIndex={setSelectedEventIdx}
+                  />
+                  <details className="rounded-xl border border-border bg-card p-3">
+                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+                      Timeline Notes {(s.event_timeline || []).length ? `(${(s.event_timeline || []).length})` : ""}
+                    </summary>
+                    <div className="mt-3">
+                      <EventNotesPanel
+                        events={s.event_timeline || []}
+                        selectedIndex={selectedEventIdx}
+                        onSelect={setSelectedEventIdx}
+                        helper="Tap a note to highlight its marker on the heart-rate chart."
+                      />
+                    </div>
+                  </details>
+                </div>
               )}
               {timelineRows.length > 0 && (
-                <HRZoneAnalysis rows={timelineRows} sessionMaxHR={s.max_hr} userProfile={userProfile} />
-              )}
-              {timelineRows.length > 0 && (
-                <HRPhysiologicalAnalysis timelineRows={timelineRows} session={s} />
-              )}
-              {timelineRows.length > 0 && (s.event_timeline || []).length > 0 && (
-                <HREventOverlayChart
-                  timelineRows={timelineRows}
-                  events={s.event_timeline}
-                  session={s}
-                  nearClimaxEvents={nearClimaxEvents}
-                />
+                <details className="rounded-xl border border-border bg-muted/20 p-3">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+                    Marker Tools & Supporting Analysis
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    {!s.no_climax && (
+                      <AIPhaseMarkerSuggester
+                        session={s}
+                        timelineRows={timelineRows}
+                        userProfile={userProfile}
+                        onApply={async (updates) => {
+                          await base44.entities.Session.update(id, updates);
+                          setSession((prev) => ({ ...prev, ...updates }));
+                        }}
+                      />
+                    )}
+                    {!s.no_climax && (
+                      <NearClimaxEvents
+                        timelineRows={timelineRows}
+                        session={s}
+                        selectedIndex={selectedNearClimaxIdx}
+                        onSelectIndex={setSelectedNearClimaxIdx}
+                        onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: refined }))}
+                        userProfile={userProfile}
+                      />
+                    )}
+                    {!s.no_climax && nearClimaxEvents.length > 0 && (
+                      <NearClimaxSessionOverview
+                        session={s}
+                        nearClimaxEvents={nearClimaxEvents}
+                        userProfile={userProfile}
+                      />
+                    )}
+                    <HRZoneAnalysis rows={timelineRows} sessionMaxHR={s.max_hr} userProfile={userProfile} />
+                    <HRPhysiologicalAnalysis timelineRows={timelineRows} session={s} />
+                  </div>
+                </details>
               )}
               {timelineRows.length === 0 && s.hr_timeline?.length > 0 && (
                 <div className="h-32">
@@ -604,6 +708,20 @@ export default function SessionDetail() {
           </div>
         )}
 
+        {/* Marked Moments */}
+        {activeTab === "overview" && (s.event_timeline || []).length > 0 && (
+          <div className="bg-card rounded-xl border border-border p-4">
+            <EventNotesPanel
+              events={s.event_timeline || []}
+              selectedIndex={selectedEventIdx}
+              onSelect={setSelectedEventIdx}
+              title="Marked Moments"
+              helper="All timestamped event notes for this session."
+              maxHeight={false}
+            />
+          </div>
+        )}
+
         {/* Media */}
         {activeTab === "overview" && ((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
           <div className="bg-card rounded-xl border border-border p-4 space-y-3">
@@ -673,22 +791,37 @@ export default function SessionDetail() {
           <InteractiveTimelinePlayer session={s} timelineRows={timelineRows} />
         )}
 
-        {/* Interactive Multi-Track Timeline */}
+        {activeTab === "timeline" && (s.event_timeline || []).length > 0 && (
+          <div className="bg-card rounded-xl border border-border p-4">
+            <EventNotesPanel
+              events={s.event_timeline || []}
+              selectedIndex={selectedEventIdx}
+              onSelect={setSelectedEventIdx}
+              title="Event Notes"
+              helper="Use this as the readable log beside the timeline visualizations."
+              maxHeight={false}
+            />
+          </div>
+        )}
+
+        {/* Advanced Timeline Views */}
         {activeTab === "timeline" && (timelineRows.length > 0 || (s.event_timeline || []).length > 0) && (
-          <InteractiveSessionTimeline session={s} timelineRows={timelineRows} />
-        )}
-
-        {/* Unified Interactive Timeline */}
-        {activeTab === "timeline" && timelineRows.length > 0 && (
-          <UnifiedSessionTimeline session={s} timelineRows={timelineRows} />
-        )}
-
-        {/* Arousal Arc + Event Correlation */}
-        {activeTab === "timeline" && ((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
-          <ArousalEventChart session={s} timelineRows={timelineRows} />
+          <details className="rounded-xl border border-border bg-card p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+              Advanced Timeline Views
+            </summary>
+            <div className="mt-3 space-y-3">
+              <InteractiveSessionTimeline session={s} timelineRows={timelineRows} />
+              {timelineRows.length > 0 && <UnifiedSessionTimeline session={s} timelineRows={timelineRows} />}
+              {((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
+                <ArousalEventChart session={s} timelineRows={timelineRows} />
+              )}
+            </div>
+          </details>
         )}
 
         {/* Cascade + AI — only for climax sessions */}
+        {activeTab === "ai" && !s.no_climax && <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
         {activeTab === "ai" && !s.no_climax && <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
         {activeTab === "ai" && !s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
 

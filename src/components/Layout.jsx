@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen } from "lucide-react";
+import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio } from "lucide-react";
 import InstallAppButton from "./InstallAppButton";
 
 const navItems = [
@@ -8,6 +8,7 @@ const navItems = [
 { path: "/sessions", icon: List, label: "Sessions" },
 { path: "/new", icon: PlusCircle, label: "New Session" },
 { path: "/journal", icon: BookOpen, label: "Journal" },
+{ path: "/capture", icon: Radio, label: "Live Capture" },
 { path: "/compare", icon: GitCompare, label: "Compare" },
 { path: "/insights", icon: TrendingUp, label: "Insights" },
 { path: "/cascade", icon: Waves, label: "Cascade" },

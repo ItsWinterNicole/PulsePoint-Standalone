@@ -1,0 +1,54 @@
+const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+
+async function jobRequest(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, options);
+  const contentType = response.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    const error = new Error(data?.error || data?.message || `Job request failed: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+}
+
+export function startBackgroundJob(type, payload = {}, meta = {}) {
+  return jobRequest("/jobs/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, payload, meta }),
+  });
+}
+
+export function getBackgroundJob(jobId) {
+  return jobRequest(`/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function listBackgroundJobs(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return jobRequest(`/jobs${query.toString() ? `?${query}` : ""}`);
+}
+
+export async function waitForBackgroundJob(jobId, { onProgress, intervalMs = 1200 } = {}) {
+  while (true) {
+    const job = await getBackgroundJob(jobId);
+    onProgress?.(job);
+
+    if (job.status === "complete") return job;
+    if (job.status === "error" || job.status === "cancelled") {
+      const error = new Error(job.error || job.progress?.message || `Job ${job.status}`);
+      error.job = job;
+      throw error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}

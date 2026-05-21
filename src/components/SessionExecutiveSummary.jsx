@@ -231,7 +231,7 @@ export default function SessionExecutiveSummary({ session, timelineRows, onScore
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-xl font-bold font-mono leading-none" style={{ color }}>{grade}</span>
-            <span className="text-[9px] text-muted-foreground font-mono">{scorePct}%</span>
+            <span className="text-xs text-muted-foreground font-mono">{scorePct}%</span>
           </div>
         </div>
 
@@ -247,8 +247,8 @@ export default function SessionExecutiveSummary({ session, timelineRows, onScore
                   : h.good === false
                     ? <TrendingDown className="w-3 h-3 shrink-0 text-destructive" />
                     : <Minus className="w-3 h-3 shrink-0 text-muted-foreground" />}
-                <span className="text-[10px] text-muted-foreground">{h.label}</span>
-                <span className="text-[10px] font-mono font-semibold text-foreground">{h.value}</span>
+                <span className="text-xs text-muted-foreground">{h.label}</span>
+                <span className="text-xs font-mono font-semibold text-foreground">{h.value}</span>
               </div>
             ))}
           </div>
@@ -257,14 +257,14 @@ export default function SessionExecutiveSummary({ session, timelineRows, onScore
 
       {/* Factor breakdown bars */}
       <div className="space-y-1.5 pt-1 border-t border-border">
-        <p className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Score Breakdown</p>
+        <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-2">Score Breakdown</p>
         {factors.map((f, i) => {
           const barPct = f.penalty
             ? Math.abs(f.score / 15) * 100
             : f.max > 0 ? (f.score / f.max) * 100 : 0;
           return (
             <div key={i} className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground w-28 shrink-0">{f.label}</span>
+              <span className="text-xs text-muted-foreground w-28 shrink-0">{f.label}</span>
               <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
                 <div
                   className="h-full rounded-full transition-all"
@@ -275,7 +275,7 @@ export default function SessionExecutiveSummary({ session, timelineRows, onScore
                   }}
                 />
               </div>
-              <span className="text-[10px] font-mono font-bold w-8 text-right" style={{ color: f.penalty ? "hsl(var(--destructive))" : "hsl(var(--foreground))" }}>
+              <span className="text-xs font-mono font-bold w-8 text-right" style={{ color: f.penalty ? "hsl(var(--destructive))" : "hsl(var(--foreground))" }}>
                 {f.penalty ? `−${Math.abs(Math.round(f.score))}` : `${Math.round(f.score)}/${f.max}`}
               </span>
             </div>

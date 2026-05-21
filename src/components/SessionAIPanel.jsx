@@ -5,6 +5,7 @@ import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -111,15 +112,57 @@ function Item({ text }) {
   );
 }
 
+function AnalysisStatus({ job }) {
+  const progress = job?.progress || {};
+  const total = Number(progress.total || 0);
+  const current = Number(progress.current || 0);
+  const pct = total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : 18;
+  const label = progress.message || (job?.status === "queued" ? "Queued…" : "Working…");
+  return (
+    <div className="rounded-lg border border-primary/25 bg-primary/8 px-3 py-3 text-xs">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-semibold text-foreground">{label}</p>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] uppercase text-primary">
+              {job?.status || "starting"}{progress.phase ? ` / ${progress.phase}` : ""}
+            </span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+            {job?.id && <span>Job {String(job.id).slice(0, 8)}</span>}
+            {progress.model && <span>Model {progress.model}</span>}
+            {total > 0 && <span>Step {Math.min(current + 1, total)} of {total}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal }) {
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(session.ai_analysis ?? null);
   const [error, setError] = useState("");
 
   const analyze = async () => {
     setLoading(true);
     setError("");
+    setCollapsed(false);
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: "Building session context, HR timeline, event notes, and profile grounding…",
+      },
+    });
 
     try {
 
@@ -276,9 +319,9 @@ ${sessionJournal.key_moments?.length ? `Key moments noted: ${sessionJournal.key_
 
 Factor the journal into your analysis — where the person's subjective experience aligns with or diverges from the objective physiological data is especially worth noting.` : "";
 
-    const res = await base44.integrations.Core.InvokeLLM({
+    const aiPayload = {
       model: "claude_sonnet_4_6",
-      max_tokens: 7000,
+      max_tokens: 12000,
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
@@ -289,6 +332,8 @@ PHYSIOLOGICAL & ANATOMICAL LENS — CONDITIONAL USE ONLY:
 - Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery).
 - Preserve the explanatory "why." When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
+- Preserve timeline awareness without becoming a transcript. Favor synthesis over sequence: describe windows, transitions, and clusters of events, then explain the likely physiology behind them.
+- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
 - If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
 - Connect subjective sensations (pressure, throb, tightness, wave) to anatomical generators ONLY if the user actually logged those sensations.
@@ -321,7 +366,11 @@ E-STIM SCREENSHOTS ATTACHED (${estimScreenshots.length}): Analyze the waveform t
 SESSION EVENT TIMELINE (with heart rate at each moment):
 ${eventTimeline.join('\n')}
 
-This is the primary dataset. For each event: interpret the arousal state at that HR level, what the note reveals about the underlying physiology or anatomy, and how it connects to the session arc. Identify physiological turning points — moments where HR + event note together reveal a shift in autonomic or sensory state.` : ""}
+This is evidence, not an outline. Do not write a note-by-note play-by-play. Group nearby events into meaningful windows and turning points, then interpret what those windows suggest physiologically.
+
+Use time references when they help anchor the story, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
+
+The best output should feel like: "Here is what was happening in the body during this window, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
@@ -386,25 +435,55 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
       response_json_schema: {
         type: "object",
         properties: {
-          summary: { type: "string" },
-          arousal_arc: { type: "array", items: { type: "string" } },
-          event_analysis: { type: "array", items: { type: "string" } },
+          summary: { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, and why the session behaved the way it did. Avoid simple chronology." },
+          arousal_arc: { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs organized by meaningful phase/window. Use times sparingly as anchors, and focus on physiological mechanism and supported possibilities." },
+          event_analysis: { type: "array", items: { type: "string" }, description: "Synthesize event clusters and key turning points. Do not list every event. Explain what changed, why stimulation/body cues may have mattered, and how HR supports or complicates the interpretation." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
           notable_findings: { type: "array", items: { type: "string" } },
           recommendations: { type: "array", items: { type: "string" } },
         },
         required: ["summary", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
       },
+      label: "AI Session Analysis",
+    };
+
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "queueing",
+        current: 0,
+        total: 3,
+        message: "Sending analysis to the background queue so it can continue outside the active tab…",
+      },
+    });
+    const startedJob = await startBackgroundJob("ai_invoke", aiPayload, {
+      sessionId: session.id,
+      label: "AI Session Analysis",
+    });
+    setJobStatus(startedJob);
+    const completedJob = await waitForBackgroundJob(startedJob.id, {
+      intervalMs: 1200,
+      onProgress: setJobStatus,
     });
 
-    const parsed = normalizeSessionAnalysis(res);
+    const parsed = normalizeSessionAnalysis(completedJob.result);
     setResult(parsed);
+    setJobStatus({
+      ...completedJob,
+      progress: {
+        ...(completedJob.progress || {}),
+        phase: "saving",
+        current: 3,
+        total: 3,
+        message: "Saving analysis to the session…",
+      },
+    });
     await base44.entities.Session.update(session.id, { ai_analysis: parsed });
     } catch (err) {
       console.error("AI Session analysis failed:", err);
       setError(aiErrorMessage(err));
     } finally {
-    setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -419,10 +498,12 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
         </button>
         <Button size="sm" onClick={analyze} disabled={loading} className="h-7 text-xs gap-1.5">
           {loading
-            ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Analyzing…</>
+            ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Working…</>
             : <><Brain className="w-3 h-3" />Analyze</>}
         </Button>
       </div>
+
+      {!collapsed && loading && <AnalysisStatus job={jobStatus} />}
 
       {!collapsed && !result && !loading && (
         <p className="text-xs text-muted-foreground">

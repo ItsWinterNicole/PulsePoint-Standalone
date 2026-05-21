@@ -4,6 +4,7 @@ import { BookOpen, ChevronDown, ChevronUp, Trash2, Calendar, Clock } from "lucid
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import TTSReader from "../components/TTSReader";
+import { normalizeJournalEntry } from "@/lib/journalEntry";
 import moment from "moment";
 
 const SECTION_COLORS = {
@@ -58,7 +59,7 @@ function JournalCard({ journal, onDelete }) {
     ? moment(journal.session_date).format("h:mm A")
     : null;
 
-  const ai = journal.ai_journal;
+  const ai = normalizeJournalEntry(journal.ai_journal);
   const { paras, meta } = buildParagraphs(ai);
 
   const handleDelete = async () => {
