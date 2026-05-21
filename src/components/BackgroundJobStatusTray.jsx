@@ -26,7 +26,20 @@ function statusTone(status) {
   return "text-primary bg-primary/10 border-primary/25";
 }
 
+function progressMessage(job) {
+  const message = job?.progress?.message || job?.error || job?.status;
+  if (
+    job?.status === "complete" &&
+    job?.progress?.phase === "complete" &&
+    !/(complete|completed|ready|finished)/i.test(String(message || ""))
+  ) {
+    return "Complete";
+  }
+  return message;
+}
+
 function jobTarget(job) {
+  if (job?.meta?.route) return job.meta.route;
   const sessionId = job?.meta?.sessionId;
   if (sessionId) return `/sessions/${sessionId}`;
   if (job?.type === "tts_export") return "/library";
@@ -111,11 +124,9 @@ export default function BackgroundJobStatusTray() {
   }, []);
 
   const visibleJobs = useMemo(() => {
-    const cutoff = Date.now() - 1000 * 60 * 20;
     return jobs.filter((job) => {
       if (hiddenCompleteIds.has(job.id)) return false;
-      if (["queued", "running"].includes(job.status)) return true;
-      return new Date(job.updatedAt || job.finishedAt || job.createdAt || 0).getTime() >= cutoff;
+      return true;
     });
   }, [hiddenCompleteIds, jobs]);
 
@@ -136,7 +147,7 @@ export default function BackgroundJobStatusTray() {
               {activeCount > 0 ? `${activeCount} background task${activeCount === 1 ? "" : "s"} running` : offline ? "Background status unavailable" : "Background tasks updated"}
             </p>
             <p className="truncate text-xs text-muted-foreground">
-              {visibleJobs[0]?.progress?.message || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
+              {progressMessage(visibleJobs[0]) || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
             </p>
           </div>
           {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
@@ -148,8 +159,8 @@ export default function BackgroundJobStatusTray() {
               const progress = job.progress || {};
               const total = Number(progress.total || 0);
               const current = Number(progress.current || 0);
-              const pct = total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : ["queued", "running"].includes(job.status) ? 20 : 100;
               const active = ["queued", "running"].includes(job.status);
+              const pct = !active ? 100 : total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : 20;
               const target = jobTarget(job);
               const cancelling = cancellingIds.has(job.id);
               return (
@@ -171,7 +182,7 @@ export default function BackgroundJobStatusTray() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{jobLabel(job)}</p>
-                      <p className="mt-0.5 text-xs opacity-85">{progress.message || job.error || job.status}</p>
+                      <p className="mt-0.5 text-xs opacity-85">{progressMessage(job)}</p>
                     </div>
                     <span className="shrink-0 text-[10px] font-semibold uppercase opacity-80">{job.status}</span>
                   </div>

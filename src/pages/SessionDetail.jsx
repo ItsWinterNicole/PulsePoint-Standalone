@@ -824,6 +824,7 @@ export default function SessionDetail() {
         {activeTab === "ai" && !s.no_climax && <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
         {activeTab === "ai" && !s.no_climax && <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
         {activeTab === "ai" && !s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
+        {activeTab === "ai" && !s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" />}
 
         {/* Timeline & Arousal Narrative */}
         {activeTab === "ai" && !s.no_climax && <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}

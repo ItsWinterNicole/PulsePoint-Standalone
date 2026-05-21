@@ -6,6 +6,7 @@ import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -108,6 +109,72 @@ function aiErrorMessage(error) {
     // use raw text below
   }
   return raw;
+}
+
+async function saveClusterAnalysisPatch(patch, sessionCount) {
+  const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
+  if (existing[0]) {
+    await base44.entities.SessionClusterAnalysis.update(existing[0].id, {
+      ...patch,
+      ...(sessionCount != null ? { session_count: sessionCount } : {}),
+    });
+    return;
+  }
+  await base44.entities.SessionClusterAnalysis.create({
+    ...patch,
+    ...(sessionCount != null ? { session_count: sessionCount } : {}),
+  });
+}
+
+async function runProfilerAIJob(payload, label, onProgress) {
+  const startedJob = await startBackgroundJob("ai_invoke", { ...payload, label }, {
+    source: "Profiler",
+    route: "/profiler",
+    label,
+  });
+  onProgress?.(startedJob);
+  const completedJob = await waitForBackgroundJob(startedJob.id, {
+    intervalMs: 1200,
+    onProgress,
+  });
+  return completedJob.result;
+}
+
+function ProfilerJobStatus({ job, fallback }) {
+  if (!job && !fallback) return null;
+  const progress = job?.progress || {};
+  const total = Number(progress.total || 0);
+  const current = Number(progress.current || 0);
+  const pct = job?.status === "complete"
+    ? 100
+    : total > 0
+      ? Math.max(8, Math.min(100, Math.round((current / total) * 100)))
+      : 18;
+  const label = progress.message || fallback || "Working in the background…";
+
+  return (
+    <div className="rounded-lg border border-primary/25 bg-primary/8 px-3 py-3 text-xs">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-semibold text-foreground">{label}</p>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] uppercase text-primary">
+              {job?.status || "starting"}{progress.phase ? ` / ${progress.phase}` : ""}
+            </span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+            {job?.id && <span>Job {String(job.id).slice(0, 8)}</span>}
+            {progress.model && <span>Model {progress.model}</span>}
+            <span>You can leave this page while it finishes.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function compactSessionLine(s) {
@@ -308,6 +375,7 @@ function SectionCard({ icon, title, color, children, defaultCollapsed = false })
 
 function AIProfilePanel({ sessions, userProfile, journals }) {
   const [loading, setLoading] = useState(false);
+  const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
@@ -317,8 +385,71 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
     });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const reconnect = async () => {
+      try {
+        const activeData = await listBackgroundJobs({
+          type: "ai_invoke",
+          status: "queued,running",
+          metaSource: "Profiler",
+          limit: 12,
+        });
+        if (cancelled) return;
+        let job = (activeData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Comprehensive Profile");
+        if (!job && !result) {
+          const completedData = await listBackgroundJobs({
+            type: "ai_invoke",
+            status: "complete",
+            metaSource: "Profiler",
+            limit: 12,
+          });
+          if (cancelled) return;
+          job = (completedData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Comprehensive Profile");
+        }
+        if (!job) return;
+
+        setJobStatus(job);
+        setLoading(job.status !== "complete");
+        const completedJob = job.status === "complete"
+          ? job
+          : await waitForBackgroundJob(job.id, {
+            intervalMs: 1200,
+            onProgress: (nextJob) => {
+              if (!cancelled) setJobStatus(nextJob);
+            },
+          });
+        if (cancelled) return;
+
+        const parsed = normalizeAIProfileResult(completedJob.result);
+        if (!parsed?.profile_overview && !parsed?.arousal_physiology?.length) return;
+        setResult(parsed);
+        await saveClusterAnalysisPatch({ result: parsed }, sessions.length);
+      } catch (err) {
+        if (!cancelled) console.warn("AI profile reconnect skipped:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    reconnect();
+    return () => {
+      cancelled = true;
+    };
+  }, [result, sessions.length]);
+
   const analyze = async () => {
     setLoading(true);
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: "Preparing the cross-session profile for background analysis…",
+      },
+    });
     setResult(null);
     setError("");
 
@@ -357,7 +488,7 @@ ${j.voice_transcript && !ai ? `  Notes: ${briefText(j.voice_transcript, 220)}` :
 
 Use the journals to surface recurring emotional themes, evolving insights, and subjective experiences that the raw session metrics alone cannot reveal. Note where the person's own reflections align with or diverge from the physiological data.` : "";
 
-    const res = await base44.integrations.Core.InvokeLLM({
+    const res = await runProfilerAIJob({
       model: "claude_sonnet_4_6",
       prompt: `You are an expert physiological and sexual response analyst. Based on ${sessions.length} recorded sessions and profile notes, generate a comprehensive, deeply personal physiological and arousal profile. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
@@ -411,8 +542,7 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
         required: ["profile_overview", "arousal_physiology", "stimulation_profile", "climax_and_recovery", "contextual_sensitivities", "behavioral_tendencies", "optimization_recommendations"],
       },
       max_tokens: 8192,
-      attempts: 4,
-    });
+    }, "AI Profiler: Comprehensive Profile", setJobStatus);
 
     const raw = typeof res === "string" ? JSON.parse(res) : res;
     const parsed = normalizeAIProfileResult(raw);
@@ -421,12 +551,7 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
     }
     setResult(parsed);
 
-    const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
-    if (existing[0]) {
-      await base44.entities.SessionClusterAnalysis.update(existing[0].id, { result: parsed, session_count: sessions.length });
-    } else {
-      await base44.entities.SessionClusterAnalysis.create({ result: parsed, session_count: sessions.length });
-    }
+    await saveClusterAnalysisPatch({ result: parsed }, sessions.length);
     } catch (err) {
       console.error("AI profile generation failed:", err);
       setError(aiErrorMessage(err));
@@ -478,6 +603,13 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
       )}
 
       <CompactError message={error} />
+
+      {loading && (
+        <ProfilerJobStatus
+          job={jobStatus}
+          fallback="The full profile is running in the background…"
+        />
+      )}
 
       {!result && !loading && sessions.length >= 2 && (
         <p className="text-xs text-muted-foreground">

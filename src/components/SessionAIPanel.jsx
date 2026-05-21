@@ -143,20 +143,24 @@ function AnalysisStatus({ job }) {
   );
 }
 
-export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal }) {
+export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion" }) {
+  const isTechnical = mode === "technical";
+  const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
+  const analysisLabel = isTechnical ? "AI Session Technical Deep Dive" : "AI Session Analysis";
+  const analysisTitle = isTechnical ? "Technical Session Deep Dive" : "AI Session Analysis";
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
-  const [result, setResult] = useState(session.ai_analysis ?? null);
+  const [result, setResult] = useState(session[analysisField] ?? null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setResult(session.ai_analysis ?? null);
-  }, [session.id, session.ai_analysis]);
+    setResult(session[analysisField] ?? null);
+  }, [analysisField, session]);
 
   useEffect(() => {
     let cancelled = false;
-    if (session.ai_analysis || result) return undefined;
+    if (session[analysisField] || result) return undefined;
 
     const reconnect = async () => {
       try {
@@ -167,7 +171,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
           limit: 4,
         });
         if (cancelled) return;
-        const job = (data.jobs || []).find((item) => item.meta?.label === "AI Session Analysis");
+        const job = (data.jobs || []).find((item) => item.meta?.label === analysisLabel);
         if (!job) return;
 
         setCollapsed(false);
@@ -196,10 +200,10 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             message: "Recovered complete analysis; saving it back to the session…",
           },
         });
-        await base44.entities.Session.update(session.id, { ai_analysis: parsed });
+        await base44.entities.Session.update(session.id, { [analysisField]: parsed });
       } catch (err) {
         if (!cancelled) {
-          console.warn("AI Session Analysis reconnect skipped:", err);
+          console.warn(`${analysisLabel} reconnect skipped:`, err);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -210,7 +214,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [result, session.ai_analysis, session.id]);
+  }, [analysisField, analysisLabel, result, session, session.id]);
 
   const analyze = async () => {
     setLoading(true);
@@ -385,24 +389,29 @@ Factor the journal into your analysis — where the person's subjective experien
       model: "claude_sonnet_4_6",
       max_tokens: 12000,
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
-      prompt: `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+      prompt: `${isTechnical
+        ? `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 TARGET SESSION ANALYSIS STYLE:
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
 - Then explain the session through meaningful physiological windows: baseline/entry state, build, plateaus or transitions, pre-climax when supported, climax or non-climax outcome, and recovery.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
-- Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.
+- Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
+        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.`}
 
 ${groundingContext}
 
-PHYSIOLOGICAL & ANATOMICAL LENS:
+PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
 - Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery).
-- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
+- Preserve the explanatory "why"${isTechnical ? " as the center of the answer" : "."} When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
-- Preserve timeline awareness without becoming a transcript. Use time windows, HR ranges, plateaus, marker timing, and major transitions when they clarify the physiology. Do not list every note in order unless each one changes the interpretation.
-- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.
+${isTechnical
+  ? `- Preserve timeline awareness without becoming a transcript. Use time windows, HR ranges, plateaus, marker timing, and major transitions when they clarify the physiology. Do not list every note in order unless each one changes the interpretation.
+- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.`
+  : `- Preserve timeline awareness without becoming a transcript. Favor synthesis over sequence: describe windows, transitions, and clusters of events, then explain the likely physiology behind them.
+- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.`}
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
 - If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
 - Connect subjective sensations (pressure, throb, tightness, wave) to anatomical generators ONLY if the user actually logged those sensations.
@@ -435,11 +444,17 @@ E-STIM SCREENSHOTS ATTACHED (${estimScreenshots.length}): Analyze the waveform t
 SESSION EVENT TIMELINE (with heart rate at each moment):
 ${eventTimeline.join('\n')}
 
-This is evidence for the physiological arc. Do not write a note-by-note transcript. Use the timeline to identify major transitions, clusters, body findings, stimulation shifts, phase markers, and recovery cues, then explain how those details connect to the HR trajectory and subjective outcome.
+${isTechnical
+  ? `This is evidence for the physiological arc. Do not write a note-by-note transcript. Use the timeline to identify major transitions, clusters, body findings, stimulation shifts, phase markers, and recovery cues, then explain how those details connect to the HR trajectory and subjective outcome.
 
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
-The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."` : ""}
+The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
+  : `This is evidence, not an outline. Do not write a note-by-note play-by-play. Group nearby events into meaningful windows and turning points, then interpret what those windows suggest physiologically.
+
+Use time references when they help anchor the story, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
+
+The best output should feel like: "Here is what was happening in the body during this window, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
@@ -500,20 +515,26 @@ ${session.discomfort_entries?.length > 0 ? "Discomfort entries present — analy
 ${emgSummary ? `\nEMG DATA:\n${JSON.stringify(emgSummary, null, 2)}\n\nAnalyze EMG activation patterns alongside HR. Reference timing relationships between EMG and HR changes. Check for clipping, asymmetry, noise, and relate activation bursts to event markers and phase markers when present. Describe what muscle the sensor likely captures based on placement notes and target area.` : ""}
 ${journalContext}
 
-Provide a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience. It should be detailed enough to explain the HR arc, phase shifts, stimulation effectiveness, distinctive sensations, and recovery pattern, while remaining smooth enough for text-to-speech narration.`,
+Provide a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience.${isTechnical ? " It should be detailed enough to explain the HR arc, phase shifts, stimulation effectiveness, distinctive sensations, and recovery pattern, while remaining smooth enough for text-to-speech narration." : ""}`,
       response_json_schema: {
         type: "object",
         properties: {
-          summary: { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, and why the session behaved the way it did." },
-          arousal_arc: { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, stimulation links, supported anatomy, pre-climax/climax/recovery shifts, and why the session progressed as it did." },
-          event_analysis: { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." },
+          summary: isTechnical
+            ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, and why the session behaved the way it did." }
+            : { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, and why the session behaved the way it did. Avoid simple chronology." },
+          arousal_arc: isTechnical
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, stimulation links, supported anatomy, pre-climax/climax/recovery shifts, and why the session progressed as it did." }
+            : { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs organized by meaningful phase/window. Use times sparingly as anchors, and focus on physiological mechanism and supported possibilities." },
+          event_analysis: isTechnical
+            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
+            : { type: "array", items: { type: "string" }, description: "Synthesize event clusters and key turning points. Do not list every event. Explain what changed, why stimulation/body cues may have mattered, and how HR supports or complicates the interpretation." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
           notable_findings: { type: "array", items: { type: "string" } },
           recommendations: { type: "array", items: { type: "string" } },
         },
         required: ["summary", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
       },
-      label: "AI Session Analysis",
+      label: analysisLabel,
     };
 
     setJobStatus({
@@ -527,7 +548,7 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
     });
     const startedJob = await startBackgroundJob("ai_invoke", aiPayload, {
       sessionId: session.id,
-      label: "AI Session Analysis",
+      label: analysisLabel,
     });
     setJobStatus(startedJob);
     const completedJob = await waitForBackgroundJob(startedJob.id, {
@@ -547,9 +568,9 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
         message: "Saving analysis to the session…",
       },
     });
-    await base44.entities.Session.update(session.id, { ai_analysis: parsed });
+    await base44.entities.Session.update(session.id, { [analysisField]: parsed });
     } catch (err) {
-      console.error("AI Session analysis failed:", err);
+      console.error(`${analysisLabel} failed:`, err);
       setError(aiErrorMessage(err));
     } finally {
       setLoading(false);
@@ -561,7 +582,7 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
       <div className="flex items-center justify-between">
         <button className="flex items-center gap-1.5 flex-1 text-left" onClick={() => setCollapsed((v) => !v)}>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
-            <Brain className="w-4 h-4" /> AI Session Analysis
+            <Brain className="w-4 h-4" /> {analysisTitle}
           </h3>
           {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" /> : <ChevronUp className="w-4 h-4 text-muted-foreground ml-1" />}
         </button>
@@ -576,7 +597,9 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
 
       {!collapsed && !result && !loading && (
         <p className="text-xs text-muted-foreground">
-          Click Analyze to generate a detailed AI physiological breakdown of this session. Uses Claude Sonnet.
+          {isTechnical
+            ? "Click Analyze for the newer deeper technical pass across physiology, timeline structure, and session turning points. Uses Claude Sonnet."
+            : "Click Analyze to generate the original warm AI physiological session analysis. Uses Claude Sonnet."}
         </p>
       )}
 
@@ -615,7 +638,7 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
         return (
           <TTSReader
             sessionId={session.id}
-            title="AI Session Analysis"
+            title={analysisTitle}
             sessionDate={session.date}
             paragraphs={paras}
             renderParagraph={(text, paraIdx, isActive, isBuffering) => {

@@ -76,6 +76,11 @@ function runNext() {
         updateProgress: (progress) => patchProgress(job, progress),
       }))
       .then((result) => {
+        const existingProgress = job.progress || {};
+        const total = Number(existingProgress.total || 0);
+        const keepCompletionMessage =
+          existingProgress.phase === 'complete' &&
+          existingProgress.message;
         patchJob(job, {
           status: 'complete',
           result,
@@ -85,7 +90,8 @@ function runNext() {
         });
         patchProgress(job, {
           phase: 'complete',
-          message: job.progress?.message || 'Complete',
+          ...(total > 0 ? { current: total, total } : {}),
+          message: keepCompletionMessage || 'Complete',
         });
       })
       .catch((error) => {
