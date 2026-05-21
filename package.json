@@ -12,7 +12,9 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
-    "import:csv": "node server/scripts/importBase44Csv.js ./data/imports"
+    "import:csv": "node server/scripts/importBase44Csv.js ./data/imports",
+    "capture:hr:install": "npm --prefix tools/capture/heart-rate install",
+    "capture:hr": "npm --prefix tools/capture/heart-rate start"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

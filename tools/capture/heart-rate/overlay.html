@@ -1,0 +1,851 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>HR Overlay</title>
+
+<style>
+:root{
+  --bg: rgba(255,255,255,0.88);
+  --text: rgba(0,0,0,0.92);
+}
+
+html,body{
+  margin:0;
+  height:100%;
+  background:transparent;
+}
+
+#panel{
+  width:100%;
+  height:100%;
+  box-sizing:border-box;
+  padding:12px;
+  background:var(--bg);
+  border-radius:16px;
+  display:flex;
+  flex-direction:row;
+  align-items:center;
+  gap:14px;
+  backdrop-filter:blur(2px);
+}
+
+#stats{
+  width:220px;
+  text-align:center;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  color:var(--text);
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:14px;
+  flex:0 0 220px;
+}
+
+.value{
+  font-size:72px;
+  font-weight:800;
+  line-height:1;
+}
+
+.label{
+  font-size:20px;
+  font-weight:700;
+  letter-spacing:1px;
+  opacity:.72;
+  margin-top:4px;
+}
+
+#chartWrap{
+  flex:1;
+  height:100%;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:10px;
+}
+
+#statusRow{
+  min-height:88px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+}
+
+#statusBadge{
+  min-width:320px;
+  padding:8px 18px;
+  border-radius:14px;
+  background:rgba(0,0,0,0.14);
+  color:var(--text);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  text-align:center;
+  display:none;
+  box-shadow:0 1px 6px rgba(0,0,0,0.10);
+}
+
+#statusBadge.active{
+  display:block;
+}
+
+#statusLabel{
+  font-size:18px;
+  font-weight:800;
+  letter-spacing:1px;
+  opacity:.82;
+  text-transform:uppercase;
+  line-height:1.1;
+}
+
+#statusTimer{
+  font-size:42px;
+  font-weight:900;
+  line-height:1;
+  margin-top:2px;
+}
+
+#chartBox{
+  flex:1;
+  min-height:0;
+  display:flex;
+  align-items:center;
+}
+
+canvas{
+  width:100% !important;
+  height:100% !important;
+  display:block;
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div id="panel">
+  <div id="stats">
+    <div>
+      <div class="value" id="avg">--</div>
+      <div class="label">AVG BPM</div>
+    </div>
+    <div>
+      <div class="value" id="max">--</div>
+      <div class="label">MAX BPM</div>
+    </div>
+  </div>
+
+  <div id="chartWrap">
+    <div id="statusRow">
+      <div id="statusBadge">
+        <div id="statusLabel">SUSTAINED BUILD</div>
+        <div id="statusTimer">00:00</div>
+      </div>
+    </div>
+
+    <div id="chartBox">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+/*** CONNECTIONS ***/
+const OBS_HOST = "ws://192.168.0.33:4455";
+const HR_TEXT_SOURCE_NAME = "HR";
+const CONTROL_WS_URL = "ws://localhost:8765";
+
+/*** POLLING / DISPLAY ***/
+const POLL_MS = 1000;
+const WINDOW_SEC = 600;
+
+/*** LIVE CONFIG ***/
+let cfg = {
+  buildRiseMin: 5,
+  buildSlopeMin: 0.28,
+  buildPosRatioMin: 0.52,
+  buildAccelMin: 0.00,
+  buildMinSec: 3,
+  buildHoldSec: 3,
+
+  significantHrMin: 112,
+  peakDropMin: 8,
+  recoverySlopeMax: 0.50,
+  recoveryMinSec: 1,
+  recoveryHoldSec: 12
+};
+
+/*** DETECTION SMOOTHING ***/
+const HR_SMOOTHING = 0.30;
+let smoothedHr = null;
+
+/*** BASELINE ANCHOR ***/
+const BASELINE_SMOOTHING = 0.03;
+let baselineHr = null;
+
+/*** ELEVATION THRESHOLDS ***/
+const BUILD_ENTER_DELTA = 8;
+const ELEVATED_ENTER_DELTA = 5;
+const ELEVATED_EXIT_DELTA = 3;
+
+/*** HYSTERESIS / REENTRY CONTROL ***/
+let buildReentryBlockedUntil = null;
+const BUILD_REENTRY_COOLDOWN_SEC = 6;
+
+/*** OBS RECORD STATE ***/
+let obsRecordingActive = false;
+
+/*** COLOR STOPS FOR LINE / BG ***/
+const COLOR_STOPS = [
+  { bpm: 70,  rgb: [96,176,68] },
+  { bpm: 90,  rgb: [200,180,0] },
+  { bpm: 110, rgb: [230,126,34] },
+  { bpm: 140, rgb: [215,58,73] }
+];
+const BG_ALPHA = 0.78;
+const BG_SMOOTHING = 0.18;
+let displayHr = null;
+
+/*** DETECTION WINDOWS ***/
+const SHORT_WINDOW_SEC = 10;
+const SLOPE_WINDOW_SEC = 8;
+const STEP_WINDOW_SEC = 10;
+const RECOVERY_WINDOW_SEC = 14;
+
+/*** DOM ***/
+const avgEl = document.getElementById("avg");
+const maxEl = document.getElementById("max");
+const statusLabel = document.getElementById("statusLabel");
+const statusTimer = document.getElementById("statusTimer");
+const statusBadge = document.getElementById("statusBadge");
+
+/*** HELPERS ***/
+function lerp(a,b,t){ return a + (b-a)*t; }
+function mean(nums){ return nums.length ? nums.reduce((a,b)=>a+b,0)/nums.length : 0; }
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+function formatTimer(sec){
+  sec = Math.max(0, Math.floor(sec));
+  return `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;
+}
+
+function rgbToString(rgb, alpha=1){
+  return `rgba(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])},${alpha})`;
+}
+
+function interpolateColorForBpm(bpm){
+  if (bpm <= COLOR_STOPS[0].bpm) return COLOR_STOPS[0].rgb;
+  if (bpm >= COLOR_STOPS[COLOR_STOPS.length - 1].bpm) return COLOR_STOPS[COLOR_STOPS.length - 1].rgb;
+
+  for(let i=0;i<COLOR_STOPS.length-1;i++){
+    const a = COLOR_STOPS[i], b = COLOR_STOPS[i+1];
+    if (bpm >= a.bpm && bpm <= b.bpm){
+      const t = (bpm - a.bpm) / (b.bpm - a.bpm);
+      return [
+        lerp(a.rgb[0], b.rgb[0], t),
+        lerp(a.rgb[1], b.rgb[1], t),
+        lerp(a.rgb[2], b.rgb[2], t)
+      ];
+    }
+  }
+  return COLOR_STOPS[0].rgb;
+}
+
+function lineColorForBpm(bpm){ return rgbToString(interpolateColorForBpm(bpm), 1); }
+function panelColorForBpm(bpm){ return rgbToString(interpolateColorForBpm(bpm), BG_ALPHA); }
+
+function setStatus(mode, elapsedSec){
+  if(!mode){
+    statusBadge.classList.remove("active");
+    return;
+  }
+
+  statusBadge.classList.add("active");
+  statusLabel.textContent = mode;
+  statusTimer.textContent = formatTimer(elapsedSec);
+
+  if (mode === "SUSTAINED BUILD") {
+    statusBadge.style.background = "rgba(0,0,0,0.18)";
+  } else if (mode === "ELEVATED") {
+    statusBadge.style.background = "rgba(0,0,0,0.14)";
+  } else if (mode === "RECOVERY") {
+    statusBadge.style.background = "rgba(0,0,0,0.12)";
+  } else {
+    statusBadge.style.background = "rgba(0,0,0,0.10)";
+  }
+}
+
+function computeBuildConfidence(rise, slope, posRatio, accel) {
+  const riseScore = cfg.buildRiseMin > 0 ? Math.min(rise / cfg.buildRiseMin, 1.5) : 1;
+  const slopeScore = cfg.buildSlopeMin > 0 ? Math.min(slope / cfg.buildSlopeMin, 1.5) : 1;
+  const posScore = cfg.buildPosRatioMin > 0 ? Math.min(posRatio / cfg.buildPosRatioMin, 1.5) : 1;
+
+  let accelScore = 1;
+  if (cfg.buildAccelMin > 0) accelScore = Math.min(accel / cfg.buildAccelMin, 1.5);
+
+  const blended =
+    riseScore * 0.35 +
+    slopeScore * 0.35 +
+    posScore * 0.20 +
+    accelScore * 0.10;
+
+  return clamp((blended / 1.0) * 100, 0, 100);
+}
+
+/*** OBS WEBSOCKET ***/
+let obsWs, rpcId = 1, pending = new Map(), startTs = Date.now();
+
+function connectOBS(){
+  return new Promise(resolve=>{
+    obsWs = new WebSocket(OBS_HOST);
+
+    obsWs.onclose = () => setTimeout(()=>connectOBS().then(resolve), 1200);
+
+    obsWs.onmessage = e => {
+      const msg = JSON.parse(e.data);
+
+      if(msg.op === 0){
+        obsWs.send(JSON.stringify({
+          op: 1,
+          d: { rpcVersion: msg.d.rpcVersion || 1, eventSubscriptions: 0xFFFFFFFF }
+        }));
+      }
+
+      if(msg.op === 2){
+        callOBS("GetRecordStatus")
+          .then(status => {
+            const wasActive = obsRecordingActive;
+            obsRecordingActive = !!status.outputActive;
+
+            if (!wasActive && obsRecordingActive) {
+              resetOverlayState({ keepRecordingState: true });
+            }
+          })
+          .catch(()=>{});
+        resolve();
+      }
+
+      if(msg.op === 5){
+        const eventType = msg.d?.eventType;
+        const eventData = msg.d?.eventData || {};
+
+        if (eventType === "RecordStateChanged") {
+          const wasActive = obsRecordingActive;
+          obsRecordingActive = !!eventData.outputActive;
+
+          if (!wasActive && obsRecordingActive) {
+            resetOverlayState({ keepRecordingState: true });
+          }
+        }
+      }
+
+      if(msg.op === 7){
+        const { requestId, requestStatus, responseData } = msg.d;
+        const waiter = pending.get(requestId);
+        pending.delete(requestId);
+        if(waiter){
+          if(requestStatus?.result) waiter.resolve(responseData);
+          else waiter.reject(requestStatus);
+        }
+      }
+    };
+  });
+}
+
+function callOBS(type, data={}){
+  return new Promise((resolve,reject)=>{
+    const id = String(rpcId++);
+    pending.set(id, { resolve, reject });
+    obsWs.send(JSON.stringify({
+      op: 6,
+      d: { requestType: type, requestId: id, requestData: data }
+    }));
+  });
+}
+
+/*** CONTROL WEBSOCKET ***/
+let controlWs;
+function connectControlWS(){
+  controlWs = new WebSocket(CONTROL_WS_URL);
+
+  controlWs.onclose = () => setTimeout(connectControlWS, 1500);
+
+  controlWs.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+
+      if (msg.type === "config" && msg.config) {
+        cfg = { ...cfg, ...msg.config };
+      }
+
+      if (msg.type === "reset") {
+        resetOverlayState();
+      }
+    } catch {}
+  };
+}
+
+function sendTelemetry(data) {
+  if (controlWs && controlWs.readyState === WebSocket.OPEN) {
+    controlWs.send(JSON.stringify({
+      type: "telemetry",
+      data
+    }));
+  }
+}
+
+/*** DATA ***/
+const points = [];
+const detectPoints = [];
+
+/*** WINDOW HELPERS ***/
+function getRecentPoints(arr, windowSec){
+  if(!arr.length) return [];
+  const now = arr[arr.length - 1].x;
+  const left = now - windowSec;
+  return arr.filter(p => p.x >= left);
+}
+
+function slopePoints(arr){
+  if(arr.length < 2) return 0;
+  const first = arr[0], last = arr[arr.length - 1];
+  const dx = last.x - first.x;
+  return dx > 0 ? (last.y - first.y) / dx : 0;
+}
+
+function positiveStepRatio(arr){
+  if(arr.length < 2) return 0;
+  let pos = 0, total = 0;
+  for(let i=1;i<arr.length;i++){
+    total++;
+    if(arr[i].y >= arr[i-1].y) pos++;
+  }
+  return total ? pos / total : 0;
+}
+
+function accelEstimate(arr){
+  if(arr.length < 3) return 0;
+  const mid = Math.floor(arr.length / 2);
+  const s1 = slopePoints(arr.slice(0, mid + 1));
+  const s2 = slopePoints(arr.slice(mid));
+  return s2 - s1;
+}
+
+function riseOverWindow(arr){
+  if(arr.length < 2) return 0;
+  return arr[arr.length - 1].y - arr[0].y;
+}
+
+/*** CHART ***/
+const ctx = document.getElementById("chart");
+const chart = new Chart(ctx,{
+  type:'line',
+  data:{datasets:[
+    {
+      data:points,
+      borderWidth:8,
+      borderColor:'rgba(0,0,0,0.50)',
+      tension:.35,
+      cubicInterpolationMode:'monotone',
+      pointRadius:0,
+      borderCapStyle:'round',
+      borderJoinStyle:'round'
+    },
+    {
+      data:points,
+      borderWidth:4,
+      tension:.35,
+      cubicInterpolationMode:'monotone',
+      pointRadius:0,
+      borderCapStyle:'round',
+      borderJoinStyle:'round',
+      segment:{ borderColor:c=>lineColorForBpm(c.p1.parsed.y) }
+    }
+  ]},
+  options:{
+    responsive:true,
+    maintainAspectRatio:false,
+    animation:false,
+    plugins:{legend:{display:false},tooltip:{enabled:false}},
+    layout:{padding:0},
+    scales:{
+      x:{display:false,type:'linear',min:0,max:WINDOW_SEC},
+      y:{display:false,suggestedMin:50,suggestedMax:150}
+    }
+  }
+});
+
+/*** DISPLAY ***/
+function advanceWindow(){
+  const now = (Date.now() - startTs) / 1000;
+  const left = Math.max(0, now - WINDOW_SEC);
+
+  while(points.length && points[0].x < left) points.shift();
+  while(detectPoints.length && detectPoints[0].x < left) detectPoints.shift();
+
+  chart.options.scales.x.min = left;
+  chart.options.scales.x.max = now;
+  chart.update('none');
+}
+
+function updateStats(){
+  if(!points.length) return;
+  const ys = points.map(p => p.y);
+  avgEl.textContent = Math.round(mean(ys)) || "--";
+  maxEl.textContent = Math.round(Math.max(...ys)) || "--";
+}
+
+function updateBackground(currentHr){
+  if(displayHr === null) displayHr = currentHr;
+  displayHr = lerp(displayHr, currentHr, BG_SMOOTHING);
+  document.documentElement.style.setProperty('--bg', panelColorForBpm(displayHr));
+}
+
+function updateBaseline(currentSmoothedHr){
+  if (baselineHr === null) {
+    baselineHr = currentSmoothedHr;
+    return;
+  }
+
+  if (!eventWasActive && currentPhase !== "SUSTAINED BUILD" && currentPhase !== "ELEVATED" && currentPhase !== "RECOVERY") {
+    baselineHr = baselineHr + (currentSmoothedHr - baselineHr) * BASELINE_SMOOTHING;
+  }
+}
+
+/*** PHASE STATE ***/
+let currentPhase = null;
+let phaseStartTs = 0;
+
+let buildCandidateStart = null;
+let elevatedCandidateStart = null;
+let recoveryCandidateStart = null;
+
+let buildHoldUntil = null;
+let elevatedHoldUntil = null;
+let recoveryHoldUntil = null;
+
+let eventPeakHr = null;
+let eventWasActive = false;
+
+function transitionPhase(newPhase, nowSec){
+  if(newPhase !== currentPhase){
+    if (currentPhase === "SUSTAINED BUILD" && newPhase === "ELEVATED") {
+      buildReentryBlockedUntil = nowSec + BUILD_REENTRY_COOLDOWN_SEC;
+    }
+    currentPhase = newPhase;
+    phaseStartTs = nowSec;
+  }
+}
+
+function phaseElapsed(nowSec){ return nowSec - phaseStartTs; }
+
+function resetOverlayState(options = {}){
+  const keepRecordingState = !!options.keepRecordingState;
+
+  currentPhase = null;
+  phaseStartTs = 0;
+  buildCandidateStart = null;
+  elevatedCandidateStart = null;
+  recoveryCandidateStart = null;
+  buildHoldUntil = null;
+  elevatedHoldUntil = null;
+  recoveryHoldUntil = null;
+  buildReentryBlockedUntil = null;
+  eventPeakHr = null;
+  eventWasActive = false;
+  points.length = 0;
+  detectPoints.length = 0;
+  startTs = Date.now();
+  displayHr = null;
+  smoothedHr = null;
+  baselineHr = null;
+  avgEl.textContent = "--";
+  maxEl.textContent = "--";
+
+  if (!keepRecordingState) {
+    obsRecordingActive = false;
+  }
+
+  setStatus(null, 0);
+  chart.update('none');
+
+  sendTelemetry({
+    phase: null,
+    buildConfidence: 0,
+    currentHr: null,
+    smoothedHr: null,
+    baselineHr: null,
+    elevatedDelta: null,
+    phaseTimer: "—"
+  });
+}
+
+function updatePhase(features, nowSec){
+  const {
+    currentHr,
+    rise,
+    slope,
+    posRatio,
+    accel,
+    recoverySlope
+  } = features;
+
+  const elevatedDelta = baselineHr === null ? 0 : (currentHr - baselineHr);
+  const buildConfidence = computeBuildConfidence(rise, slope, posRatio, accel);
+  const dropFromPeak = eventPeakHr !== null ? (eventPeakHr - currentHr) : 0;
+
+  const buildRampNow =
+    rise >= cfg.buildRiseMin &&
+    slope >= cfg.buildSlopeMin &&
+    posRatio >= cfg.buildPosRatioMin &&
+    accel >= cfg.buildAccelMin;
+
+  const strongBuildRampNow =
+    rise >= (cfg.buildRiseMin + 2) &&
+    slope >= (cfg.buildSlopeMin + 0.08) &&
+    posRatio >= Math.min(cfg.buildPosRatioMin + 0.08, 0.95) &&
+    accel >= cfg.buildAccelMin;
+
+  const elevatedNow =
+    elevatedDelta >= ELEVATED_ENTER_DELTA ||
+    (
+      (currentPhase === "SUSTAINED BUILD" || currentPhase === "ELEVATED" || elevatedHoldUntil !== null || currentPhase === "RECOVERY") &&
+      elevatedDelta >= ELEVATED_EXIT_DELTA
+    );
+
+  const initialBuildNow =
+    buildRampNow ||
+    (
+      elevatedDelta >= BUILD_ENTER_DELTA &&
+      slope >= Math.max(cfg.buildSlopeMin * 0.80, 0.16)
+    );
+
+  const canReenterBuild =
+    (buildReentryBlockedUntil === null || nowSec >= buildReentryBlockedUntil) &&
+    strongBuildRampNow &&
+    (
+      eventPeakHr === null ||
+      currentHr >= (eventPeakHr - 1)
+    );
+
+  let buildNow = false;
+  if (currentPhase === "ELEVATED") {
+    buildNow = canReenterBuild;
+  } else {
+    buildNow = initialBuildNow;
+  }
+
+  if(buildNow){
+    if(buildCandidateStart === null) buildCandidateStart = nowSec;
+  } else {
+    buildCandidateStart = null;
+  }
+
+  if(elevatedNow){
+    if(elevatedCandidateStart === null) elevatedCandidateStart = nowSec;
+  } else {
+    elevatedCandidateStart = null;
+  }
+
+  const buildQualified =
+    buildCandidateStart !== null &&
+    (nowSec - buildCandidateStart) >= cfg.buildMinSec;
+
+  const elevatedQualified =
+    elevatedCandidateStart !== null &&
+    (nowSec - elevatedCandidateStart) >= 1;
+
+  const strongRecoveryNow =
+    eventWasActive &&
+    eventPeakHr !== null &&
+    eventPeakHr >= cfg.significantHrMin &&
+    dropFromPeak >= cfg.peakDropMin;
+
+  const recoveryNow =
+    strongRecoveryNow ||
+    (
+      eventWasActive &&
+      eventPeakHr !== null &&
+      eventPeakHr >= cfg.significantHrMin &&
+      dropFromPeak >= Math.max(cfg.peakDropMin - 2, 4) &&
+      recoverySlope <= cfg.recoverySlopeMax
+    ) ||
+    (
+      eventWasActive &&
+      eventPeakHr !== null &&
+      eventPeakHr >= cfg.significantHrMin &&
+      elevatedDelta <= ELEVATED_EXIT_DELTA
+    );
+
+  if(recoveryNow){
+    if(recoveryCandidateStart === null) recoveryCandidateStart = nowSec;
+  } else {
+    recoveryCandidateStart = null;
+  }
+
+  const recoveryQualified =
+    recoveryCandidateStart !== null &&
+    (nowSec - recoveryCandidateStart) >= cfg.recoveryMinSec;
+
+  /* Priority order:
+     1) RECOVERY
+     2) SUSTAINED BUILD
+     3) ELEVATED
+     4) NONE
+  */
+
+  if(recoveryQualified){
+    recoveryHoldUntil = nowSec + cfg.recoveryHoldSec;
+    if(currentPhase !== "RECOVERY"){
+      transitionPhase("RECOVERY", nowSec);
+    }
+  } else if(recoveryHoldUntil !== null && nowSec <= recoveryHoldUntil){
+    if(currentPhase !== "RECOVERY"){
+      transitionPhase("RECOVERY", nowSec);
+    }
+  } else if(buildQualified){
+    eventWasActive = true;
+    eventPeakHr = eventPeakHr === null ? currentHr : Math.max(eventPeakHr, currentHr);
+
+    buildHoldUntil = nowSec + cfg.buildHoldSec;
+    elevatedHoldUntil = nowSec + Math.max(cfg.buildHoldSec, 4);
+    recoveryCandidateStart = null;
+    recoveryHoldUntil = null;
+
+    if(currentPhase !== "SUSTAINED BUILD"){
+      transitionPhase("SUSTAINED BUILD", nowSec);
+    }
+  } else if(
+    buildHoldUntil !== null &&
+    nowSec <= buildHoldUntil &&
+    currentPhase === "SUSTAINED BUILD" &&
+    elevatedDelta >= ELEVATED_EXIT_DELTA
+  ){
+    eventWasActive = true;
+    eventPeakHr = eventPeakHr === null ? currentHr : Math.max(eventPeakHr, currentHr);
+
+    if(currentPhase !== "SUSTAINED BUILD"){
+      transitionPhase("SUSTAINED BUILD", nowSec);
+    }
+  } else if(elevatedQualified){
+    eventWasActive = true;
+    eventPeakHr = eventPeakHr === null ? currentHr : Math.max(eventPeakHr, currentHr);
+
+    buildHoldUntil = null;
+    elevatedHoldUntil = nowSec + 6;
+
+    if(currentPhase !== "ELEVATED"){
+      transitionPhase("ELEVATED", nowSec);
+    }
+  } else if(
+    elevatedHoldUntil !== null &&
+    nowSec <= elevatedHoldUntil &&
+    elevatedDelta >= ELEVATED_EXIT_DELTA
+  ){
+    eventWasActive = true;
+    eventPeakHr = eventPeakHr === null ? currentHr : Math.max(eventPeakHr, currentHr);
+
+    if(currentPhase !== "ELEVATED"){
+      transitionPhase("ELEVATED", nowSec);
+    }
+  } else {
+    buildHoldUntil = null;
+    elevatedHoldUntil = null;
+    recoveryHoldUntil = null;
+    currentPhase = null;
+    recoveryCandidateStart = null;
+
+    if(elevatedDelta <= 1){
+      eventPeakHr = null;
+      eventWasActive = false;
+      buildReentryBlockedUntil = null;
+    }
+  }
+
+  if(currentPhase === "RECOVERY" && buildQualified){
+    transitionPhase("SUSTAINED BUILD", nowSec);
+    recoveryCandidateStart = null;
+    recoveryHoldUntil = null;
+  } else if(currentPhase === "RECOVERY" && !buildQualified && elevatedQualified && !strongRecoveryNow){
+    transitionPhase("ELEVATED", nowSec);
+    recoveryCandidateStart = null;
+    recoveryHoldUntil = null;
+  }
+
+  setStatus(currentPhase, currentPhase ? phaseElapsed(nowSec) : 0);
+
+  sendTelemetry({
+    phase: currentPhase || null,
+    buildConfidence,
+    currentHr: points.length ? points[points.length - 1].y : null,
+    smoothedHr,
+    baselineHr,
+    elevatedDelta,
+    phaseTimer: currentPhase ? formatTimer(phaseElapsed(nowSec)) : "—"
+  });
+}
+
+/*** MAIN LOOP ***/
+async function pollHR(){
+  try{
+    const resp = await callOBS("GetInputSettings", { inputName: HR_TEXT_SOURCE_NAME });
+    const txt = String(resp.inputSettings?.text ?? "").trim();
+    const m = txt.match(/\d{1,3}/);
+
+    if(m){
+      const bpm = parseInt(m[0], 10);
+      const nowSec = (Date.now() - startTs) / 1000;
+
+      points.push({ x: nowSec, y: bpm });
+
+      if (smoothedHr === null) {
+        smoothedHr = bpm;
+      } else {
+        smoothedHr = smoothedHr + (bpm - smoothedHr) * HR_SMOOTHING;
+      }
+      detectPoints.push({ x: nowSec, y: smoothedHr });
+
+      updateBaseline(smoothedHr);
+
+      const shortPts = getRecentPoints(detectPoints, SHORT_WINDOW_SEC);
+      const slopePts = getRecentPoints(detectPoints, SLOPE_WINDOW_SEC);
+      const stepPts = getRecentPoints(detectPoints, STEP_WINDOW_SEC);
+      const recoveryPts = getRecentPoints(detectPoints, RECOVERY_WINDOW_SEC);
+
+      const rise = riseOverWindow(shortPts);
+      const slope = slopePoints(slopePts);
+      const posRatio = positiveStepRatio(stepPts);
+      const accel = accelEstimate(stepPts);
+      const recoverySlope = slopePoints(recoveryPts);
+
+      advanceWindow();
+      updateStats();
+      updateBackground(bpm);
+
+      updatePhase({
+        currentHr: smoothedHr,
+        rise,
+        slope,
+        posRatio,
+        accel,
+        recoverySlope
+      }, nowSec);
+    }
+  } catch(err){
+    console.error(err);
+  } finally {
+    setTimeout(pollHR, POLL_MS);
+  }
+}
+
+(async()=>{
+  connectControlWS();
+  await connectOBS();
+  pollHR();
+})();
+</script>
+
+</body>
+</html>

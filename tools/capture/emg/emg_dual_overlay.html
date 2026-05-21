@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  margin: 0;
+  background: transparent;
+  font-family: Arial, sans-serif;
+  color: white;
+}
+
+.wrapper {
+  width: 520px;
+  padding: 12px;
+  background: rgba(0,0,0,0.38);
+  border-radius: 14px;
+}
+
+.row {
+  margin-bottom: 10px;
+}
+
+.label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  text-shadow: 0 0 5px black;
+}
+
+.barBox {
+  width: 100%;
+  height: 24px;
+  border: 2px solid white;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.12);
+}
+
+.bar {
+  height: 100%;
+  width: 0%;
+  transition: width 0.05s linear, background 0.1s linear, box-shadow 0.1s;
+}
+
+.bar.high {
+  box-shadow: 0 0 12px red;
+}
+
+.balanceBox {
+  position: relative;
+  height: 34px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.5);
+  border-bottom: 1px solid rgba(255,255,255,0.5);
+}
+
+.centerLine {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: white;
+  opacity: 0.85;
+}
+
+.balanceDot {
+  position: absolute;
+  top: 7px;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 0 8px white;
+  transition: left 0.08s linear, background 0.1s linear;
+}
+
+canvas {
+  width: 100%;
+  height: 110px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.55);
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+.status {
+  margin-top: 6px;
+  font-size: 14px;
+  opacity: 0.9;
+}
+</style>
+</head>
+
+<body>
+<div class="wrapper">
+
+  <div class="row">
+    <div class="label">
+      <span>Left Foot</span>
+      <span id="leftText">0.0%</span>
+    </div>
+    <div class="barBox">
+      <div class="bar" id="leftBar"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">
+      <span>Right Foot</span>
+      <span id="rightText">0.0%</span>
+    </div>
+    <div class="barBox">
+      <div class="bar" id="rightBar"></div>
+    </div>
+  </div>
+
+  <div class="balanceBox">
+    <div class="centerLine"></div>
+    <div class="balanceDot" id="balanceDot"></div>
+  </div>
+
+  <canvas id="trend" width="500" height="110"></canvas>
+
+  <div class="status" id="statusText">Balance: centered</div>
+</div>
+
+<script>
+const leftHistory = [];
+const rightHistory = [];
+const maxPoints = 140;
+
+const canvas = document.getElementById("trend");
+const ctx = canvas.getContext("2d");
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function colorFor(val) {
+  if (val < 30) return "#00ff66";
+  if (val < 70) return "#ffcc00";
+  return "#ff3333";
+}
+
+async function readValue(file) {
+  const res = await fetch(file + "?_=" + Date.now());
+  const txt = await res.text();
+  const val = parseFloat(txt);
+  return isNaN(val) ? 0 : clamp(val, 0, 100);
+}
+
+function drawTrend() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
+  ctx.lineWidth = 1;
+
+  for (let y = 0; y <= 100; y += 25) {
+    const py = canvas.height - (y / 100) * canvas.height;
+    ctx.beginPath();
+    ctx.moveTo(0, py);
+    ctx.lineTo(canvas.width, py);
+    ctx.stroke();
+  }
+
+  function drawLine(history, color) {
+    if (history.length < 2) return;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+
+    history.forEach((val, i) => {
+      const x = (i / (maxPoints - 1)) * canvas.width;
+      const y = canvas.height - (val / 100) * canvas.height;
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+
+    ctx.stroke();
+  }
+
+  drawLine(leftHistory, "#4aa3ff");
+  drawLine(rightHistory, "#ff9f43");
+
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = "13px Arial";
+  ctx.fillText("L", 8, 16);
+  ctx.fillText("R", 28, 16);
+
+  ctx.fillStyle = "#4aa3ff";
+  ctx.fillRect(8, 22, 14, 4);
+
+  ctx.fillStyle = "#ff9f43";
+  ctx.fillRect(28, 22, 14, 4);
+}
+
+function updateVisuals(left, right) {
+  const diff = left - right;
+
+  const leftBar = document.getElementById("leftBar");
+  const rightBar = document.getElementById("rightBar");
+
+  leftBar.style.width = left + "%";
+  rightBar.style.width = right + "%";
+
+  leftBar.style.background = colorFor(left);
+  rightBar.style.background = colorFor(right);
+
+  leftBar.classList.toggle("high", left >= 80);
+  rightBar.classList.toggle("high", right >= 80);
+
+  document.getElementById("leftText").innerText = left.toFixed(1) + "%";
+  document.getElementById("rightText").innerText = right.toFixed(1) + "%";
+
+  // Balance dot: left of center = right dominant, right of center = left dominant
+  const dot = document.getElementById("balanceDot");
+  const pos = clamp(50 + diff * 0.5, 0, 100);
+  dot.style.left = pos + "%";
+
+  if (Math.abs(diff) < 10) {
+    dot.style.background = "white";
+  } else if (Math.abs(diff) < 30) {
+    dot.style.background = "#ffcc00";
+  } else {
+    dot.style.background = "#ff3333";
+  }
+
+  let status = "Balance: centered";
+  if (diff > 10) status = "Balance: left +" + diff.toFixed(1);
+  if (diff < -10) status = "Balance: right +" + Math.abs(diff).toFixed(1);
+
+  document.getElementById("statusText").innerText = status;
+}
+
+async function update() {
+  try {
+    const left = await readValue("emg_left.txt");
+    const right = await readValue("emg_right.txt");
+
+    leftHistory.push(left);
+    rightHistory.push(right);
+
+    if (leftHistory.length > maxPoints) leftHistory.shift();
+    if (rightHistory.length > maxPoints) rightHistory.shift();
+
+    updateVisuals(left, right);
+    drawTrend();
+
+  } catch (e) {
+    document.getElementById("statusText").innerText = "Waiting for EMG files...";
+  }
+}
+
+setInterval(update, 50);
+</script>
+</body>
+</html>

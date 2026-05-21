@@ -1,0 +1,549 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>HR Overlay Control Panel</title>
+<style>
+  body{
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    margin:24px;
+    background:#f3f3f3;
+    color:#111;
+  }
+
+  h1{
+    margin-top:0;
+    margin-bottom:8px;
+  }
+
+  .intro{
+    max-width:950px;
+    margin-bottom:24px;
+    color:#444;
+    line-height:1.45;
+  }
+
+  .section{
+    max-width:950px;
+    margin-bottom:28px;
+    padding:18px 18px 8px;
+    background:#fff;
+    border-radius:14px;
+    box-shadow:0 1px 6px rgba(0,0,0,0.08);
+  }
+
+  .section h2{
+    margin:0 0 14px;
+    font-size:20px;
+  }
+
+  .control{
+    display:grid;
+    grid-template-columns: 260px 120px 1fr;
+    gap:6px 16px;
+    align-items:center;
+    margin-bottom:14px;
+  }
+
+  .label{
+    font-weight:700;
+  }
+
+  .value{
+    font-weight:700;
+    text-align:right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .desc{
+    grid-column:1 / -1;
+    color:#555;
+    font-size:14px;
+    line-height:1.4;
+    padding:0 0 2px 0;
+  }
+
+  input[type="range"]{
+    width:100%;
+  }
+
+  .buttons{
+    margin-top:24px;
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+
+  button{
+    font-size:16px;
+    padding:10px 16px;
+    border-radius:10px;
+    border:none;
+    cursor:pointer;
+  }
+
+  #resetBtn{
+    background:#222;
+    color:#fff;
+  }
+
+  #sendBtn{
+    background:#2f7cf6;
+    color:#fff;
+  }
+
+  #status{
+    margin-top:16px;
+    font-weight:600;
+  }
+
+  .hint{
+    margin-top:8px;
+    color:#666;
+    font-size:14px;
+  }
+
+  .debugGrid{
+    display:grid;
+    grid-template-columns: 200px 1fr;
+    gap:10px 16px;
+    align-items:center;
+  }
+
+  .debugLabel{
+    font-weight:700;
+    color:#333;
+  }
+
+  .debugValue{
+    font-variant-numeric: tabular-nums;
+    font-weight:700;
+    color:#111;
+    word-break:break-word;
+  }
+
+  #confidenceOuter{
+    width:100%;
+    height:18px;
+    background:rgba(0,0,0,0.10);
+    border-radius:999px;
+    overflow:hidden;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+  }
+
+  #confidenceInner{
+    width:0%;
+    height:100%;
+    border-radius:999px;
+    background:rgba(47,124,246,0.75);
+    transition:width 0.2s linear, background 0.2s linear;
+  }
+
+  #phaseBadge,
+  #recordingBadge{
+    display:inline-block;
+    min-width:140px;
+    text-align:center;
+    padding:8px 12px;
+    border-radius:999px;
+    background:rgba(0,0,0,0.08);
+    font-weight:800;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+  }
+
+  .subtle{
+    color:#666;
+    font-size:13px;
+    margin-top:6px;
+  }
+</style>
+</head>
+<body>
+
+<h1>HR Overlay Controls</h1>
+<div class="intro">
+  Tune how easily the overlay enters <strong>SUSTAINED BUILD</strong> and <strong>RECOVERY</strong>.
+  Lower values generally make detection easier. Higher values make it stricter.
+</div>
+
+<div class="section">
+  <h2>Recording Status</h2>
+  <div class="debugGrid">
+    <div class="debugLabel">OBS recording</div>
+    <div class="debugValue"><span id="recordingBadge">Stopped</span></div>
+
+    <div class="debugLabel">Current CSV</div>
+    <div class="debugValue" id="recordingFile">—</div>
+  </div>
+  <div class="subtle">
+    Recording starts and stops based on OBS record state.
+  </div>
+</div>
+
+<div class="section">
+  <h2>Live Debug / Telemetry</h2>
+  <div class="debugGrid">
+    <div class="debugLabel">Current phase</div>
+    <div class="debugValue"><span id="phaseBadge">—</span></div>
+
+    <div class="debugLabel">Build confidence</div>
+    <div>
+      <div id="confidenceOuter">
+        <div id="confidenceInner"></div>
+      </div>
+      <div class="debugValue" id="confidenceText" style="margin-top:6px;">0%</div>
+    </div>
+
+    <div class="debugLabel">Current HR</div>
+    <div class="debugValue" id="currentHr">—</div>
+
+    <div class="debugLabel">Smoothed HR</div>
+    <div class="debugValue" id="smoothedHr">—</div>
+
+    <div class="debugLabel">Baseline HR</div>
+    <div class="debugValue" id="baselineHr">—</div>
+
+    <div class="debugLabel">Elevated delta</div>
+    <div class="debugValue" id="elevatedDelta">—</div>
+
+    <div class="debugLabel">Status timer</div>
+    <div class="debugValue" id="phaseTimer">—</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Sustained Build Detection</h2>
+  <div id="buildControls"></div>
+</div>
+
+<div class="section">
+  <h2>Recovery Detection</h2>
+  <div id="recoveryControls"></div>
+</div>
+
+<div class="buttons">
+  <button id="sendBtn">Send Settings</button>
+  <button id="resetBtn">Reset Overlay State</button>
+</div>
+
+<div class="hint">
+  Reset clears the current phase, timers, peaks, rolling graph history, and baseline anchor.
+</div>
+
+<div id="status">Connecting…</div>
+
+<script>
+const WS_URL = "ws://localhost:8765";
+
+const defs = [
+  {
+    section: "build",
+    key: "buildRiseMin",
+    label: "Build rise min",
+    min: 2,
+    max: 20,
+    step: 1,
+    desc: "How many BPM must be gained over the recent window before a build is considered. Higher = needs a bigger climb."
+  },
+  {
+    section: "build",
+    key: "buildSlopeMin",
+    label: "Build slope min",
+    min: 0.10,
+    max: 1.50,
+    step: 0.01,
+    desc: "How steep the upward trend must be. Higher = only stronger ramps count."
+  },
+  {
+    section: "build",
+    key: "buildPosRatioMin",
+    label: "Build positive step ratio",
+    min: 0.30,
+    max: 1.00,
+    step: 0.01,
+    desc: "How consistently HR must move upward or stay flat. Higher = fewer dips allowed."
+  },
+  {
+    section: "build",
+    key: "buildAccelMin",
+    label: "Build accel min",
+    min: 0.00,
+    max: 0.20,
+    step: 0.01,
+    desc: "How much the rise must be speeding up. Leave low if your data climbs gradually."
+  },
+  {
+    section: "build",
+    key: "buildMinSec",
+    label: "Build min seconds",
+    min: 1,
+    max: 10,
+    step: 1,
+    desc: "How long build conditions must remain true before SUSTAINED BUILD appears."
+  },
+  {
+    section: "build",
+    key: "buildHoldSec",
+    label: "Build hold seconds",
+    min: 1,
+    max: 15,
+    step: 1,
+    desc: "How long build stays active after conditions soften. Higher = less flicker."
+  },
+
+  {
+    section: "recovery",
+    key: "significantHrMin",
+    label: "Significant HR min",
+    min: 90,
+    max: 160,
+    step: 1,
+    desc: "Minimum meaningful HR before recovery logic is allowed. Lower = easier recovery detection."
+  },
+  {
+    section: "recovery",
+    key: "peakDropMin",
+    label: "Peak drop min",
+    min: 1,
+    max: 20,
+    step: 1,
+    desc: "How many BPM HR must fall from event peak before RECOVERY can trigger. Lower = recovery shows sooner."
+  },
+  {
+    section: "recovery",
+    key: "recoverySlopeMax",
+    label: "Recovery slope max",
+    min: -0.20,
+    max: 0.40,
+    step: 0.01,
+    desc: "How flat or downward the recent trend must be for recovery. Higher = more tolerant of noisy drops."
+  },
+  {
+    section: "recovery",
+    key: "recoveryMinSec",
+    label: "Recovery min seconds",
+    min: 1,
+    max: 10,
+    step: 1,
+    desc: "How long recovery conditions must hold before RECOVERY appears."
+  },
+  {
+    section: "recovery",
+    key: "recoveryHoldSec",
+    label: "Recovery hold seconds",
+    min: 1,
+    max: 15,
+    step: 1,
+    desc: "How long RECOVERY stays active after conditions stop matching. Higher = smoother and less jumpy."
+  }
+];
+
+const defaults = {
+  buildRiseMin: 5,
+  buildSlopeMin: 0.28,
+  buildPosRatioMin: 0.52,
+  buildAccelMin: 0.00,
+  buildMinSec: 3,
+  buildHoldSec: 3,
+
+  significantHrMin: 112,
+  peakDropMin: 8,
+  recoverySlopeMax: 0.50,
+  recoveryMinSec: 1,
+  recoveryHoldSec: 12
+};
+
+const buildControls = document.getElementById("buildControls");
+const recoveryControls = document.getElementById("recoveryControls");
+const statusEl = document.getElementById("status");
+const inputs = {};
+
+const phaseBadge = document.getElementById("phaseBadge");
+const recordingBadge = document.getElementById("recordingBadge");
+const recordingFile = document.getElementById("recordingFile");
+
+const confidenceInner = document.getElementById("confidenceInner");
+const confidenceText = document.getElementById("confidenceText");
+const currentHrEl = document.getElementById("currentHr");
+const smoothedHrEl = document.getElementById("smoothedHr");
+const baselineHrEl = document.getElementById("baselineHr");
+const elevatedDeltaEl = document.getElementById("elevatedDelta");
+const phaseTimerEl = document.getElementById("phaseTimer");
+
+function makeControl(def) {
+  const wrap = document.createElement("div");
+  wrap.className = "control";
+
+  const lab = document.createElement("div");
+  lab.className = "label";
+  lab.textContent = def.label;
+
+  const val = document.createElement("div");
+  val.className = "value";
+  val.id = `val_${def.key}`;
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = def.min;
+  slider.max = def.max;
+  slider.step = def.step;
+  slider.value = defaults[def.key];
+  slider.dataset.key = def.key;
+
+  slider.addEventListener("input", () => {
+    val.textContent = slider.value;
+  });
+
+  const desc = document.createElement("div");
+  desc.className = "desc";
+  desc.textContent = def.desc;
+
+  val.textContent = slider.value;
+  inputs[def.key] = slider;
+
+  wrap.appendChild(lab);
+  wrap.appendChild(val);
+  wrap.appendChild(slider);
+  wrap.appendChild(desc);
+
+  return wrap;
+}
+
+for (const def of defs) {
+  const control = makeControl(def);
+  if (def.section === "build") buildControls.appendChild(control);
+  if (def.section === "recovery") recoveryControls.appendChild(control);
+}
+
+function fmtNum(v, digits = 1) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return Number(v).toFixed(digits);
+}
+
+function setPhaseBadge(phase) {
+  phaseBadge.textContent = phase || "—";
+
+  if (phase === "SUSTAINED BUILD") {
+    phaseBadge.style.background = "rgba(230,126,34,0.20)";
+  } else if (phase === "RECOVERY") {
+    phaseBadge.style.background = "rgba(96,176,68,0.18)";
+  } else {
+    phaseBadge.style.background = "rgba(0,0,0,0.08)";
+  }
+}
+
+function setRecordingState(active, filename = null) {
+  recordingBadge.textContent = active ? "Recording" : "Stopped";
+  recordingBadge.style.background = active
+    ? "rgba(215,58,73,0.18)"
+    : "rgba(0,0,0,0.08)";
+
+  recordingFile.textContent = filename || "—";
+}
+
+function setConfidence(pct) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  confidenceInner.style.width = `${p}%`;
+  confidenceText.textContent = `${Math.round(p)}%`;
+
+  if (p < 40) {
+    confidenceInner.style.background = "rgba(96,176,68,0.75)";
+  } else if (p < 70) {
+    confidenceInner.style.background = "rgba(200,180,0,0.75)";
+  } else if (p < 90) {
+    confidenceInner.style.background = "rgba(230,126,34,0.75)";
+  } else {
+    confidenceInner.style.background = "rgba(215,58,73,0.75)";
+  }
+}
+
+let ws;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    statusEl.textContent = "Connected";
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "Disconnected. Reconnecting…";
+    setTimeout(connect, 1500);
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+
+      if (msg.type === "config" && msg.config) {
+        for (const key of Object.keys(msg.config)) {
+          if (inputs[key]) {
+            inputs[key].value = msg.config[key];
+            document.getElementById(`val_${key}`).textContent = msg.config[key];
+          }
+        }
+      }
+
+      if (msg.type === "telemetry" && msg.data) {
+        const d = msg.data;
+        setPhaseBadge(d.phase || null);
+        setConfidence(d.buildConfidence ?? 0);
+        currentHrEl.textContent = fmtNum(d.currentHr, 1);
+        smoothedHrEl.textContent = fmtNum(d.smoothedHr, 1);
+        baselineHrEl.textContent = fmtNum(d.baselineHr, 1);
+        elevatedDeltaEl.textContent = fmtNum(d.elevatedDelta, 1);
+        phaseTimerEl.textContent = d.phaseTimer || "—";
+      }
+
+      if (msg.type === "recording_info" && msg.recording) {
+        setRecordingState(!!msg.recording.active, msg.recording.filename || null);
+      }
+
+      if (msg.type === "obs_record_state") {
+        const active = !!msg.active;
+        const currentFile = recordingFile.textContent && recordingFile.textContent !== "—"
+          ? recordingFile.textContent
+          : null;
+        setRecordingState(active, currentFile);
+      }
+
+      if (msg.type === "recording_finalized" && msg.recording) {
+        setRecordingState(false, msg.recording.filename || null);
+      }
+    } catch (err) {
+      console.error("WS message parse error:", err);
+    }
+  };
+}
+
+function currentConfig() {
+  const cfg = {};
+  for (const key of Object.keys(inputs)) {
+    cfg[key] = Number(inputs[key].value);
+  }
+  return cfg;
+}
+
+document.getElementById("sendBtn").addEventListener("click", () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "config", config: currentConfig() }));
+    statusEl.textContent = "Settings sent";
+  }
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "reset" }));
+    statusEl.textContent = "Reset sent";
+  }
+});
+
+setPhaseBadge(null);
+setRecordingState(false, null);
+setConfidence(0);
+connect();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,7 @@
+emg_sessions/
+emg_level.txt
+emg_left.txt
+emg_right.txt
+emg_diff.txt
+emg_calibration*.json
+__pycache__/

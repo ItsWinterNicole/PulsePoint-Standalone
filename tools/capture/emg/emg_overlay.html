@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  margin: 0;
+  background: transparent;
+  font-family: Arial, sans-serif;
+  color: white;
+}
+
+.wrapper {
+  width: 420px;
+  padding: 10px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 12px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.level {
+  font-size: 26px;
+  font-weight: bold;
+  text-shadow: 0 0 6px black;
+}
+
+.container {
+  width: 100%;
+  height: 28px;
+  border: 2px solid white;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.bar {
+  height: 100%;
+  width: 0%;
+  background: limegreen;
+  transition: width 0.05s linear, background 0.1s linear, box-shadow 0.1s;
+}
+
+.bar.high {
+  box-shadow: 0 0 12px red;
+}
+
+canvas {
+  width: 100%;
+  height: 90px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.55);
+  border-radius: 8px;
+}
+
+.status {
+  margin-top: 5px;
+  font-size: 13px;
+  opacity: 0.9;
+}
+</style>
+</head>
+
+<body>
+<div class="wrapper">
+  <div class="header">
+    <div class="title">Foot EMG</div>
+    <div class="level" id="levelText">0.0%</div>
+  </div>
+
+  <div class="container">
+    <div class="bar" id="bar"></div>
+  </div>
+
+  <canvas id="trend" width="400" height="90"></canvas>
+
+  <div class="status" id="statusText">Trend: stable</div>
+</div>
+
+<script>
+const history = [];
+const maxPoints = 120; // about 6 sec at 50ms update
+const canvas = document.getElementById("trend");
+const ctx = canvas.getContext("2d");
+
+function getColor(val) {
+  if (val < 30) return "#00ff66";
+  if (val < 70) return "#ffcc00";
+  return "#ff3333";
+}
+
+function getTrend() {
+  if (history.length < 12) return "stable";
+
+  const recent = history.slice(-6).reduce((a,b) => a + b, 0) / 6;
+  const previous = history.slice(-12, -6).reduce((a,b) => a + b, 0) / 6;
+  const diff = recent - previous;
+
+  if (diff > 3) return "rising";
+  if (diff < -3) return "falling";
+  return "stable";
+}
+
+function drawTrend() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // grid
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  for (let y = 0; y <= 100; y += 25) {
+    const py = canvas.height - (y / 100) * canvas.height;
+    ctx.beginPath();
+    ctx.moveTo(0, py);
+    ctx.lineTo(canvas.width, py);
+    ctx.stroke();
+  }
+
+  if (history.length < 2) return;
+
+  // trendline
+  ctx.strokeStyle = getColor(history[history.length - 1]);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+
+  history.forEach((val, i) => {
+    const x = (i / (maxPoints - 1)) * canvas.width;
+    const y = canvas.height - (val / 100) * canvas.height;
+
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+
+  ctx.stroke();
+
+  // current dot
+  const val = history[history.length - 1];
+  const x = ((history.length - 1) / (maxPoints - 1)) * canvas.width;
+  const y = canvas.height - (val / 100) * canvas.height;
+
+  ctx.fillStyle = getColor(val);
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+async function update() {
+  try {
+    let res = await fetch("emg_level.txt?_=" + Date.now());
+    let rawText = await res.text();
+    let val = parseFloat(rawText);
+
+    if (!isNaN(val)) {
+      val = Math.max(0, Math.min(100, val));
+
+      history.push(val);
+      if (history.length > maxPoints) history.shift();
+
+      const bar = document.getElementById("bar");
+      const levelText = document.getElementById("levelText");
+      const statusText = document.getElementById("statusText");
+
+      bar.style.width = val + "%";
+      bar.style.background = getColor(val);
+
+      if (val >= 80) bar.classList.add("high");
+      else bar.classList.remove("high");
+
+      levelText.innerText = val.toFixed(1) + "%";
+
+      const trend = getTrend();
+      statusText.innerText = "Trend: " + trend;
+
+      drawTrend();
+    }
+  } catch {}
+}
+
+setInterval(update, 50);
+</script>
+</body>
+</html>
