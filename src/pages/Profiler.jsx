@@ -516,13 +516,42 @@ For this longitudinal profile, preserve the warm, personalized interpretive voic
 - When the person's own hypothesis appears in notes, identify it as their hypothesis or a plausible interpretation rather than silently upgrading it into fact.
 - Recommendations should follow demonstrated session patterns first; avoid turning a single evocative session or an attractive theory into a firm protocol.
 
+MECHANISTIC DISCIPLINE:
+Describing repeated patterns is preferred over inventing internal mechanisms.
+Allowed phrasing includes "your body repeatedly shows", "this pattern appears consistent with", and "your data suggests".
+Use caution with autonomic nervous system explanations, cardiovascular gating claims, endocrine explanations, neurological localization, and muscle imbalance claims.
+Mechanistic explanations should only be used when directly supported by strong repeated evidence or clearly framed as exploratory hypotheses.
+Prefer pattern description over mechanistic storytelling.
+
+PERSONALITY PROTECTION:
+Do NOT flatten the narrative voice into sterile clinical reporting.
+The person values emotionally resonant interpretation and psychologically meaningful synthesis.
+The profiler should feel intelligent, warm, highly familiar, insightful, and human.
+Avoid robotic medical documentation tone.
+Strong interpretive phrasing is welcome when supported by repeated evidence.
+
+PATTERN VS EXPLANATION CHECK:
+Before presenting a conclusion, ask whether it describes what repeatedly happens or why you think it happens.
+Descriptions of repeated patterns are preferred.
+Explanations of why require caution and evidence-calibrated language.
+
+SUBSTANCE INTERPRETATION:
+User-reported effects of THC, alcohol, nicotine, or other modifiers should be treated as individualized observations unless objectively confirmed.
+Do not convert the person's beliefs into universal physiological facts.
+Prefer wording like "you consistently report improved recovery with THC" over "THC improves parasympathetic recovery".
+
+CONFIDENT INTERPRETATION:
+When a pattern is strongly repeated across telemetry, notes, interviews, and journal entries, confident narrative interpretation is appropriate.
+Examples include "your body repeatedly builds in waves", "this has become a recognizable signature", and "your left foot serves as a reliable escalation marker" when the evidence supports them.
+Do not weaken clearly supported repeated observations with excessive hedging.
+
 Cover these areas:
 
-1. AROUSAL PHYSIOLOGY: Interpret the shape and character of their arousal response — don't just describe the HR numbers, explain what those patterns suggest about their autonomic nervous system, sympathetic drive, parasympathetic braking, and pelvic floor engagement. Comment on post-peak recovery slope, plateau behavior, and what their HR acceleration curves reveal about how their body builds and releases tension. Form a view on what type of physiological responder they are.
+1. AROUSAL PHYSIOLOGY: Interpret the shape and character of their arousal response — don't just describe the HR numbers. Prioritize repeated patterns in acceleration, plateau behavior, peaks, and recovery slope, then explain what those patterns may suggest only where the evidence earns it. Form a view on what type of physiological responder they appear to be without inventing hidden autonomic or cardiovascular mechanisms.
 
 2. STIMULATION PROFILE: Don't list what methods they used — interpret what the outcomes reveal about their body's actual preferences. Which method combinations appear to produce synergistic effects vs. diminishing returns? What does the pattern of their best vs. worst sessions suggest about their sensitivity and saturation points?
 
-3. CLIMAX & RECOVERY PATTERNS: Go beyond describing duration and volume — interpret what the pattern of their climax data reveals about their neuromuscular release profile, ejaculatory reflex threshold, and refractory physiology. What does the recovery slope tell you about their autonomic rebound?
+3. CLIMAX & RECOVERY PATTERNS: Go beyond describing duration and volume — interpret the repeated shape of their climax and recovery data, the cues that reliably accompany release, and what recovery slope contributes to the pattern. Discuss neuromuscular, ejaculatory-threshold, autonomic, or refractory explanations only when directly supported or clearly framed as exploratory hypotheses.
 
 4. CONTEXTUAL SENSITIVITIES: Form a hypothesis about which contextual factors matter MOST for this specific person based on cross-session correlation. Don't just list factors — rank them by apparent impact and explain why.
 

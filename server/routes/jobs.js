@@ -46,6 +46,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       model,
       max_tokens,
       temperature,
+      signal: context.signal,
     });
   } catch (error) {
     const message = error?.message || String(error);
@@ -66,6 +67,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       model,
       max_tokens: retryMaxTokens,
       temperature,
+      signal: context.signal,
     });
   }
   if (context.signal?.aborted) throw new Error('Cancelled');

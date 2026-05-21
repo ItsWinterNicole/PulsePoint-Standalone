@@ -33,13 +33,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function createMessageWithRetries(anthropic, payload, attempts = 3) {
+async function createMessageWithRetries(anthropic, payload, attempts = 3, signal) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt++) {
+    if (signal?.aborted) throw new Error('Cancelled');
     try {
-      return await anthropic.messages.create(payload);
+      return await anthropic.messages.create(payload, signal ? { signal } : undefined);
     } catch (error) {
       lastError = error;
+      if (signal?.aborted) throw new Error('Cancelled');
       const status = error.status || error.response?.status;
       const retryable = [408, 429, 500, 502, 503, 504].includes(status);
       if (!retryable || attempt === attempts - 1) throw error;
@@ -54,7 +56,7 @@ async function createMessageWithRetries(anthropic, payload, attempts = 3) {
   throw lastError;
 }
 
-export async function aiInvokeInternal({ prompt, response_json_schema, model, max_tokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 8192), temperature = 0.3 }) {
+export async function aiInvokeInternal({ prompt, response_json_schema, model, max_tokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 8192), temperature = 0.3, signal }) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('Missing ANTHROPIC_API_KEY');
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const wantsJson = !!response_json_schema;
@@ -63,7 +65,7 @@ export async function aiInvokeInternal({ prompt, response_json_schema, model, ma
     max_tokens,
     temperature,
     messages: [{ role: 'user', content: `${prompt}${wantsJson ? `\n\nReturn ONLY valid JSON matching this schema:\n${JSON.stringify(response_json_schema)}` : ''}` }],
-  }, Number(process.env.ANTHROPIC_ATTEMPTS || 3));
+  }, Number(process.env.ANTHROPIC_ATTEMPTS || 3), signal);
   const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';
   if (!wantsJson) return text;
   if (msg.stop_reason === 'max_tokens') {

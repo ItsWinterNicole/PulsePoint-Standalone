@@ -269,11 +269,15 @@ export default function SettingsStatus() {
             <Loader2 className="h-4 w-4 animate-spin" />
             Checking configured provider reporting access.
           </div>
-        ) : (
+        ) : providerStatus ? (
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <ProviderCard status={providerStatus?.providers?.anthropic} />
             <ProviderCard status={providerStatus?.providers?.openai} />
           </div>
+        ) : (
+          <p className="mt-4 rounded-lg bg-muted/25 px-3 py-4 text-sm text-muted-foreground">
+            Provider status will appear once the local API reports cost visibility.
+          </p>
         )}
 
         <div className="mt-3 flex items-start gap-2 rounded-lg bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
