@@ -112,6 +112,9 @@ class HeartRateRelay {
     this.currentRecording = null;
     this.obsRecordActive = false;
     this.obsOutputPath = null;
+    this.obsConnected = false;
+    this.obsIdentified = false;
+    this.obsError = null;
     this.obsSocket = null;
     this.obsRpcId = 1;
     this.obsPending = new Map();
@@ -152,6 +155,25 @@ class HeartRateRelay {
         client.send(payload);
       }
     }
+  }
+
+  relayStatus() {
+    return {
+      embedded: true,
+      port: liveCaptureConfig.hrRelayPort,
+      recordingsDir: liveCaptureConfig.hrRecordingsDir,
+      obs: {
+        url: liveCaptureConfig.hrObsWsUrl,
+        connected: this.obsConnected,
+        identified: this.obsIdentified,
+        recording: this.obsRecordActive,
+        error: this.obsError,
+      },
+    };
+  }
+
+  broadcastRelayStatus(except = null) {
+    this.broadcast({ type: 'relay_status', relay: this.relayStatus() }, except);
   }
 
   buildNote(data) {
@@ -249,15 +271,23 @@ class HeartRateRelay {
     clearTimeout(this.obsReconnectTimer);
     this.obsSocket = new this.WebSocket(liveCaptureConfig.hrObsWsUrl);
     this.obsSocket.on('open', () => {
+      this.obsConnected = true;
+      this.obsError = null;
       console.log(`PulsePoint HR relay connected to OBS at ${liveCaptureConfig.hrObsWsUrl}`);
+      this.broadcastRelayStatus();
     });
     this.obsSocket.on('close', () => {
+      this.obsConnected = false;
+      this.obsIdentified = false;
       console.log('PulsePoint HR relay OBS websocket disconnected, retrying...');
+      this.broadcastRelayStatus();
       this.obsReconnectTimer = setTimeout(() => this.connectObs(), 1500);
       this.obsReconnectTimer.unref?.();
     });
     this.obsSocket.on('error', (error) => {
+      this.obsError = error.message || String(error);
       console.warn(`PulsePoint HR relay OBS websocket error: ${error.message || error}`);
+      this.broadcastRelayStatus();
     });
     this.obsSocket.on('message', (raw) => this.handleObsMessage(raw));
   }
@@ -285,7 +315,10 @@ class HeartRateRelay {
     }
 
     if (message.op === 2) {
+      this.obsIdentified = true;
+      this.obsError = null;
       console.log('PulsePoint HR relay identified with OBS');
+      this.broadcastRelayStatus();
       try {
         const status = await this.obsRequest('GetRecordStatus');
         if (status?.outputActive) {
@@ -322,6 +355,7 @@ class HeartRateRelay {
     this.obsRecordActive = Boolean(eventData.outputActive);
     if (!wasActive && this.obsRecordActive) {
       this.createNewRecording('obs_record_start');
+      this.broadcastRelayStatus();
       this.broadcast({
         type: 'obs_record_state',
         active: true,
@@ -333,6 +367,7 @@ class HeartRateRelay {
     if (wasActive && !this.obsRecordActive) {
       this.obsOutputPath = eventData.outputPath || null;
       this.finalizeRecording('obs_record_stop');
+      this.broadcastRelayStatus();
       this.broadcast({
         type: 'obs_record_state',
         active: false,
@@ -361,6 +396,7 @@ class HeartRateRelay {
   async handleAppConnection(socket) {
     console.log('PulsePoint HR relay app client connected');
     socket.send(JSON.stringify({ type: 'config', config: this.latestConfig }));
+    socket.send(JSON.stringify({ type: 'relay_status', relay: this.relayStatus() }));
     socket.send(JSON.stringify({
       type: 'recording_info',
       recording: this.currentRecording

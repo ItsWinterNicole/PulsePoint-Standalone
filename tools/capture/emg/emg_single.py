@@ -2,6 +2,7 @@ import csv
 import json
 import time
 import collections
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -22,10 +23,12 @@ except ImportError:
 
 # ================= SETTINGS =================
 
-SERIAL_PORT = "COM5"      # change if needed
-SERIAL_BAUD = 115200
+BASE_DIR = Path(__file__).resolve().parent
 
-CAL_FILE = Path("emg_calibration_single.json")
+SERIAL_PORT = os.getenv("EMG_SERIAL_PORT", "COM5")
+SERIAL_BAUD = int(os.getenv("EMG_SERIAL_BAUD", "115200"))
+
+CAL_FILE = Path(os.getenv("EMG_SINGLE_CAL_FILE", BASE_DIR / "emg_calibration_single.json"))
 
 # Starting defaults — recalibrate with R/M/C
 REST = 100.0
@@ -36,15 +39,15 @@ HEADROOM = 1.35        # raises effective max above calibrated max
 DISPLAY_MAX = 150.0    # allows above-100 detail instead of hard clipping
 
 # OBS
-OBS_ENABLED = True
-OBS_HOST = "192.168.0.33"
-OBS_PORT = 4455
-OBS_PASSWORD = ""
+OBS_ENABLED = os.getenv("EMG_OBS_ENABLED", "true").lower() not in {"0", "false", "no"}
+OBS_HOST = os.getenv("OBS_HOST", "192.168.0.33")
+OBS_PORT = int(os.getenv("OBS_PORT", "4455"))
+OBS_PASSWORD = os.getenv("OBS_PASSWORD", "")
 
 # Output files
-LEVEL_TXT = Path("emg_level.txt")
-OUTPUT_DIR = Path("emg_sessions")
-OUTPUT_DIR.mkdir(exist_ok=True)
+LEVEL_TXT = Path(os.getenv("EMG_LEVEL_TEXT_PATH", BASE_DIR / "emg_level.txt"))
+OUTPUT_DIR = Path(os.getenv("EMG_SESSIONS_DIR", BASE_DIR / "emg_sessions"))
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Plot / update
 PUBLISH_HZ = 30

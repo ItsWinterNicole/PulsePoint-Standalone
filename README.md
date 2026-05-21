@@ -162,7 +162,7 @@ or
 npm run capture:emg:single
 ```
 
-Those scripts still expose their practical hardware and OBS knobs near the top of each file, including serial port, OBS host, and calibration behavior.
+Those scripts still expose practical defaults near the top of each file, but the common capture knobs can now be set through environment values such as `EMG_SERIAL_PORT`, `EMG_SERIAL_BAUD`, `OBS_HOST`, `OBS_PORT`, and `EMG_OBS_ENABLED`. When launched from the repo root, their live text files and session CSVs stay under `tools/capture/emg/`.
 
 ## Useful Commands
 

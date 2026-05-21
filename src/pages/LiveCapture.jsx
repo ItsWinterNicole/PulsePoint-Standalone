@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Activity, Brain, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, Brain, CheckCircle2, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -91,6 +91,27 @@ function asArray(value) {
   if (Array.isArray(value)) return value;
   if (value == null || value === "") return [];
   return [value];
+}
+
+function ReadinessItem({ label, value, helper, ready, optional = false }) {
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${
+      ready
+        ? "border-primary/35 bg-primary/10"
+        : optional
+          ? "border-border bg-muted/20"
+          : "border-border bg-card"
+    }`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+          <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{helper}</p>
+        </div>
+        <CheckCircle2 className={`mt-0.5 h-4 w-4 shrink-0 ${ready ? "text-primary" : "text-muted-foreground/45"}`} />
+      </div>
+    </div>
+  );
 }
 
 function levelColor(percent) {
@@ -494,7 +515,8 @@ export default function LiveCapture() {
   const prediction = useMemo(() => computePrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
   const hrConnected = Boolean(status?.hr?.connected);
-  const emgLive = captureMode !== "hr" && recordingActive && isRecent(status?.emg?.lastPollAt || status?.emg?.lastMessageAt);
+  const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
+  const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
   const hasHrTrend = telemetryHistory.some((point) => point.hr != null || point.hrSmoothed != null);
   const hasEmgTrend = telemetryHistory.some((point) => point.left != null || point.right != null || point.diff != null);
   const currentHrLevel = hrLevelPercent(hrTelemetry?.currentHr, hrTelemetry?.baselineHr);
@@ -586,6 +608,10 @@ export default function LiveCapture() {
 
   const speechRecognitionSupported = typeof window !== "undefined" && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
   const voiceRecordingSupported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && typeof MediaRecorder !== "undefined";
+  const voiceReady = speechRecognitionSupported && voiceRecordingSupported;
+  const embeddedObsStatus = status?.hr?.relay?.obs || null;
+  const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
+  const emgRecent = isRecent(emgSourceAt);
 
   const getCurrentSessionTime = useCallback(() => {
     const startMs = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
@@ -1266,6 +1292,55 @@ export default function LiveCapture() {
       )}
 
       {mediaPanel}
+
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-primary">Capture Readiness</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Quick check before the recording window starts. OBS is the session boundary; HR can run alone and EMG stays optional.
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {recordingActive ? "Recording is live" : liveSession?.activeSessionId ? "Session shell ready" : "Waiting for capture start"}
+          </p>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <ReadinessItem
+            label="HR Relay"
+            value={hrConnected ? "Ready" : "Waiting"}
+            helper={hrConnected ? "Live Capture is connected to the heart-rate relay." : status?.hr?.error || status?.hr?.url || "Start the PulsePoint server and HR source."}
+            ready={hrConnected}
+          />
+          <ReadinessItem
+            label="OBS Sync"
+            value={recordingActive ? "Recording" : obsReady ? "Ready" : embeddedObsStatus ? "Waiting" : "Relay connected"}
+            helper={
+              recordingActive
+                ? recording?.filename || "OBS recording is driving the live session."
+                : embeddedObsStatus?.error
+                  ? embeddedObsStatus.error
+                  : embeddedObsStatus?.identified
+                    ? "OBS websocket is ready to start a session."
+                    : "OBS readiness appears once the embedded relay identifies."
+            }
+            ready={obsReady}
+          />
+          <ReadinessItem
+            label="Voice Notes"
+            value={voiceReady ? "Available" : "Unavailable"}
+            helper={voiceReady ? "Wake phrase and Record Now can timestamp annotations." : "This browser context cannot provide wake listening or microphone capture."}
+            ready={voiceReady}
+          />
+          <ReadinessItem
+            label="EMG Feed"
+            value={emgRecent ? "Live" : "Optional"}
+            helper={emgRecent ? status?.emg?.textDir || "Recent EMG telemetry is available." : "Start the EMG helper only when this session uses EMG."}
+            ready={emgRecent}
+            optional
+          />
+        </div>
+      </div>
 
       {voiceAnnotationPanel}
 

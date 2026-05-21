@@ -27,6 +27,7 @@ const state = {
     latestTelemetry: null,
     lastMessageAt: null,
     error: null,
+    relay: null,
   },
   emg: {
     textDir: EMG_TEXT_DIR,
@@ -34,6 +35,7 @@ const state = {
     latestTelemetry: null,
     lastMessageAt: null,
     lastPollAt: null,
+    lastSourceAt: null,
     error: null,
   },
   files: {
@@ -397,6 +399,11 @@ function connectHrBridge() {
         broadcast('hr_telemetry', state.hr.latestTelemetry);
       }
 
+      if (msg.type === 'relay_status') {
+        state.hr.relay = msg.relay || null;
+        broadcast('status', state);
+      }
+
       if (msg.type === 'recording_info') {
         state.hr.recording = msg.recording || null;
         if (state.hr.recording?.active) ensureLiveSession(state.hr.recording);
@@ -457,29 +464,41 @@ function connectHrBridge() {
 async function readEmgTextTelemetry() {
   const read = async (name) => {
     try {
-      return (await fs.readFile(path.join(EMG_TEXT_DIR, name), 'utf8')).trim();
+      const filePath = path.join(EMG_TEXT_DIR, name);
+      const [text, stat] = await Promise.all([
+        fs.readFile(filePath, 'utf8'),
+        fs.stat(filePath),
+      ]);
+      return { text: text.trim(), modifiedAt: stat.mtime.toISOString() };
     } catch {
-      return '';
+      return { text: '', modifiedAt: null };
     }
   };
 
-  const [leftText, rightText, diffText, levelText] = await Promise.all([
+  const [leftFile, rightFile, diffFile, levelFile] = await Promise.all([
     read('emg_left.txt'),
     read('emg_right.txt'),
     read('emg_diff.txt'),
     read('emg_level.txt'),
   ]);
+  const sourceTimes = [leftFile, rightFile, diffFile, levelFile]
+    .map((file) => file.modifiedAt)
+    .filter(Boolean)
+    .sort();
+  const sourceAt = sourceTimes[sourceTimes.length - 1] || state.emg.lastSourceAt;
 
   const telemetry = {
-    left_pct: cleanNumber(leftText),
-    right_pct: cleanNumber(rightText),
-    diff_pct: cleanNumber(diffText),
-    level_pct: cleanNumber(levelText),
+    left_pct: cleanNumber(leftFile.text),
+    right_pct: cleanNumber(rightFile.text),
+    diff_pct: cleanNumber(diffFile.text),
+    level_pct: cleanNumber(levelFile.text),
+    source_at: sourceAt,
   };
 
-  if (Object.values(telemetry).every((value) => value == null)) return;
+  if ([telemetry.left_pct, telemetry.right_pct, telemetry.diff_pct, telemetry.level_pct].every((value) => value == null)) return;
 
   state.emg.lastPollAt = new Date().toISOString();
+  state.emg.lastSourceAt = sourceAt;
   const signature = JSON.stringify(telemetry);
   if (signature === lastEmgSignature) return;
   lastEmgSignature = signature;

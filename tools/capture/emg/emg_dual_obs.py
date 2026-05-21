@@ -2,6 +2,7 @@ import csv
 import json
 import time
 import collections
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -22,10 +23,12 @@ except ImportError:
 
 # ================= SETTINGS =================
 
-SERIAL_PORT = "COM5"      # change if needed
-SERIAL_BAUD = 115200
+BASE_DIR = Path(__file__).resolve().parent
 
-CAL_FILE = Path("emg_calibration_dual_simple.json")
+SERIAL_PORT = os.getenv("EMG_SERIAL_PORT", "COM5")
+SERIAL_BAUD = int(os.getenv("EMG_SERIAL_BAUD", "115200"))
+
+CAL_FILE = Path(os.getenv("EMG_DUAL_CAL_FILE", BASE_DIR / "emg_calibration_dual_simple.json"))
 
 # Defaults based on your raw test
 REST_L = 230.0
@@ -43,18 +46,18 @@ HEADROOM = 1.35          # higher = less clipping
 DISPLAY_MAX = 150.0      # allows above-100 detail on graph/CSV
 
 # OBS
-OBS_ENABLED = True
-OBS_HOST = "192.168.0.33"
-OBS_PORT = 4455
-OBS_PASSWORD = ""
+OBS_ENABLED = os.getenv("EMG_OBS_ENABLED", "true").lower() not in {"0", "false", "no"}
+OBS_HOST = os.getenv("OBS_HOST", "192.168.0.33")
+OBS_PORT = int(os.getenv("OBS_PORT", "4455"))
+OBS_PASSWORD = os.getenv("OBS_PASSWORD", "")
 
 # Output files for HTML overlay
-LEFT_TXT = Path("emg_left.txt")
-RIGHT_TXT = Path("emg_right.txt")
-DIFF_TXT = Path("emg_diff.txt")
+LEFT_TXT = Path(os.getenv("EMG_LEFT_TEXT_PATH", BASE_DIR / "emg_left.txt"))
+RIGHT_TXT = Path(os.getenv("EMG_RIGHT_TEXT_PATH", BASE_DIR / "emg_right.txt"))
+DIFF_TXT = Path(os.getenv("EMG_DIFF_TEXT_PATH", BASE_DIR / "emg_diff.txt"))
 
-OUTPUT_DIR = Path("emg_sessions")
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path(os.getenv("EMG_SESSIONS_DIR", BASE_DIR / "emg_sessions"))
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Plot/update
 PUBLISH_HZ = 30

@@ -40,7 +40,18 @@ npm run capture:emg:dual
 npm run capture:emg:single
 ```
 
-The Python files keep serial port, OBS host, OBS password, and calibration settings near the top because those values are hardware- and workstation-specific.
+The Python files keep safe defaults near the top, and common workstation-specific values can be overridden without editing code:
+
+```bash
+EMG_SERIAL_PORT=COM5
+EMG_SERIAL_BAUD=115200
+EMG_OBS_ENABLED=true
+OBS_HOST=127.0.0.1
+OBS_PORT=4455
+OBS_PASSWORD=
+```
+
+The main single/dual helpers now resolve text feeds, calibration files, and session CSV output under `tools/capture/emg/` even when launched from the repo root.
 
 ## PulsePoint Paths
 
