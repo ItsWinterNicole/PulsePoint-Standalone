@@ -4,7 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 export const aiRouter = express.Router();
 
 const MODEL_MAP = {
-  claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929',
+  claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
 };
 
@@ -69,7 +69,7 @@ aiRouter.post('/invoke', async (req, res) => {
     if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
     const wantsJson = !!response_json_schema;
-    const modelName = MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-5-20250929';
+    const modelName = MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6';
     const jsonInstruction = wantsJson
       ? `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(response_json_schema, null, 2)}`
       : '';

@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 const MODEL_MAP = {
-  claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929',
+  claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
 };
 
@@ -61,7 +61,7 @@ export async function aiInvokeInternal({ prompt, response_json_schema, model, ma
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const wantsJson = !!response_json_schema;
   const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-5-20250929',
+    model: MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6',
     max_tokens,
     temperature,
     messages: [{ role: 'user', content: `${prompt}${wantsJson ? `\n\nReturn ONLY valid JSON matching this schema:\n${JSON.stringify(response_json_schema)}` : ''}` }],

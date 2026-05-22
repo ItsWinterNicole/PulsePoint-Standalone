@@ -387,7 +387,7 @@ Factor the journal into your analysis — where the person's subjective experien
 
     const aiPayload = {
       model: "claude_sonnet_4_6",
-      ...(isTechnical ? { max_tokens: 12000 } : {}),
+      max_tokens: isTechnical ? 12000 : 20000,
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `${isTechnical
         ? `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
@@ -451,7 +451,9 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is the primary dataset. For each event: interpret the arousal state at that HR level, what the note reveals about the underlying physiology or anatomy, and how it connects to the session arc. Identify physiological turning points — moments where HR + event note together reveal a shift in autonomic or sensory state.`}` : ""}
+  : `This is the primary dataset, but the warm companion analysis should not become a note-by-note or timestamp-by-timestamp commentary track. Use the full timeline to tell the session story through the meaningful turning points, event clusters, body findings, stimulation changes, and recovery cues that shaped the arc.
+
+Time references are welcome when they anchor an important shift. Curate them. Favor a cohesive narrative that explains what stood out, what changed, and why it mattered for this session over exhausting every logged event. Identify physiological turning points where heart rate and event notes together reveal a shift in arousal, sensation, technique effectiveness, or recovery.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
