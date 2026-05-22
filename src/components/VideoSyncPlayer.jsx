@@ -12,11 +12,11 @@ import {
   ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid,
 } from "recharts";
-import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
+import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 import { base44 } from "@/api/base44Client";
 
 function getCategoryMeta(value) {
-  return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
+  return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
 
 function fmtMmSs(totalSeconds) {
@@ -42,13 +42,36 @@ const AI_EVENT_TAGS = {
   physiological_observation: { label: "Physiology", color: "#14b8a6" },
   stimulation_action: { label: "Stimulation action", color: "#3b82f6" },
   stimulation_change: { label: "Stim change", color: "#06b6d4" },
+  instrumentation_action: { label: "Instrumentation", color: "#0ea5e9" },
+  instrumentation_change: { label: "Instrument change", color: "#06b6d4" },
   sensation_report: { label: "Sensation", color: "#a855f7" },
   position_or_comfort: { label: "Position/comfort", color: "#f59e0b" },
+  comfort_or_tolerance: { label: "Comfort/tolerance", color: "#f59e0b" },
   equipment_or_setup: { label: "Equipment", color: "#64748b" },
   other_context: { label: "Other context", color: "#94a3b8" },
 };
 
-const VALID_EVENT_CATEGORIES = new Set(EVENT_CATEGORIES.map((c) => c.value));
+const SESSION_AI_EVENT_TAGS = [
+  "physical_finding",
+  "physiological_observation",
+  "stimulation_action",
+  "stimulation_change",
+  "sensation_report",
+  "position_or_comfort",
+  "equipment_or_setup",
+  "other_context",
+];
+const EXPLORATION_AI_EVENT_TAGS = [
+  "physical_finding",
+  "physiological_observation",
+  "instrumentation_action",
+  "instrumentation_change",
+  "sensation_report",
+  "position_or_comfort",
+  "comfort_or_tolerance",
+  "equipment_or_setup",
+  "other_context",
+];
 const VALID_AI_EVENT_TAGS = new Set(Object.keys(AI_EVENT_TAGS));
 
 // Nearest HR from sorted chart data
@@ -71,13 +94,13 @@ function _nearbyEvents(events, currentSec, windowSec = 30) {
     .sort((a, b) => a.dist - b.dist);
 }
 
-function CategorySelector({ selected, onChange }) {
+function CategorySelector({ selected, onChange, categories }) {
   const toggle = (val) => {
     onChange(selected.includes(val) ? selected.filter((v) => v !== val) : [...selected, val]);
   };
   return (
     <div className="flex flex-wrap gap-1">
-      {EVENT_CATEGORIES.map((c) => {
+      {categories.map((c) => {
         const active = selected.includes(c.value);
         return (
           <button key={c.value} type="button" onClick={() => toggle(c.value)}
@@ -105,11 +128,13 @@ function AnnotationTagPill({ value }) {
   );
 }
 
-function normalizeTagResult(result) {
+function normalizeTagResult(result, categoryOptions, annotationTagOptions) {
+  const validEventCategories = new Set(categoryOptions.map((category) => category.value));
+  const validAnnotationTags = new Set(annotationTagOptions);
   const categories = (Array.isArray(result?.categories) ? result.categories : [])
-    .filter((cat) => VALID_EVENT_CATEGORIES.has(cat));
+    .filter((cat) => validEventCategories.has(cat));
   const annotationTags = (Array.isArray(result?.annotation_tags) ? result.annotation_tags : [])
-    .filter((tag) => VALID_AI_EVENT_TAGS.has(tag));
+    .filter((tag) => validAnnotationTags.has(tag));
   return {
     categories: categories.length ? [...new Set(categories)] : ["other"],
     annotation_tags: annotationTags.length ? [...new Set(annotationTags)] : ["other_context"],
@@ -122,10 +147,40 @@ function getAnnotationTags(ev) {
   return tags.filter((tag) => VALID_AI_EVENT_TAGS.has(tag));
 }
 
-function heuristicTagEventNote(note) {
+function heuristicTagEventNote(note, isExploration) {
   const text = String(note || "").toLowerCase();
   const categories = new Set();
   const annotationTags = new Set();
+
+  if (isExploration) {
+    if (/\b(foley|catheter|insert|insertion|remove|removal|sound|sounding|dilator|meatus|urethra|urethral|balloon|advance|withdraw|instrument|probe|device|lubric)\b/.test(text)) {
+      categories.add("instrumentation");
+      annotationTags.add("instrumentation_action");
+    }
+    if (/\b(adjust|change|switch|reposition|advance|withdraw|move|movement|rotate|pause|resume|stop|start|tension|size)\b/.test(text)) {
+      categories.add("instrumentation_change");
+      annotationTags.add("instrumentation_change");
+    }
+    if (/\b(leg|legs|feet|foot|toe|toes|tense|relax|shudder|tremor|spasm|breath|breathing|erection|scrot|foreskin|glans|flush|sweat|heart rate|hr|bpm)\b/.test(text)) {
+      categories.add("physical");
+      annotationTags.add(/\b(heart rate|hr|bpm)\b/.test(text) ? "physiological_observation" : "physical_finding");
+    }
+    if (/\b(sensation|feel|felt|pressure|fullness|stretch|awareness|sensitive|discomfort|pain|burn|sting|irritat|comfort|tolerat|pinch)\b/.test(text)) {
+      categories.add(/\b(discomfort|pain|burn|sting|irritat|comfort|tolerat|pinch)\b/.test(text) ? "comfort" : "sensation");
+      annotationTags.add(/\b(discomfort|pain|burn|sting|irritat|comfort|tolerat|pinch)\b/.test(text) ? "comfort_or_tolerance" : "sensation_report");
+    }
+    if (/\b(position|table|pillow|setup|camera|video|light|electrode|wire|strap|towel|sheet)\b/.test(text)) {
+      categories.add(/\b(setup|camera|video|light|electrode|wire|strap|towel|sheet)\b/.test(text) ? "setup" : "comfort");
+      annotationTags.add(/\b(setup|camera|video|light|electrode|wire|strap|towel|sheet)\b/.test(text) ? "equipment_or_setup" : "position_or_comfort");
+    }
+    if (!categories.size) categories.add("other");
+    if (!annotationTags.size) annotationTags.add("other_context");
+    return normalizeTagResult({
+      categories: [...categories],
+      annotation_tags: [...annotationTags],
+      rationale: "Local keyword fallback",
+    }, EXPLORATION_EVENT_CATEGORIES, EXPLORATION_AI_EVENT_TAGS);
+  }
 
   if (/\b(stroke|stroking|grip|squeeze|speed|pace|pressure|manual|sleeve|vibrat|estim|e-stim|tens|foley|catheter|probe|lubric|suction|glans|frenulum|perineal|perineum|shaft)\b/.test(text)) {
     categories.add("stimulation");
@@ -166,11 +221,13 @@ function heuristicTagEventNote(note) {
     categories: [...categories],
     annotation_tags: [...annotationTags],
     rationale: "Local keyword fallback",
-  });
+  }, EVENT_CATEGORIES, SESSION_AI_EVENT_TAGS);
 }
 
-async function classifyEventNoteWithAI(note) {
-  const fallback = heuristicTagEventNote(note);
+async function classifyEventNoteWithAI(note, isExploration) {
+  const categoryOptions = isExploration ? EXPLORATION_EVENT_CATEGORIES : EVENT_CATEGORIES;
+  const annotationTagOptions = isExploration ? EXPLORATION_AI_EVENT_TAGS : SESSION_AI_EVENT_TAGS;
+  const fallback = heuristicTagEventNote(note, isExploration);
   try {
     const result = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_5",
@@ -181,18 +238,47 @@ async function classifyEventNoteWithAI(note) {
         properties: {
           categories: {
             type: "array",
-            items: { type: "string", enum: EVENT_CATEGORIES.map((c) => c.value) },
+            items: { type: "string", enum: categoryOptions.map((c) => c.value) },
           },
           annotation_tags: {
             type: "array",
-            items: { type: "string", enum: Object.keys(AI_EVENT_TAGS) },
+            items: { type: "string", enum: annotationTagOptions },
           },
           rationale: { type: "string" },
         },
         required: ["categories", "annotation_tags", "rationale"],
         additionalProperties: false,
       },
-      prompt: `Classify this timestamped event annotation from a sexual response physiology video review.
+      prompt: isExploration ? `Classify this timestamped event annotation from a body exploration or instrumentation video review.
+
+This record is not a stimulation-session timeline. Do not label notes as stimulation start, pause, resume, or stop.
+
+Return broad event categories plus more specific annotation tags.
+
+Broad category rules:
+- instrumentation: Foley catheter, urethral sounding, dilator, insertion, removal, device contact, movement, or direct instrumentation observation.
+- instrumentation_change: instrument adjustment, depth/position change, size/tool change, insertion/removal transition, or tension/movement change.
+- physical: visible body finding or physiological sign, including legs, feet, breathing, tissue appearance, heart-rate/body response.
+- sensation: subjective sensation such as pressure, fullness, stretch, sensitivity, awareness, or other felt response.
+- comfort: comfort, discomfort, tolerance, irritation, pain, positioning-for-comfort, or pressure concerns.
+- setup: camera/table/environment/device setup details that are not the body finding itself.
+- other: useful context that does not fit above.
+
+Specific annotation tag rules:
+- physical_finding: visible body finding.
+- physiological_observation: telemetry or body response interpretation grounded in the note.
+- instrumentation_action: insertion, removal, Foley/sound/dilator use, or direct device/body interaction.
+- instrumentation_change: tool movement, tension/position adjustment, size/device change, or insertion transition.
+- sensation_report: subjective sensation or felt response.
+- position_or_comfort: body repositioning or comfort adjustment.
+- comfort_or_tolerance: comfort, discomfort, pressure tolerance, irritation, pain, or fit concern.
+- equipment_or_setup: equipment, recording, table, or setup note.
+- other_context: useful context outside the above.
+
+Use multiple categories and tags when one annotation contains multiple things.
+
+Annotation:
+"${String(note).replace(/"/g, '\\"')}"` : `Classify this timestamped event annotation from a sexual response physiology video review.
 
 Return broad event categories plus more specific annotation tags.
 
@@ -218,7 +304,7 @@ Use multiple categories and tags when one annotation contains multiple things.
 Annotation:
 "${String(note).replace(/"/g, '\\"')}"`,
     });
-    const normalized = normalizeTagResult(result);
+    const normalized = normalizeTagResult(result, categoryOptions, annotationTagOptions);
     return {
       categories: normalized.categories.length ? normalized.categories : fallback.categories,
       annotation_tags: normalized.annotation_tags.length ? normalized.annotation_tags : fallback.annotation_tags,
@@ -230,7 +316,11 @@ Annotation:
   }
 }
 
-export default function VideoSyncPlayer({ session, timelineRows }) {
+export default function VideoSyncPlayer({ session, timelineRows, recordType = "session" }) {
+  const isExploration = recordType === "body_exploration";
+  const recordLabel = isExploration ? "exploration" : "session";
+  const categoryOptions = isExploration ? EXPLORATION_EVENT_CATEGORIES : EVENT_CATEGORIES;
+  const defaultCategory = isExploration ? "instrumentation" : "stimulation";
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
   const [videoSrc, setVideoSrc] = useState(null);
@@ -259,7 +349,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   // Add-new state
   const [addingNew, setAddingNew] = useState(false);
   const [newNote, setNewNote] = useState("");
-  const [lastUsedCat, setLastUsedCat] = useState("stimulation");
+  const [lastUsedCat, setLastUsedCat] = useState(defaultCategory);
   const [newCats, setNewCats] = useState([lastUsedCat]);
   const [newMin, setNewMin] = useState("");
   const [newSec, setNewSec] = useState("");
@@ -284,7 +374,12 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
 
   // Rich Whisper prompt written as a natural sentence so the decoder learns the vocabulary
   // and your speech pattern (deliberate pauses, short clauses, anatomical terms).
-  const WHISPER_PROMPT =
+  const WHISPER_PROMPT = isExploration
+    ? "Body exploration note. Foley catheter insertion. Urethral sounding observation. " +
+      "Device movement at the meatus. Balloon awareness. Pressure and comfort noted. " +
+      "Instrumentation paused for repositioning. Gentle withdrawal. Tissue appearance observed. " +
+      "Heart rate change. Breathing relaxed. Irritation and tolerance review."
+    :
     "Session log note. Gentle strokes on the glans penis. Foreskin partially retracted. " +
     "Stimulation paused. Perineum pressure applied. Pelvic floor contraction. " +
     "E-stim via TENS unit. Foley catheter in place. Urethral stimulation. " +
@@ -297,7 +392,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
 
   const getEventClassification = useCallback(async (note) => {
     const cleanNote = String(note || "").trim();
-    if (!cleanNote) return heuristicTagEventNote(cleanNote);
+    if (!cleanNote) return heuristicTagEventNote(cleanNote, isExploration);
     if (autoTagSuggestion && autoTagSuggestionNote === cleanNote) return autoTagSuggestion;
     if (autoTagPromiseRef.current && autoTagPromiseNoteRef.current === cleanNote) {
       return autoTagPromiseRef.current;
@@ -309,7 +404,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     setAutoTagging(true);
     setAutoTagError("");
 
-    const promise = classifyEventNoteWithAI(cleanNote)
+    const promise = classifyEventNoteWithAI(cleanNote, isExploration)
       .then((suggestion) => {
         if (
           autoTagRequestIdRef.current === requestId
@@ -324,7 +419,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
       })
       .catch((err) => {
         console.warn("Event classification failed:", err);
-        const fallback = heuristicTagEventNote(cleanNote);
+        const fallback = heuristicTagEventNote(cleanNote, isExploration);
         if (autoTagRequestIdRef.current === requestId && latestNewNoteRef.current === cleanNote) {
           setAutoTagSuggestion(fallback);
           setAutoTagSuggestionNote(cleanNote);
@@ -341,7 +436,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
 
     autoTagPromiseRef.current = promise;
     return promise;
-  }, [autoTagSuggestion, autoTagSuggestionNote, newCatsTouched]);
+  }, [autoTagSuggestion, autoTagSuggestionNote, isExploration, newCatsTouched]);
 
   const stopListening = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -400,7 +495,8 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   const saveEvents = async (updated) => {
     const sorted = [...updated].sort((a, b) => a.time_s - b.time_s);
     setEvents(sorted);
-    await base44.entities.Session.update(session.id, { event_timeline: sorted });
+    const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+    await entity.update(session.id, { event_timeline: sorted });
   };
 
   const startEdit = (ev, idx) => {
@@ -648,7 +744,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     return chartData.filter(d => d.t >= lo - 5 && d.t <= hi + 5);
   }, [chartData, xDomain]);
 
-  if (!timelineRows.length && !events.length) return null;
+  const hasSidebarContent = chartData.length > 0 || events.length > 0;
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -686,7 +782,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
           <DialogHeader className="pr-8">
             <DialogTitle className="text-sm text-primary">New Event at {fmtMmSs(playheadS)}</DialogTitle>
             <DialogDescription className="text-xs">
-              Capture the current video moment and save it back to this session.
+              Capture the current video moment and save it back to this {recordLabel}.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -699,6 +795,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
             </div>
             <CategorySelector
               selected={newCats}
+              categories={categoryOptions}
               onChange={(cats) => {
                 setNewCatsTouched(true);
                 setNewCats(cats.length ? cats : ["other"]);
@@ -817,7 +914,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
           {/* Video player */}
           <div
             className="w-full min-w-0 space-y-3"
-            style={{ flex: `0 1 ${playerWidth}%` }}
+            style={{ flex: hasSidebarContent ? `0 1 ${playerWidth}%` : "1 1 100%" }}
           >
         {videoSrc ? (
           <div className="space-y-3">
@@ -925,7 +1022,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
 
             {/* Video offset alignment */}
             <div className="flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-2">
-              <span className="text-xs text-muted-foreground shrink-0">Video offset (session start align):</span>
+              <span className="text-xs text-muted-foreground shrink-0">Video offset ({recordLabel} start align):</span>
               <input
                 type="number"
                 value={videoOffset}
@@ -934,7 +1031,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                 step="1"
               />
               <span className="text-xs text-muted-foreground">s</span>
-              <span className="text-xs text-muted-foreground ml-auto">Video 0:00 = Session {fmtMmSs(videoOffset)}</span>
+              <span className="text-xs text-muted-foreground ml-auto">Video 0:00 = {isExploration ? "Exploration" : "Session"} {fmtMmSs(videoOffset)}</span>
             </div>
           </div>
         ) : (
@@ -949,7 +1046,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
         )}
           </div>
 
-          {(chartData.length > 0 || events.length > 0) && (
+          {hasSidebarContent && (
             <div
               onMouseDown={handleWidthDragStart}
               className="hidden xl:flex self-stretch w-3 cursor-ew-resize items-center justify-center group"
@@ -960,10 +1057,11 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
           )}
 
           {/* HR Timeline + event context */}
-          <aside
-            className="w-full xl:min-w-[320px] xl:max-w-[560px] shrink-0 space-y-4 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
-            style={{ flex: `1 1 ${100 - playerWidth}%` }}
-          >
+          {hasSidebarContent && (
+            <aside
+              className="w-full xl:min-w-[320px] xl:max-w-[560px] shrink-0 space-y-4 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
+              style={{ flex: `1 1 ${100 - playerWidth}%` }}
+            >
             {/* HR Timeline */}
             {chartData.length > 0 && (
               <div>
@@ -1005,7 +1103,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                       />
 
                       {/* Phase markers */}
-                      {PHASE_LINES.map(({ key, label, color }) =>
+                      {!isExploration && PHASE_LINES.map(({ key, label, color }) =>
                         session[key] != null ? (
                           <ReferenceLine key={key} x={session[key]} stroke={color} strokeWidth={1.5}
                             strokeDasharray="4 2"
@@ -1161,13 +1259,14 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                 </div>
               );
             })()}
-          </aside>
+            </aside>
+          )}
         </div>
 
         {/* Playhead status bar */}
         <div className="flex items-center gap-3 bg-muted/40 rounded-lg px-3 py-2">
           <span className="font-mono text-sm font-bold text-primary">{fmtMmSs(playheadS)}</span>
-          <span className="text-xs text-muted-foreground">session time</span>
+          <span className="text-xs text-muted-foreground">{recordLabel} time</span>
           {currentHR != null && (
             <>
               <div className="w-px h-4 bg-border" />
@@ -1204,7 +1303,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                       <input type="number" min={0} max={59} value={editSec} onChange={(e) => setEditSec(e.target.value)}
                         className="w-14 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1" />
                     </div>
-                    <CategorySelector selected={editCats} onChange={setEditCats} />
+                    <CategorySelector selected={editCats} onChange={setEditCats} categories={categoryOptions} />
                     <textarea
                       value={editNote}
                       onChange={(e) => setEditNote(e.target.value)}

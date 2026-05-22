@@ -7,59 +7,81 @@ import moment from "moment";
 
 export default function VideoPlayer() {
   const [sessions, setSessions] = useState([]);
+  const [explorations, setExplorations] = useState([]);
+  const [recordType, setRecordType] = useState("session");
   const [selectedId, setSelectedId] = useState("");
-  const [selectedSession, setSelectedSession] = useState(null);
+  const [selectedRecord, setSelectedRecord] = useState(null);
   const [timelineRows, setTimelineRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState(false);
 
   useEffect(() => {
-    base44.entities.Session.list("-date", 200).then((data) => {
-      setSessions(data);
+    Promise.all([
+      base44.entities.Session.list("-date", 200).catch(() => []),
+      base44.entities.BodyExploration.list("-date", 200).catch(() => []),
+    ]).then(([sessionRows, explorationRows]) => {
+      setSessions(sessionRows);
+      setExplorations(explorationRows);
       setLoading(false);
     });
   }, []);
 
-  const handleSelectSession = async (id) => {
+  const handleRecordTypeChange = (type) => {
+    setRecordType(type);
+    setSelectedId("");
+    setSelectedRecord(null);
+    setTimelineRows([]);
+  };
+
+  const handleSelectRecord = async (id) => {
     setSelectedId(id);
-    setSelectedSession(null);
+    setSelectedRecord(null);
     setTimelineRows([]);
     if (!id) return;
     setLoadingSession(true);
-    const [sessionList, rows] = await Promise.all([
-      base44.entities.Session.filter({ id }),
+    const entity = recordType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
+    const [recordList, rows] = await Promise.all([
+      entity.filter({ id }),
       base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
     ]);
-    setSelectedSession(sessionList[0] || null);
+    setSelectedRecord(recordList[0] || null);
     setTimelineRows(rows);
     setLoadingSession(false);
   };
+  const records = recordType === "body_exploration" ? explorations : sessions;
 
   return (
     <div>
       <PageHeader title="Video Sync Player" subtitle="Load a local video and sync it with HR data and event notes" />
 
       <div className="px-4 pb-8 space-y-4">
-        {/* Session picker */}
+        {/* Record picker */}
         <div className="bg-card rounded-xl border border-border p-4 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Select Session</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Select Record</p>
+            <div className="inline-flex rounded-lg border border-border bg-background p-1">
+              <button type="button" onClick={() => handleRecordTypeChange("session")} className={`rounded-md px-3 py-1 text-xs font-medium ${recordType === "session" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Sessions</button>
+              <button type="button" onClick={() => handleRecordTypeChange("body_exploration")} className={`rounded-md px-3 py-1 text-xs font-medium ${recordType === "body_exploration" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Body Exploration</button>
+            </div>
+          </div>
           {loading ? (
             <div className="h-10 flex items-center">
-              <span className="text-sm text-muted-foreground">Loading sessions…</span>
+              <span className="text-sm text-muted-foreground">Loading records…</span>
             </div>
           ) : (
-            <Select value={selectedId} onValueChange={handleSelectSession}>
+            <Select value={selectedId} onValueChange={handleSelectRecord}>
               <SelectTrigger className="h-11">
-                <SelectValue placeholder="Choose a session…" />
+                <SelectValue placeholder={recordType === "body_exploration" ? "Choose a body exploration record…" : "Choose a session…"} />
               </SelectTrigger>
               <SelectContent>
-                {sessions.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {moment(s.date).format("MMM D, YYYY")}
-                    {s.start_time ? ` · ${s.start_time}` : ""}
-                    {s.duration_minutes ? ` · ${s.duration_minutes}m` : ""}
-                    {s.no_climax ? " · NC" : ""}
-                    {(s.event_timeline || []).length > 0 ? ` · ${s.event_timeline.length} events` : ""}
+                {records.map((record) => (
+                  <SelectItem key={record.id} value={record.id}>
+                    {recordType === "body_exploration" && (record.title || record.exploration_type) ? `${record.title || record.exploration_type} · ` : ""}
+                    {moment(record.date).format("MMM D, YYYY")}
+                    {record.start_time ? ` · ${record.start_time}` : ""}
+                    {record.duration_minutes ? ` · ${record.duration_minutes}m` : ""}
+                    {recordType === "session" && record.no_climax ? " · NC" : ""}
+                    {(record.event_timeline || []).length > 0 ? ` · ${record.event_timeline.length} events` : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -75,14 +97,14 @@ export default function VideoPlayer() {
         )}
 
         {/* Player */}
-        {selectedSession && !loadingSession && (
-          <VideoSyncPlayer session={selectedSession} timelineRows={timelineRows} />
+        {selectedRecord && !loadingSession && (
+          <VideoSyncPlayer key={`${recordType}:${selectedRecord.id}`} session={selectedRecord} timelineRows={timelineRows} recordType={recordType} />
         )}
 
         {/* Empty state */}
         {!selectedId && !loading && (
           <div className="text-center py-16 text-muted-foreground">
-            <p className="text-sm">Select a session above to load the video sync player</p>
+            <p className="text-sm">Select a session or body exploration record above to load the video sync player</p>
           </div>
         )}
       </div>

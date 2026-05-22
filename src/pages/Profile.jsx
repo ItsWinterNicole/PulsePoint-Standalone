@@ -29,6 +29,9 @@ function NumInput({ value, onChange, placeholder, min, max }) {
 }
 
 function SelectInput({ value, onChange, options, placeholder = "Not set" }) {
+  const optionValues = options.map((option) => typeof option === "string" ? option : option.value);
+  const hasSavedLegacyValue = value && !optionValues.includes(value);
+
   return (
     <select
       value={value ?? ""}
@@ -36,6 +39,7 @@ function SelectInput({ value, onChange, options, placeholder = "Not set" }) {
       className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
     >
       <option value="">{placeholder}</option>
+      {hasSavedLegacyValue && <option value={value}>Saved: {value}</option>}
       {options.map((option) => {
         const valueOption = typeof option === "string" ? option : option.value;
         const label = typeof option === "string" ? option : option.label;
@@ -54,13 +58,38 @@ const DEFAULT_MECHANICAL_PROFILE = {
   base_diameter: { value: null, unit: "mm" },
   below_glans_diameter: { value: null, unit: "mm" },
   widest_glans_diameter: { value: null, unit: "mm" },
+  visible_meatal_vertical_length: { value: null, unit: "mm" },
+  visible_meatal_horizontal_width: { value: null, unit: "mm" },
   foley_discomfort_factors: [],
 };
 
 const FORESKIN_OPTIONS = ["Fully retracted", "Partially retracted", "Variable", "Not applicable"];
 const GLANS_SENSITIVITY_OPTIONS = ["Low", "Moderate", "High", "Very high", "Variable"];
 const YES_NO_VARIABLE_OPTIONS = ["Yes", "No", "Variable"];
-const MEATAL_SHAPE_OPTIONS = ["Slit", "Oval", "Round", "Irregular", "Prefer not to specify"];
+const MEATAL_SHAPE_OPTIONS = [
+  "Slit-shaped (vertical)",
+  "Slit-shaped (horizontal)",
+  "Oval",
+  "Round",
+  "Irregular / asymmetric",
+  "Prefer not to specify",
+];
+const MEATAL_MOBILITY_OPTIONS = [
+  "Minimal change",
+  "Slight widening",
+  "Noticeable widening",
+  "Significant shape change",
+  "Variable",
+  "Not sure",
+];
+const MEATAL_SENSITIVITY_OPTIONS = ["Low", "Moderate", "High", "Very high", "Variable"];
+const MEATAL_DEVICE_STABILITY_OPTIONS = [
+  "Very stable",
+  "Stable",
+  "Variable",
+  "Movement noticeable",
+  "Highly sensitive to movement",
+];
 const ERECTION_STABILITY_OPTIONS = ["Very stable", "Stable", "Variable", "Unstable"];
 const NEAR_THRESHOLD_OPTIONS = ["Remains rigid", "Slight softening", "Noticeable softening", "Variable"];
 const RECOVERY_EFFECTIVENESS_OPTIONS = ["Poor", "Moderate", "Good", "Excellent", "Not applicable"];
@@ -87,6 +116,12 @@ function normalizeMechanicalProfile(profile) {
   normalized.foley_discomfort_factors = Array.isArray(normalized.foley_discomfort_factors)
     ? normalized.foley_discomfort_factors
     : [];
+  if (normalized.visible_meatal_horizontal_width?.value == null && normalized.visible_meatal_width_mm != null) {
+    normalized.visible_meatal_horizontal_width = {
+      value: normalized.visible_meatal_width_mm,
+      unit: "mm",
+    };
+  }
   return normalized;
 }
 
@@ -293,8 +328,8 @@ export default function Profile() {
   );
 
   return (
-    <div className="px-4 py-6 pb-24 max-w-lg mx-auto space-y-6">
-      <div>
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 pb-24 sm:px-6 lg:px-8">
+      <div className="max-w-3xl">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <User className="w-6 h-6 text-primary" /> Physiological Profile
         </h1>
@@ -303,40 +338,42 @@ export default function Profile() {
         </p>
       </div>
 
-      {/* Demographics */}
-      <div className="bg-card rounded-xl border border-border p-4 space-y-4">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
-          <User className="w-3.5 h-3.5" /> Demographics
-        </h2>
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Age (years)">
-            <NumInput value={form.age} onChange={(v) => setForm((f) => ({ ...f, age: v }))} placeholder="e.g. 35" min={10} max={100} />
-          </Field>
-          <Field label="Weight (kg)">
-            <NumInput value={form.weight_kg} onChange={(v) => setForm((f) => ({ ...f, weight_kg: v }))} placeholder="e.g. 80" min={30} max={250} />
-          </Field>
-        </div>
-        <Field label="Fitness Level">
-          <div className="flex flex-wrap gap-2 mt-1">
-            {FITNESS_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setForm((f) => ({ ...f, fitness_level: opt.value }))}
-                className="px-3 py-1 rounded-full text-xs font-medium border transition-colors"
-                style={form.fitness_level === opt.value
-                  ? { background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))", borderColor: "hsl(var(--primary))" }
-                  : { borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
-                }
-              >
-                {opt.label}
-              </button>
-            ))}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:items-start">
+        <div className="space-y-6">
+          {/* Demographics */}
+          <div className="bg-card rounded-xl border border-border p-4 space-y-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
+              <User className="w-3.5 h-3.5" /> Demographics
+            </h2>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Age (years)">
+                <NumInput value={form.age} onChange={(v) => setForm((f) => ({ ...f, age: v }))} placeholder="e.g. 35" min={10} max={100} />
+              </Field>
+              <Field label="Weight (kg)">
+                <NumInput value={form.weight_kg} onChange={(v) => setForm((f) => ({ ...f, weight_kg: v }))} placeholder="e.g. 80" min={30} max={250} />
+              </Field>
+            </div>
+            <Field label="Fitness Level">
+              <div className="flex flex-wrap gap-2 mt-1">
+                {FITNESS_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setForm((f) => ({ ...f, fitness_level: opt.value }))}
+                    className="px-3 py-1 rounded-full text-xs font-medium border transition-colors"
+                    style={form.fitness_level === opt.value
+                      ? { background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))", borderColor: "hsl(var(--primary))" }
+                      : { borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
           </div>
-        </Field>
-      </div>
 
-      {/* Heart Rate */}
-      <div className="bg-card rounded-xl border border-border p-4 space-y-4">
+          {/* Heart Rate */}
+          <div className="bg-card rounded-xl border border-border p-4 space-y-4">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
           <Heart className="w-3.5 h-3.5" /> Heart Rate Baselines
         </h2>
@@ -387,10 +424,10 @@ export default function Profile() {
             <p className="text-[10px] text-primary mt-1">Computed from sessions: avg {computedRecovery} bpm drop</p>
           )}
         </Field>
-      </div>
+          </div>
 
-      {/* Physical & Anatomical Context */}
-      <div className="bg-card rounded-xl border border-border p-4 space-y-4">
+          {/* Physical & Anatomical Context */}
+          <div className="bg-card rounded-xl border border-border p-4 space-y-4">
         <div>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Scan className="w-3.5 h-3.5" /> Physical & Anatomical Overview
@@ -408,10 +445,12 @@ export default function Profile() {
             className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
         </Field>
-      </div>
+          </div>
+        </div>
 
-      {/* Anatomical / Functional Mechanical Profile */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <div className="space-y-6">
+          {/* Anatomical / Functional Mechanical Profile */}
+          <div className="bg-card rounded-xl border border-border overflow-hidden">
         <button
           type="button"
           onClick={() => setMechanicalOpen((open) => !open)}
@@ -462,11 +501,33 @@ export default function Profile() {
             <section className="space-y-3">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Meatus / Urethral Context</h3>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Meatal Shape">
+                <Field label="Meatal Shape" hint="Select the external visible shape of the meatal opening.">
                   <SelectInput value={mechanicalProfile.meatal_shape} onChange={(value) => updateMechanical("meatal_shape", value)} options={MEATAL_SHAPE_OPTIONS} />
                 </Field>
-                <Field label="Visible Meatal Width (mm)" hint="Approximate visible external opening width at rest. Gentle measurement only.">
-                  <NumInput value={mechanicalProfile.visible_meatal_width_mm} onChange={(value) => updateMechanical("visible_meatal_width_mm", value)} placeholder="e.g. 4" min={0} />
+                <UnitNumberField
+                  label="Visible Meatal Vertical Length"
+                  measure={mechanicalProfile.visible_meatal_vertical_length}
+                  units={DIAMETER_UNITS}
+                  onChange={(value) => updateMechanical("visible_meatal_vertical_length", value)}
+                  placeholder="e.g. 5"
+                  hint="Approximate visible top-to-bottom slit length at rest. Measure naturally without manually stretching tissue."
+                />
+                <UnitNumberField
+                  label="Visible Meatal Horizontal Width"
+                  measure={mechanicalProfile.visible_meatal_horizontal_width}
+                  units={DIAMETER_UNITS}
+                  onChange={(value) => updateMechanical("visible_meatal_horizontal_width", value)}
+                  placeholder="e.g. 3"
+                  hint="Approximate widest naturally visible left-to-right opening at rest. Gentle measurement only; do not manually stretch."
+                />
+                <Field label="Meatal Mobility / Shape Change During Erection" hint="Does the visible opening or shape noticeably change with erection or device placement?">
+                  <SelectInput value={mechanicalProfile.meatal_mobility_shape_change} onChange={(value) => updateMechanical("meatal_mobility_shape_change", value)} options={MEATAL_MOBILITY_OPTIONS} />
+                </Field>
+                <Field label="Meatal Sensitivity">
+                  <SelectInput value={mechanicalProfile.meatal_sensitivity} onChange={(value) => updateMechanical("meatal_sensitivity", value)} options={MEATAL_SENSITIVITY_OPTIONS} />
+                </Field>
+                <Field label="Device Stability at Meatus" hint="How stable do devices such as Foley catheters feel at the meatal interface?">
+                  <SelectInput value={mechanicalProfile.device_stability_at_meatus} onChange={(value) => updateMechanical("device_stability_at_meatus", value)} options={MEATAL_DEVICE_STABILITY_OPTIONS} />
                 </Field>
                 <Field label="Comfortable Inserted Diameter (mm)" hint="Maximum repeatedly comfortable functional diameter, not absolute tolerance.">
                   <NumInput value={mechanicalProfile.comfortable_inserted_diameter_mm} onChange={(value) => updateMechanical("comfortable_inserted_diameter_mm", value)} placeholder="e.g. 6" min={0} />
@@ -481,6 +542,14 @@ export default function Profile() {
                   <input value={mechanicalProfile.stable_foley_range ?? ""} onChange={(e) => updateMechanical("stable_foley_range", e.target.value)} placeholder="e.g. 18-22 Fr" className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
                 </Field>
               </div>
+              <Field label="Meatal Tension / Fit Notes" hint="Any observations related to tension, movement, sealing, pressure, irritation, or device interaction at the meatus.">
+                <textarea
+                  value={mechanicalProfile.meatal_tension_fit_notes ?? ""}
+                  onChange={(e) => updateMechanical("meatal_tension_fit_notes", e.target.value)}
+                  rows={3}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                />
+              </Field>
               <Field label="Foley Discomfort Factors">
                 <MultiSelectButtons options={FOLEY_DISCOMFORT_OPTIONS} selected={mechanicalProfile.foley_discomfort_factors} onChange={(value) => updateMechanical("foley_discomfort_factors", value)} />
               </Field>
@@ -519,10 +588,10 @@ export default function Profile() {
             </section>
           </div>
         )}
-      </div>
+          </div>
 
-      {/* Arousal Profile */}
-      <div className="bg-card rounded-xl border border-border p-4 space-y-4">
+          {/* Arousal Profile */}
+          <div className="bg-card rounded-xl border border-border p-4 space-y-4">
         <div>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Flame className="w-3.5 h-3.5" /> Arousal Profile
@@ -626,6 +695,8 @@ export default function Profile() {
             className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
         </Field>
+          </div>
+        </div>
       </div>
 
       {/* AI Interview */}

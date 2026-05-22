@@ -15,6 +15,18 @@ export const EVENT_CATEGORIES = [
   { value: "other", label: "Other", color: "#94a3b8" },
 ];
 
+export const EXPLORATION_EVENT_CATEGORIES = [
+  { value: "instrumentation", label: "Instrumentation", color: "#0ea5e9" },
+  { value: "instrumentation_change", label: "Instrument Change", color: "#06b6d4" },
+  { value: "physical", label: "Physical", color: "#10b981" },
+  { value: "sensation", label: "Sensation", color: "#a855f7" },
+  { value: "comfort", label: "Comfort", color: "#f59e0b" },
+  { value: "setup", label: "Setup", color: "#64748b" },
+  { value: "other", label: "Other", color: "#94a3b8" },
+];
+
+const ALL_EVENT_CATEGORIES = [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES];
+
 // Legacy string categories to migrate away from (old pause/resume values)
 const LEGACY_PAUSE_RESUME = ["pause", "resume", "paused", "resumed"];
 
@@ -27,7 +39,7 @@ export function normalizeCategoryArray(raw) {
 }
 
 function getCategoryMeta(value) {
-  return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
+  return ALL_EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
 
 function fmtMmSs(totalSeconds) {
@@ -49,7 +61,7 @@ function CategoryPill({ value, small }) {
 }
 
 // Multi-category pill selector
-function CategorySelector({ selected, onChange }) {
+function CategorySelector({ selected, onChange, categories = EVENT_CATEGORIES }) {
   const toggle = (val) => {
     if (selected.includes(val)) {
       onChange(selected.filter((v) => v !== val));
@@ -59,7 +71,7 @@ function CategorySelector({ selected, onChange }) {
   };
   return (
     <div className="flex flex-wrap gap-1.5">
-      {EVENT_CATEGORIES.map((c) => {
+      {categories.map((c) => {
         const active = selected.includes(c.value);
         return (
           <button key={c.value} type="button" onClick={() => toggle(c.value)}
@@ -80,7 +92,7 @@ function getCategories(ev) {
   return normalizeCategoryArray(ev.category);
 }
 
-function EventRow({ ev, idx, onRemove, onUpdate }) {
+function EventRow({ ev, idx, onRemove, onUpdate, categories }) {
   const [editing, setEditing] = useState(false);
   const [editMin, setEditMin] = useState(String(Math.floor(ev.time_s / 60)));
   const [editSec, setEditSec] = useState(String(ev.time_s % 60));
@@ -115,7 +127,7 @@ function EventRow({ ev, idx, onRemove, onUpdate }) {
           <Input type="number" min={0} max={59} value={editSec} onChange={(e) => setEditSec(e.target.value)}
             className="h-8 w-14 font-mono text-center text-xs" placeholder="Sec" />
         </div>
-        <CategorySelector selected={editCats} onChange={setEditCats} />
+        <CategorySelector selected={editCats} onChange={setEditCats} categories={categories} />
         <Textarea value={editNote} onChange={(e) => setEditNote(e.target.value)} rows={2} className="text-sm resize-none" />
         <div className="flex gap-2">
           <Button size="sm" className="h-7 text-xs gap-1" onClick={saveEdit}><Check className="w-3 h-3" />Save</Button>
@@ -150,10 +162,11 @@ function EventRow({ ev, idx, onRemove, onUpdate }) {
 export default function EventTimelineSection({ data, onChange }) {
   const events = data.event_timeline || [];
   const isExploration = !!data.standalone_body_exploration;
+  const categoryOptions = isExploration ? EXPLORATION_EVENT_CATEGORIES : EVENT_CATEGORIES;
   const [minutes, setMinutes] = useState("");
   const [seconds, setSeconds] = useState("");
   const [noteInput, setNoteInput] = useState("");
-  const [categories, setCategories] = useState(["stimulation"]);
+  const [categories, setCategories] = useState([isExploration ? "instrumentation" : "stimulation"]);
   const [timeError, setTimeError] = useState(false);
 
   const update = (newEvents) => onChange({ ...data, event_timeline: newEvents });
@@ -194,7 +207,7 @@ export default function EventTimelineSection({ data, onChange }) {
       {events.length > 0 && (
         <div className="space-y-1.5">
           {events.map((ev, i) => (
-            <EventRow key={i} ev={ev} idx={i} onRemove={removeEvent} onUpdate={updateEvent} />
+            <EventRow key={i} ev={ev} idx={i} onRemove={removeEvent} onUpdate={updateEvent} categories={categoryOptions} />
           ))}
         </div>
       )}
@@ -213,7 +226,7 @@ export default function EventTimelineSection({ data, onChange }) {
           {timeError && <p className="text-[10px] text-destructive">Valid time required</p>}
         </div>
 
-        <CategorySelector selected={categories} onChange={setCategories} />
+        <CategorySelector selected={categories} onChange={setCategories} categories={categoryOptions} />
 
         <div className="flex gap-2 items-end">
           <Textarea value={noteInput} onChange={(e) => setNoteInput(e.target.value)}

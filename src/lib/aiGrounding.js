@@ -34,7 +34,15 @@ function buildMechanicalProfileContext(profile) {
   addLine(lines, "Glans sensitivity", profile.glans_sensitivity);
   addLine(lines, "Glans overstimulation near climax", profile.glans_overstimulation_near_climax);
   addLine(lines, "Meatal shape", profile.meatal_shape);
-  addLine(lines, "Visible meatal width", profile.visible_meatal_width_mm != null ? `${profile.visible_meatal_width_mm} mm` : "");
+  addMeasurementLine(lines, "Visible meatal vertical length", profile.visible_meatal_vertical_length);
+  addMeasurementLine(lines, "Visible meatal horizontal width", profile.visible_meatal_horizontal_width);
+  if (profile.visible_meatal_horizontal_width?.value == null || !profile.visible_meatal_horizontal_width?.unit) {
+    addLine(lines, "Visible meatal width", profile.visible_meatal_width_mm != null ? `${profile.visible_meatal_width_mm} mm` : "");
+  }
+  addLine(lines, "Meatal mobility or shape change during erection", profile.meatal_mobility_shape_change);
+  addLine(lines, "Meatal sensitivity", profile.meatal_sensitivity);
+  addLine(lines, "Device stability at meatus", profile.device_stability_at_meatus);
+  addLine(lines, "Meatal tension or fit notes", profile.meatal_tension_fit_notes, 900);
   addLine(lines, "Comfortable inserted diameter", profile.comfortable_inserted_diameter_mm != null ? `${profile.comfortable_inserted_diameter_mm} mm` : "");
   addLine(lines, "Maximum tolerated diameter", profile.maximum_tolerated_diameter_mm != null ? `${profile.maximum_tolerated_diameter_mm} mm` : "");
   addLine(lines, "Preferred Foley size", profile.preferred_foley_size_fr != null ? `${profile.preferred_foley_size_fr} French` : "");
@@ -106,5 +114,7 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Do not assume person-specific anatomy or sensations that are not present in the data. You may discuss anatomy and physiology implied by logged methods or sensations, such as glans, foreskin, urethral, perineal, pelvic floor, ejaculatory, autonomic, or recovery physiology when those methods or cues are present.
 - Use anatomical dimensions only when they meaningfully affect stimulation mechanics, device interaction, pressure distribution, or interpretation of repeated observed patterns.
 - Do not use anatomy for unsupported physiological claims, vanity assumptions, or speculative causal conclusions.
+- Meatal morphology may be considered only when interpreting device fit, movement perception, sealing behavior, stimulation mechanics, or repeated observed functional patterns.
+- Do not use morphology for unsupported causal physiological claims or speculative conclusions.
 - Do not turn ambiguous pauses, slowdowns, or non-climax sessions into psychological conclusions.`;
 }

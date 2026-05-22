@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import TTSReader from "./TTSReader";
-import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 
 const SECTION_DEFS = [
   { key: "telemetry_findings", label: "Telemetry Findings", icon: <Activity className="h-3.5 w-3.5" />, color: "hsl(var(--chart-2))" },
@@ -14,7 +14,7 @@ const SECTION_DEFS = [
 ];
 
 function categoryLabel(value) {
-  return EVENT_CATEGORIES.find((item) => item.value === value)?.label || String(value || "Other");
+  return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((item) => item.value === value)?.label || String(value || "Other");
 }
 
 function aiErrorMessage(error) {
