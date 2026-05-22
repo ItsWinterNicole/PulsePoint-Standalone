@@ -14,6 +14,42 @@ function addLine(lines, label, value, maxLength) {
   if (cleaned) lines.push(`- ${label}: ${cleaned}`);
 }
 
+function addMeasurementLine(lines, label, measurement) {
+  if (!measurement || measurement.value == null || !measurement.unit) return;
+  addLine(lines, label, `${measurement.value} ${measurement.unit}`);
+}
+
+function buildMechanicalProfileContext(profile) {
+  if (!profile) return [];
+
+  const lines = [];
+  addMeasurementLine(lines, "Bone-pressed erect length", profile.bone_pressed_erect_length);
+  addMeasurementLine(lines, "Visible erect length", profile.visible_erect_length);
+  addMeasurementLine(lines, "Mid-shaft diameter", profile.mid_shaft_diameter);
+  addMeasurementLine(lines, "Base diameter", profile.base_diameter);
+  addMeasurementLine(lines, "Diameter just below glans", profile.below_glans_diameter);
+  addMeasurementLine(lines, "Widest glans diameter", profile.widest_glans_diameter);
+  addLine(lines, "Circumcision status", profile.circumcision_status);
+  addLine(lines, "Foreskin behavior during sessions", profile.foreskin_behavior);
+  addLine(lines, "Glans sensitivity", profile.glans_sensitivity);
+  addLine(lines, "Glans overstimulation near climax", profile.glans_overstimulation_near_climax);
+  addLine(lines, "Meatal shape", profile.meatal_shape);
+  addLine(lines, "Visible meatal width", profile.visible_meatal_width_mm != null ? `${profile.visible_meatal_width_mm} mm` : "");
+  addLine(lines, "Comfortable inserted diameter", profile.comfortable_inserted_diameter_mm != null ? `${profile.comfortable_inserted_diameter_mm} mm` : "");
+  addLine(lines, "Maximum tolerated diameter", profile.maximum_tolerated_diameter_mm != null ? `${profile.maximum_tolerated_diameter_mm} mm` : "");
+  addLine(lines, "Preferred Foley size", profile.preferred_foley_size_fr != null ? `${profile.preferred_foley_size_fr} French` : "");
+  addLine(lines, "Stable Foley range", profile.stable_foley_range);
+  addLine(lines, "Foley discomfort factors", profile.foley_discomfort_factors);
+  addLine(lines, "Full erection stability early session", profile.full_erection_stability_early_session);
+  addLine(lines, "Near-threshold erection behavior", profile.near_threshold_erection_behavior);
+  addLine(lines, "Finger-on-glans recovery effectiveness", profile.finger_on_glans_recovery_effectiveness);
+  addLine(lines, "Full-hand stimulation effectiveness near threshold", profile.full_hand_stimulation_effectiveness_near_threshold);
+  addLine(lines, "Sleeve fit dynamics", profile.sleeve_fit_dynamics);
+  addLine(lines, "Device movement sensitivity", profile.device_movement_sensitivity);
+  addLine(lines, "Additional functional notes", profile.additional_functional_notes, 1200);
+  return lines;
+}
+
 export function buildGlobalProfileContext(userProfile) {
   if (!userProfile) return "";
 
@@ -32,6 +68,8 @@ export function buildGlobalProfileContext(userProfile) {
   addLine(lines, "Arousal notes", userProfile.arousal_notes, 1200);
   addLine(lines, "Profile notes", userProfile.profile_notes || userProfile.notes, 1200);
   addLine(lines, "Anatomical context", userProfile.anatomical_context || userProfile.anatomy_notes, 900);
+  const mechanicalLines = buildMechanicalProfileContext(userProfile.anatomical_mechanical_profile);
+  if (mechanicalLines.length) lines.push("Functional mechanical profile:", ...mechanicalLines);
 
   return lines.length ? lines.join("\n") : "";
 }
@@ -66,5 +104,7 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Do not present speculation as established physiology.
 - Do not invent hormone explanations, neurological localization claims, or anatomical causal claims that are not directly supported by the available evidence.
 - Do not assume person-specific anatomy or sensations that are not present in the data. You may discuss anatomy and physiology implied by logged methods or sensations, such as glans, foreskin, urethral, perineal, pelvic floor, ejaculatory, autonomic, or recovery physiology when those methods or cues are present.
+- Use anatomical dimensions only when they meaningfully affect stimulation mechanics, device interaction, pressure distribution, or interpretation of repeated observed patterns.
+- Do not use anatomy for unsupported physiological claims, vanity assumptions, or speculative causal conclusions.
 - Do not turn ambiguous pauses, slowdowns, or non-climax sessions into psychological conclusions.`;
 }

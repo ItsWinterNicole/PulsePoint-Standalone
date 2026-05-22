@@ -55,7 +55,7 @@ export default function NotesMediaSection({ data, onChange }) {
         <Textarea
           value={data.notes || ""}
           onChange={(e) => update("notes", e.target.value)}
-          placeholder="Freeform session notes..."
+          placeholder={data.standalone_body_exploration ? "Freeform exploration notes..." : "Freeform session notes..."}
           rows={4}
           className="mt-1"
         />
@@ -151,7 +151,7 @@ export default function NotesMediaSection({ data, onChange }) {
       </div>
 
       <div className="flex items-center justify-between py-2">
-        <Label className="text-sm">Favorite Session</Label>
+        <Label className="text-sm">{data.standalone_body_exploration ? "Favorite Exploration" : "Favorite Session"}</Label>
         <button type="button" onClick={() => update("is_favorite", !data.is_favorite)}>
           {data.is_favorite ? (
             <Star className="w-6 h-6 text-yellow-500 fill-yellow-500" />

@@ -28,7 +28,9 @@ export default function SessionInfoSection({ data, onChange }) {
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Session Info</h3>
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">
+        {data.standalone_body_exploration ? "Exploration Timing" : "Session Info"}
+      </h3>
 
       {hasHrTiming && (
         <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 space-y-3">

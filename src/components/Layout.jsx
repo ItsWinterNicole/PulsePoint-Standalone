@@ -8,6 +8,7 @@ const navItems = [
 { path: "/", icon: LayoutDashboard, label: "Dashboard" },
 { path: "/sessions", icon: List, label: "Sessions" },
 { path: "/new", icon: PlusCircle, label: "New Session" },
+{ path: "/exploration", icon: ScanSearch, label: "Body Exploration" },
 { path: "/journal", icon: BookOpen, label: "Journal" },
 { path: "/capture", icon: Radio, label: "Live Capture" },
 { path: "/compare", icon: GitCompare, label: "Compare" },

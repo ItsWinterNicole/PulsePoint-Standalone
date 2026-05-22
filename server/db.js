@@ -12,6 +12,7 @@ db.pragma('foreign_keys = ON');
 
 export const ENTITY_NAMES = [
   'Session',
+  'BodyExploration',
   'HeartRateTimeline',
   'EMGTimeline',
   'AudioExport',

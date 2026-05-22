@@ -149,6 +149,7 @@ function EventRow({ ev, idx, onRemove, onUpdate }) {
 
 export default function EventTimelineSection({ data, onChange }) {
   const events = data.event_timeline || [];
+  const isExploration = !!data.standalone_body_exploration;
   const [minutes, setMinutes] = useState("");
   const [seconds, setSeconds] = useState("");
   const [noteInput, setNoteInput] = useState("");
@@ -181,9 +182,13 @@ export default function EventTimelineSection({ data, onChange }) {
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Event Timeline</h3>
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">
+        {isExploration ? "Observation Timeline" : "Event Timeline"}
+      </h3>
       <p className="text-xs text-muted-foreground -mt-2">
-        Log notable moments — stimulation changes, sensations, pauses, or physical events. Select multiple tags.
+        {isExploration
+          ? "Log notable moments, sensations, instrumentation changes, comfort shifts, or physical observations. Select multiple tags."
+          : "Log notable moments — stimulation changes, sensations, pauses, or physical events. Select multiple tags."}
       </p>
 
       {events.length > 0 && (

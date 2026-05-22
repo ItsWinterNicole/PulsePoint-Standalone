@@ -1,15 +1,15 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
-import { User, Heart, Activity, Scan, RefreshCw, CheckCircle, Flame } from "lucide-react";
+import { User, Heart, Scan, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Flame, Ruler } from "lucide-react";
 import AIChat from "../components/AIChat";
 
 function Field({ label, hint, children }) {
   return (
     <div className="space-y-1">
       <label className="text-xs font-semibold text-foreground/80">{label}</label>
-      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
       {children}
+      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -25,6 +25,144 @@ function NumInput({ value, onChange, placeholder, min, max }) {
       placeholder={placeholder}
       className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
     />
+  );
+}
+
+function SelectInput({ value, onChange, options, placeholder = "Not set" }) {
+  return (
+    <select
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value || null)}
+      className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((option) => {
+        const valueOption = typeof option === "string" ? option : option.value;
+        const label = typeof option === "string" ? option : option.label;
+        return <option key={valueOption} value={valueOption}>{label}</option>;
+      })}
+    </select>
+  );
+}
+
+const LENGTH_UNITS = ["inches", "cm"];
+const DIAMETER_UNITS = ["mm", "inches"];
+const DEFAULT_MECHANICAL_PROFILE = {
+  bone_pressed_erect_length: { value: null, unit: "inches" },
+  visible_erect_length: { value: null, unit: "inches" },
+  mid_shaft_diameter: { value: null, unit: "mm" },
+  base_diameter: { value: null, unit: "mm" },
+  below_glans_diameter: { value: null, unit: "mm" },
+  widest_glans_diameter: { value: null, unit: "mm" },
+  foley_discomfort_factors: [],
+};
+
+const FORESKIN_OPTIONS = ["Fully retracted", "Partially retracted", "Variable", "Not applicable"];
+const GLANS_SENSITIVITY_OPTIONS = ["Low", "Moderate", "High", "Very high", "Variable"];
+const YES_NO_VARIABLE_OPTIONS = ["Yes", "No", "Variable"];
+const MEATAL_SHAPE_OPTIONS = ["Slit", "Oval", "Round", "Irregular", "Prefer not to specify"];
+const ERECTION_STABILITY_OPTIONS = ["Very stable", "Stable", "Variable", "Unstable"];
+const NEAR_THRESHOLD_OPTIONS = ["Remains rigid", "Slight softening", "Noticeable softening", "Variable"];
+const RECOVERY_EFFECTIVENESS_OPTIONS = ["Poor", "Moderate", "Good", "Excellent", "Not applicable"];
+const HAND_EFFECTIVENESS_OPTIONS = ["More effective", "Less effective", "Same", "Variable"];
+const SLEEVE_FIT_OPTIONS = ["Too loose", "Slightly loose", "Ideal", "Slightly tight", "Overly compressive", "Variable"];
+const DEVICE_MOVEMENT_OPTIONS = ["Low", "Moderate", "High"];
+const FOLEY_DISCOMFORT_OPTIONS = [
+  "Meatal tension",
+  "Device movement",
+  "Balloon awareness",
+  "Urethral pressure",
+  "Irritation after prolonged wear",
+  "Friction",
+  "Other",
+];
+
+function normalizeMechanicalProfile(profile) {
+  const normalized = { ...DEFAULT_MECHANICAL_PROFILE, ...(profile || {}) };
+  Object.keys(DEFAULT_MECHANICAL_PROFILE).forEach((key) => {
+    if (DEFAULT_MECHANICAL_PROFILE[key]?.unit) {
+      normalized[key] = { ...DEFAULT_MECHANICAL_PROFILE[key], ...(profile?.[key] || {}) };
+    }
+  });
+  normalized.foley_discomfort_factors = Array.isArray(normalized.foley_discomfort_factors)
+    ? normalized.foley_discomfort_factors
+    : [];
+  return normalized;
+}
+
+function roundMeasurement(value, unit) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const precision = unit === "inches" ? 3 : 2;
+  return Number(Number(value).toFixed(precision));
+}
+
+function convertMeasurement(value, from, to) {
+  if (value == null || from === to) return value;
+  if (from === "inches" && to === "cm") return roundMeasurement(Number(value) * 2.54, to);
+  if (from === "cm" && to === "inches") return roundMeasurement(Number(value) / 2.54, to);
+  if (from === "inches" && to === "mm") return roundMeasurement(Number(value) * 25.4, to);
+  if (from === "mm" && to === "inches") return roundMeasurement(Number(value) / 25.4, to);
+  return value;
+}
+
+function UnitNumberField({ label, hint, measure, units, onChange, min = 0, placeholder }) {
+  const value = measure || { value: null, unit: units[0] };
+  const selectUnit = (unit) => onChange({
+    value: convertMeasurement(value.value, value.unit, unit),
+    unit,
+  });
+
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-semibold text-foreground/80">{label}</label>
+      <div className="flex gap-2">
+        <input
+          type="number"
+          min={min}
+          step="any"
+          value={value.value ?? ""}
+          onChange={(e) => onChange({ ...value, value: e.target.value === "" ? null : Number(e.target.value) })}
+          placeholder={placeholder}
+          className="min-w-0 flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        <div className="flex shrink-0 rounded-lg border border-border bg-background p-1">
+          {units.map((unit) => (
+            <button
+              key={unit}
+              type="button"
+              onClick={() => selectUnit(unit)}
+              className={`rounded-md px-2 py-1 text-xs font-medium ${value.unit === unit ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+            >
+              {unit}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="text-[10px] leading-relaxed text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+function MultiSelectButtons({ options, selected, onChange }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const active = selected.includes(option);
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(active ? selected.filter((item) => item !== option) : [...selected, option])}
+            className="px-3 py-1 rounded-full text-xs font-medium border transition-colors"
+            style={active
+              ? { background: "hsl(var(--accent))", color: "hsl(var(--accent-foreground))", borderColor: "hsl(var(--accent))" }
+              : { borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -77,6 +215,7 @@ export default function Profile() {
   const [computing, setComputing] = useState(false);
   const [computedRecovery, setComputedRecovery] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
+  const [mechanicalOpen, setMechanicalOpen] = useState(false);
 
   useEffect(() => {
     base44.auth.me().then((u) => {
@@ -95,6 +234,7 @@ export default function Profile() {
         preferred_stimulation: u.preferred_stimulation ?? [],
         refractory_pattern: u.refractory_pattern ?? null,
         arousal_notes: u.arousal_notes ?? "",
+        anatomical_mechanical_profile: normalizeMechanicalProfile(u.anatomical_mechanical_profile),
       });
       setChatMessages(u.profile_chat_messages || []);
     });
@@ -133,6 +273,14 @@ export default function Profile() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
+  const mechanicalProfile = normalizeMechanicalProfile(form.anatomical_mechanical_profile);
+  const updateMechanical = (field, value) => setForm((current) => ({
+    ...current,
+    anatomical_mechanical_profile: {
+      ...normalizeMechanicalProfile(current.anatomical_mechanical_profile),
+      [field]: value,
+    },
+  }));
 
   // Derived estimated max HR
   const estimatedMaxHR = form.age ? 220 - form.age : null;
@@ -262,6 +410,117 @@ export default function Profile() {
         </Field>
       </div>
 
+      {/* Anatomical / Functional Mechanical Profile */}
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setMechanicalOpen((open) => !open)}
+          className="flex w-full items-start justify-between gap-4 p-4 text-left"
+        >
+          <div>
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
+              <Ruler className="w-3.5 h-3.5" /> Anatomical / Functional Mechanical Profile (Optional)
+            </h2>
+            <p className="text-[10px] leading-relaxed text-muted-foreground mt-1">
+              Optional anatomical and functional details that may improve personalized interpretation of stimulation mechanics, device interaction, and repeated physiological patterns.
+            </p>
+          </div>
+          {mechanicalOpen ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+        </button>
+        {mechanicalOpen && (
+          <div className="space-y-5 border-t border-border p-4">
+            <section className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Erect Dimensions</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <UnitNumberField label="Bone-Pressed Erect Length" measure={mechanicalProfile.bone_pressed_erect_length} units={LENGTH_UNITS} onChange={(value) => updateMechanical("bone_pressed_erect_length", value)} placeholder="e.g. 6.5" hint="Measure along the top (dorsal side) from pubic bone to tip of glans. Compress gently to bone for consistency." />
+                <UnitNumberField label="Visible Erect Length" measure={mechanicalProfile.visible_erect_length} units={LENGTH_UNITS} onChange={(value) => updateMechanical("visible_erect_length", value)} placeholder="e.g. 6.0" hint="Same measurement as above, but without compressing to the pubic bone." />
+                <UnitNumberField label="Mid-Shaft Diameter" measure={mechanicalProfile.mid_shaft_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("mid_shaft_diameter", value)} placeholder="e.g. 38" hint="Measure width at the midpoint of the erect shaft using gentle caliper contact without compression." />
+                <UnitNumberField label="Base Diameter" measure={mechanicalProfile.base_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("base_diameter", value)} placeholder="e.g. 40" hint="Measure near the base of the erect shaft without compressing tissue." />
+                <UnitNumberField label="Diameter Just Below Glans" measure={mechanicalProfile.below_glans_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("below_glans_diameter", value)} placeholder="e.g. 36" hint="Measure shaft width immediately below the glans (coronal region). Useful for sleeve fit interpretation." />
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Glans / Foreskin Context</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <UnitNumberField label="Widest Glans Diameter" measure={mechanicalProfile.widest_glans_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("widest_glans_diameter", value)} placeholder="e.g. 42" hint="Measure the widest natural left-to-right span of the glans using gentle caliper contact." />
+                <Field label="Circumcision Status">
+                  <SelectInput value={mechanicalProfile.circumcision_status} onChange={(value) => updateMechanical("circumcision_status", value)} options={["Circumcised", "Uncircumcised"]} />
+                </Field>
+                <Field label="Foreskin Behavior During Sessions">
+                  <SelectInput value={mechanicalProfile.foreskin_behavior} onChange={(value) => updateMechanical("foreskin_behavior", value)} options={FORESKIN_OPTIONS} />
+                </Field>
+                <Field label="Glans Sensitivity">
+                  <SelectInput value={mechanicalProfile.glans_sensitivity} onChange={(value) => updateMechanical("glans_sensitivity", value)} options={GLANS_SENSITIVITY_OPTIONS} />
+                </Field>
+                <Field label="Glans Overstimulation Near Climax" hint="Does glans stimulation become excessively intense or less effective near threshold?">
+                  <SelectInput value={mechanicalProfile.glans_overstimulation_near_climax} onChange={(value) => updateMechanical("glans_overstimulation_near_climax", value)} options={YES_NO_VARIABLE_OPTIONS} />
+                </Field>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Meatus / Urethral Context</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Meatal Shape">
+                  <SelectInput value={mechanicalProfile.meatal_shape} onChange={(value) => updateMechanical("meatal_shape", value)} options={MEATAL_SHAPE_OPTIONS} />
+                </Field>
+                <Field label="Visible Meatal Width (mm)" hint="Approximate visible external opening width at rest. Gentle measurement only.">
+                  <NumInput value={mechanicalProfile.visible_meatal_width_mm} onChange={(value) => updateMechanical("visible_meatal_width_mm", value)} placeholder="e.g. 4" min={0} />
+                </Field>
+                <Field label="Comfortable Inserted Diameter (mm)" hint="Maximum repeatedly comfortable functional diameter, not absolute tolerance.">
+                  <NumInput value={mechanicalProfile.comfortable_inserted_diameter_mm} onChange={(value) => updateMechanical("comfortable_inserted_diameter_mm", value)} placeholder="e.g. 6" min={0} />
+                </Field>
+                <Field label="Maximum Tolerated Diameter (mm)" hint="Optional upper limit if known.">
+                  <NumInput value={mechanicalProfile.maximum_tolerated_diameter_mm} onChange={(value) => updateMechanical("maximum_tolerated_diameter_mm", value)} placeholder="e.g. 7" min={0} />
+                </Field>
+                <Field label="Preferred Foley Size (French)" hint="Preferred catheter size if applicable.">
+                  <NumInput value={mechanicalProfile.preferred_foley_size_fr} onChange={(value) => updateMechanical("preferred_foley_size_fr", value)} placeholder="e.g. 18" min={0} />
+                </Field>
+                <Field label="Stable Foley Range">
+                  <input value={mechanicalProfile.stable_foley_range ?? ""} onChange={(e) => updateMechanical("stable_foley_range", e.target.value)} placeholder="e.g. 18-22 Fr" className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                </Field>
+              </div>
+              <Field label="Foley Discomfort Factors">
+                <MultiSelectButtons options={FOLEY_DISCOMFORT_OPTIONS} selected={mechanicalProfile.foley_discomfort_factors} onChange={(value) => updateMechanical("foley_discomfort_factors", value)} />
+              </Field>
+            </section>
+
+            <section className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Functional Observations</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Full Erection Stability Early Session">
+                  <SelectInput value={mechanicalProfile.full_erection_stability_early_session} onChange={(value) => updateMechanical("full_erection_stability_early_session", value)} options={ERECTION_STABILITY_OPTIONS} />
+                </Field>
+                <Field label="Near-Threshold Erection Behavior">
+                  <SelectInput value={mechanicalProfile.near_threshold_erection_behavior} onChange={(value) => updateMechanical("near_threshold_erection_behavior", value)} options={NEAR_THRESHOLD_OPTIONS} />
+                </Field>
+                <Field label="Finger-on-Glans Recovery Effectiveness" hint="Used when recovering from near-threshold overstimulation or rebuilding erection quality.">
+                  <SelectInput value={mechanicalProfile.finger_on_glans_recovery_effectiveness} onChange={(value) => updateMechanical("finger_on_glans_recovery_effectiveness", value)} options={RECOVERY_EFFECTIVENESS_OPTIONS} />
+                </Field>
+                <Field label="Full-Hand Stimulation Effectiveness Near Threshold">
+                  <SelectInput value={mechanicalProfile.full_hand_stimulation_effectiveness_near_threshold} onChange={(value) => updateMechanical("full_hand_stimulation_effectiveness_near_threshold", value)} options={HAND_EFFECTIVENESS_OPTIONS} />
+                </Field>
+                <Field label="Sleeve Fit Dynamics">
+                  <SelectInput value={mechanicalProfile.sleeve_fit_dynamics} onChange={(value) => updateMechanical("sleeve_fit_dynamics", value)} options={SLEEVE_FIT_OPTIONS} />
+                </Field>
+                <Field label="Device Movement Sensitivity">
+                  <SelectInput value={mechanicalProfile.device_movement_sensitivity} onChange={(value) => updateMechanical("device_movement_sensitivity", value)} options={DEVICE_MOVEMENT_OPTIONS} />
+                </Field>
+              </div>
+              <Field label="Additional Functional Notes" hint="Any anatomy-related functional observations that affect stimulation, device interaction, or climax behavior.">
+                <textarea
+                  value={mechanicalProfile.additional_functional_notes ?? ""}
+                  onChange={(e) => updateMechanical("additional_functional_notes", e.target.value)}
+                  rows={4}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                />
+              </Field>
+            </section>
+          </div>
+        )}
+      </div>
+
       {/* Arousal Profile */}
       <div className="bg-card rounded-xl border border-border p-4 space-y-4">
         <div>
@@ -382,6 +641,7 @@ export default function Profile() {
           `Refractory pattern: ${form.refractory_pattern ?? "not set"}`,
           `Preferred stimulation: ${(form.preferred_stimulation || []).join(", ") || "not set"}`,
           `Arousal notes: ${form.arousal_notes || "none"}`,
+          `Functional mechanical profile: ${Object.entries(mechanicalProfile).filter(([, value]) => Array.isArray(value) ? value.length : typeof value === "object" ? value?.value != null : value).map(([key, value]) => `${key}: ${typeof value === "object" && !Array.isArray(value) ? `${value.value} ${value.unit}` : Array.isArray(value) ? value.join(", ") : value}`).join("; ") || "not set"}`,
         ].join("\n")}
         savedMessages={chatMessages}
         savedNotes={form.arousal_notes}

@@ -27,6 +27,9 @@ import PredictiveModeler from './pages/PredictiveModeler';
 import JournalList from './pages/JournalList';
 import LiveCapture from './pages/LiveCapture';
 import SettingsStatus from './pages/SettingsStatus';
+import BodyExploration from './pages/BodyExploration';
+import BodyExplorationDetail from './pages/BodyExplorationDetail';
+import NewBodyExploration from './pages/NewBodyExploration';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -61,6 +64,10 @@ const AuthenticatedApp = () => {
         <Route path="/sessions/:id/edit" element={<EditSession />} />
         <Route path="/new" element={<NewSession />} />
         <Route path="/new/quick" element={<QuickEntry />} />
+        <Route path="/exploration" element={<BodyExploration />} />
+        <Route path="/exploration/new" element={<NewBodyExploration />} />
+        <Route path="/exploration/:id" element={<BodyExplorationDetail />} />
+        <Route path="/exploration/:id/edit" element={<NewBodyExploration />} />
         <Route path="/compare" element={<Compare />} />
         <Route path="/insights" element={<Insights />} />
         <Route path="/cascade" element={<CascadeAnalysis />} />

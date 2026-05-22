@@ -89,7 +89,7 @@ function entityApi(entity) {
 }
 
 const entityNames = [
-  'Session', 'HeartRateTimeline', 'EMGTimeline', 'AudioExport', 'CompareAnalysisResult',
+  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'AudioExport', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'User',
 ];
 

@@ -179,12 +179,13 @@ export default function HeartRateSection({ data, onChange }) {
   };
 
   const csvRows = data._csv_rows || [];
+  const hideClimaxFields = !!data.no_climax || !!data.telemetry_only;
 
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Heart Rate</h3>
 
-      <div className={`grid gap-3 ${data.no_climax ? "grid-cols-2" : "grid-cols-3"}`}>
+      <div className={`grid gap-3 ${hideClimaxFields ? "grid-cols-2" : "grid-cols-3"}`}>
         <div>
           <Label className="text-xs text-muted-foreground">Avg HR</Label>
           <Input type="number" placeholder="72" value={data.avg_hr || ""} onChange={(e) => update({ avg_hr: Number(e.target.value) })} className="h-12 mt-1 font-mono text-center" />
@@ -193,7 +194,7 @@ export default function HeartRateSection({ data, onChange }) {
           <Label className="text-xs text-muted-foreground">Max HR</Label>
           <Input type="number" placeholder="140" value={data.max_hr || ""} onChange={(e) => update({ max_hr: Number(e.target.value) })} className="h-12 mt-1 font-mono text-center" />
         </div>
-        {!data.no_climax && (
+        {!hideClimaxFields && (
           <div>
             <Label className="text-xs text-muted-foreground">At Climax</Label>
             <Input type="number" placeholder="135" value={data.hr_at_climax || ""} onChange={(e) => update({ hr_at_climax: Number(e.target.value) })} className="h-12 mt-1 font-mono text-center" />
@@ -202,7 +203,7 @@ export default function HeartRateSection({ data, onChange }) {
       </div>
 
       {/* Climax suggestion */}
-      {derived?.peakHr && !data.hr_at_climax && (
+      {derived?.peakHr && !hideClimaxFields && !data.hr_at_climax && (
         <div className="flex items-center gap-2 text-xs bg-chart-4/10 text-chart-4 rounded-lg p-2.5">
           <Info className="w-3.5 h-3.5 shrink-0" />
           <span>Peak HR detected: <strong>{derived.peakHr} bpm</strong> — suggested value for "At Climax" (not auto-filled).</span>
@@ -250,7 +251,7 @@ export default function HeartRateSection({ data, onChange }) {
                 recovery_offset_s: data.recovery_offset_s ?? null,
               }}
               onMarkersChange={(markers) => update(markers)}
-              noClimax={!!data.no_climax}
+              noClimax={hideClimaxFields}
             />
           </div>
 
