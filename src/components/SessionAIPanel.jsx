@@ -369,7 +369,7 @@ ${JSON.stringify({
   arousal_notes: userProfile.arousal_notes,
 }, null, 2)}
 
-    Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
+Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
 
@@ -387,7 +387,7 @@ Factor the journal into your analysis — where the person's subjective experien
 
     const aiPayload = {
       model: "claude_sonnet_4_6",
-      max_tokens: 12000,
+      ...(isTechnical ? { max_tokens: 12000 } : {}),
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `${isTechnical
         ? `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
@@ -400,23 +400,24 @@ TARGET SESSION ANALYSIS STYLE:
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
         : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.`}
 
-${groundingContext}
+${isTechnical ? groundingContext : ""}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
 - Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery).
-- Preserve the explanatory "why"${isTechnical ? " as the center of the answer" : "."} When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
-- Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
 ${isTechnical
-  ? `- Preserve timeline awareness without becoming a transcript. Use time windows, HR ranges, plateaus, marker timing, and major transitions when they clarify the physiology. Do not list every note in order unless each one changes the interpretation.
+  ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
+- Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
+- Preserve timeline awareness without becoming a transcript. Use time windows, HR ranges, plateaus, marker timing, and major transitions when they clarify the physiology. Do not list every note in order unless each one changes the interpretation.
 - When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.`
-  : `- Preserve timeline awareness without becoming a transcript. Favor synthesis over sequence: describe windows, transitions, and clusters of events, then explain the likely physiology behind them.
-- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.`}
+  : ""}
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
 - If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
 - Connect subjective sensations (pressure, throb, tightness, wave) to anatomical generators ONLY if the user actually logged those sensations.
 - Interpret discomfort anatomically ONLY if discomfort entries are present.
-- The goal is a tight, evidence-driven explanation of what happened and why it likely happened. Every anatomical or physiological claim must be traceable to a specific data point in the session, but do not omit relevant physiology when the data supports it.
+- The goal is ${isTechnical
+  ? "a tight, evidence-driven explanation of what happened and why it likely happened. Every anatomical or physiological claim must be traceable to a specific data point in the session, but do not omit relevant physiology when the data supports it."
+  : "a tight, evidence-driven analysis of what actually happened — not a physiology lecture. Every anatomical or physiological claim must be traceable to a specific data point in the session."}
 ${emgSummary ? `
 EMG INTERPRETATION RULES — apply carefully:
 - EMG % is NORMALIZED RELATIVE ACTIVATION, NOT absolute force. Never claim EMG % equals muscle force.
@@ -450,11 +451,7 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is evidence, not an outline. Do not write a note-by-note play-by-play. Group nearby events into meaningful windows and turning points, then interpret what those windows suggest physiologically.
-
-Use time references when they help anchor the story, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
-
-The best output should feel like: "Here is what was happening in the body during this window, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`}` : ""}
+  : `This is the primary dataset. For each event: interpret the arousal state at that HR level, what the note reveals about the underlying physiology or anatomy, and how it connects to the session arc. Identify physiological turning points — moments where HR + event note together reveal a shift in autonomic or sensory state.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
@@ -478,16 +475,18 @@ ${JSON.stringify({
   intensity: session.intensity,
   satisfaction: session.satisfaction,
   build_quality: session.build_quality,
-  release_completeness: session.release_completeness,
-  arousal_depth: session.arousal_depth,
-  erection_stability: session.erection_stability,
-  stimulation_fit: session.stimulation_fit,
-  edge_control_quality: session.control,
-  sensory_immersion: session.sensory_immersion,
-  recovery_quality: session.recovery_quality,
-  discomfort_interruption_impact: session.discomfort_interference,
-  primary_limiting_factor: session.primary_limiting_factor,
-  subjective_notes: session.subjective_notes,
+  ...(isTechnical ? {
+    release_completeness: session.release_completeness,
+    arousal_depth: session.arousal_depth,
+    erection_stability: session.erection_stability,
+    stimulation_fit: session.stimulation_fit,
+    edge_control_quality: session.control,
+    sensory_immersion: session.sensory_immersion,
+    recovery_quality: session.recovery_quality,
+    discomfort_interruption_impact: session.discomfort_interference,
+    primary_limiting_factor: session.primary_limiting_factor,
+    subjective_notes: session.subjective_notes,
+  } : {}),
   build_type: session.build_type,
   climax_duration: session.climax_duration,
   mood: session.mood,
@@ -521,13 +520,13 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
         properties: {
           summary: isTechnical
             ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, and why the session behaved the way it did." }
-            : { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, and why the session behaved the way it did. Avoid simple chronology." },
+            : { type: "string" },
           arousal_arc: isTechnical
             ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, stimulation links, supported anatomy, pre-climax/climax/recovery shifts, and why the session progressed as it did." }
-            : { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs organized by meaningful phase/window. Use times sparingly as anchors, and focus on physiological mechanism and supported possibilities." },
+            : { type: "array", items: { type: "string" } },
           event_analysis: isTechnical
             ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
-            : { type: "array", items: { type: "string" }, description: "Synthesize event clusters and key turning points. Do not list every event. Explain what changed, why stimulation/body cues may have mattered, and how HR supports or complicates the interpretation." },
+            : { type: "array", items: { type: "string" } },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
           notable_findings: { type: "array", items: { type: "string" } },
           recommendations: { type: "array", items: { type: "string" } },

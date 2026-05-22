@@ -17,6 +17,7 @@ import NearClimaxSessionOverview from "../components/NearClimaxSessionOverview";
 import SessionAIPanel from "../components/SessionAIPanel";
 import SessionEvidencePatternPanel from "../components/SessionEvidencePatternPanel";
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
+import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
 import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
@@ -157,6 +158,7 @@ export default function SessionDetail() {
   const [sessionNotes, setSessionNotes] = useState("");
   const [sessionJournal, setSessionJournal] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
+  const [pendingSectionId, setPendingSectionId] = useState("");
 
   const nearClimaxEvents = useMemo(() => {
     if (!session) return [];
@@ -317,6 +319,19 @@ export default function SessionDetail() {
     })();
   }, [id]);
 
+  useEffect(() => {
+    if (!pendingSectionId) return undefined;
+
+    const frame = window.requestAnimationFrame(() => {
+      const section = document.getElementById(pendingSectionId);
+      if (!section) return;
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingSectionId("");
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, pendingSectionId]);
+
   const handleDelete = async () => {
     await base44.entities.Session.delete(id);
     navigate("/sessions");
@@ -348,6 +363,28 @@ export default function SessionDetail() {
     { id: "ai", label: "AI", icon: Brain },
     { id: "journal", label: "Journal", icon: NotebookText },
   ];
+  const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0;
+  const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link;
+  const sectionLinks = [
+    { id: "session-summary", label: "Review / Summary", group: "Session", tab: null },
+    { id: "session-metrics-context", label: "Metrics & Context", group: "Overview", tab: "overview" },
+    { id: "session-physiology", label: "Physiology", group: "Overview", tab: "overview" },
+    { id: "session-devices", label: "Devices / Instrumentation", group: "Overview", tab: "overview" },
+    ...(hasMediaSection ? [{ id: "session-media", label: "Media", group: "Overview", tab: "overview" }] : []),
+    { id: "session-telemetry", label: "Telemetry Charts", group: "Physiology", tab: "physiology" },
+    ...(hasTimelineSection ? [{ id: "session-timeline", label: "Timeline & Events", group: "Timeline", tab: "timeline" }] : []),
+    ...(!s.no_climax ? [
+      { id: "session-ai-companion", label: "AI Companion Analysis", group: "AI", tab: "ai" },
+      { id: "session-ai-technical", label: "Technical Deep Dive", group: "AI", tab: "ai" },
+    ] : []),
+    { id: "session-journal", label: "Journal & Interviews", group: "Journal", tab: "journal" },
+  ];
+  const selectSection = (section) => {
+    if (section.tab && section.tab !== activeTab) {
+      setActiveTab(section.tab);
+    }
+    setPendingSectionId(section.id);
+  };
 
   return (
     <div>
@@ -393,31 +430,35 @@ export default function SessionDetail() {
         </AlertDialog>
       </div>
 
-      <div className="px-2 md:px-4 py-4 space-y-4 pb-8">
-        {/* Executive Summary */}
-        <SessionExecutiveSummary
-          session={s}
-          timelineRows={timelineRows}
-          onScoreComputed={async (pct) => {
-            if (pct != null && s.ai_analysis?.score !== pct) {
-              const updated = { ...(s.ai_analysis || {}), score: pct };
-              await base44.entities.Session.update(id, { ai_analysis: updated });
-              setSession((prev) => ({ ...prev, ai_analysis: updated }));
-            }
-          }}
-        />
+      <SessionSectionNavigator sections={sectionLinks} activeTab={activeTab} onSelect={selectSection} />
 
-        <PostSessionReviewWizard
-          session={s}
-          timelineRows={timelineRows}
-          emgRows={emgRows}
-          onOpenTab={setActiveTab}
-          onEdit={() => navigate(`/sessions/${id}/edit`)}
-          onUpdate={async (updates) => {
-            await base44.entities.Session.update(id, updates);
-            setSession((prev) => ({ ...prev, ...updates }));
-          }}
-        />
+      <div className="px-2 md:px-4 py-4 space-y-4 pb-24 xl:pr-60">
+        {/* Executive Summary */}
+        <section id="session-summary" className="scroll-mt-24 space-y-4">
+          <SessionExecutiveSummary
+            session={s}
+            timelineRows={timelineRows}
+            onScoreComputed={async (pct) => {
+              if (pct != null && s.ai_analysis?.score !== pct) {
+                const updated = { ...(s.ai_analysis || {}), score: pct };
+                await base44.entities.Session.update(id, { ai_analysis: updated });
+                setSession((prev) => ({ ...prev, ai_analysis: updated }));
+              }
+            }}
+          />
+
+          <PostSessionReviewWizard
+            session={s}
+            timelineRows={timelineRows}
+            emgRows={emgRows}
+            onOpenTab={setActiveTab}
+            onEdit={() => navigate(`/sessions/${id}/edit`)}
+            onUpdate={async (updates) => {
+              await base44.entities.Session.update(id, updates);
+              setSession((prev) => ({ ...prev, ...updates }));
+            }}
+          />
+        </section>
 
         <div className="sticky top-0 z-20 -mx-2 md:-mx-4 px-2 md:px-4 py-2 bg-background/95 backdrop-blur border-y border-border">
           <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted/50 p-1">
@@ -440,7 +481,7 @@ export default function SessionDetail() {
         </div>
 
         {/* Subjective Metrics */}
-        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        {activeTab === "overview" && <div id="session-metrics-context" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Metrics</h3>
           <MetricBadge label={s.no_climax ? "Peak Arousal" : "Intensity"} value={s.intensity} />
           <MetricBadge label="Build Quality" value={s.build_quality} />
@@ -452,7 +493,7 @@ export default function SessionDetail() {
         </div>}
 
         {/* Heart Rate + Most Recent Side-by-Side */}
-        {activeTab === "physiology" && <div className="bg-card rounded-xl border border-border p-4">
+        {activeTab === "physiology" && <div id="session-telemetry" className="scroll-mt-24 bg-card rounded-xl border border-border p-4">
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Heart className="w-3.5 h-3.5" /> Heart Rate
@@ -657,7 +698,7 @@ export default function SessionDetail() {
         )}
 
         {/* Methods */}
-        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        {activeTab === "overview" && <div id="session-devices" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Methods</h3>
           <div className="flex flex-wrap gap-1.5">
             {(s.methods || []).map((m) => <Badge key={m} variant="secondary">{m}</Badge>)}
@@ -681,7 +722,7 @@ export default function SessionDetail() {
         </div>}
 
         {/* Physiological */}
-        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-1">
+        {activeTab === "overview" && <div id="session-physiology" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-1">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Physiological</h3>
           <InfoRow label="Ejaculate Volume" value={cap(s.ejaculate_volume)} />
           {s.discomfort_entries?.length > 0 && (
@@ -724,7 +765,7 @@ export default function SessionDetail() {
 
         {/* Media */}
         {activeTab === "overview" && ((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
-          <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+          <div id="session-media" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Media</h3>
             {s.media_images?.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
@@ -788,7 +829,9 @@ export default function SessionDetail() {
 
         {/* Interactive Timeline Player */}
         {activeTab === "timeline" && (timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0) && (
-          <InteractiveTimelinePlayer session={s} timelineRows={timelineRows} />
+          <section id="session-timeline" className="scroll-mt-24">
+            <InteractiveTimelinePlayer session={s} timelineRows={timelineRows} />
+          </section>
         )}
 
         {activeTab === "timeline" && (s.event_timeline || []).length > 0 && (
@@ -823,8 +866,16 @@ export default function SessionDetail() {
         {/* Cascade + AI — only for climax sessions */}
         {activeTab === "ai" && !s.no_climax && <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
         {activeTab === "ai" && !s.no_climax && <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
-        {activeTab === "ai" && !s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
-        {activeTab === "ai" && !s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" />}
+        {activeTab === "ai" && !s.no_climax && (
+          <section id="session-ai-companion" className="scroll-mt-24">
+            <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+          </section>
+        )}
+        {activeTab === "ai" && !s.no_climax && (
+          <section id="session-ai-technical" className="scroll-mt-24">
+            <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" />
+          </section>
+        )}
 
         {/* Timeline & Arousal Narrative */}
         {activeTab === "ai" && !s.no_climax && <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
@@ -833,7 +884,11 @@ export default function SessionDetail() {
         {activeTab === "ai" && s.no_climax && <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />}
 
         {/* Session Journal */}
-        {activeTab === "journal" && <JournalRecorder session={s} timelineRows={timelineRows} userProfile={userProfile} />}
+        {activeTab === "journal" && (
+          <section id="session-journal" className="scroll-mt-24">
+            <JournalRecorder session={s} timelineRows={timelineRows} userProfile={userProfile} />
+          </section>
+        )}
 
         {/* Ask the AI — Session Deep Dive */}
         {activeTab === "journal" && <AIChat
