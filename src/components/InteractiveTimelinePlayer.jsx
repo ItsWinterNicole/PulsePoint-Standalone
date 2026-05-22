@@ -114,6 +114,12 @@ export default function InteractiveTimelinePlayer({
   onActiveEventIndexChange,
   onActiveWaypointChange,
   onWaypointActivate,
+  externalPlaying,
+  externalTime,
+  onPlayingChange,
+  onTimeChange,
+  onPlaybackRateChange,
+  continuousPlayback = false,
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -159,10 +165,31 @@ export default function InteractiveTimelinePlayer({
   }, [onWaypointActivate, waypoints]);
 
   useEffect(() => {
+    if (typeof externalPlaying !== "boolean") return;
+    setPlaying((value) => value === externalPlaying ? value : externalPlaying);
+  }, [externalPlaying]);
+
+  useEffect(() => {
+    if (!Number.isFinite(Number(externalTime))) return;
+    const nextTime = Math.max(0, Number(externalTime));
+    setCurrentTime((value) => Math.abs(value - nextTime) < 0.15 ? value : nextTime);
+    setActiveWaypointIdx(null);
+  }, [externalTime]);
+
+  useEffect(() => {
+    onPlayingChange?.(playing);
+  }, [onPlayingChange, playing]);
+
+  useEffect(() => {
+    onPlaybackRateChange?.(playbackRate);
+  }, [onPlaybackRateChange, playbackRate]);
+
+  useEffect(() => {
     if (playbackTimeoutRef.current) {
       clearTimeout(playbackTimeoutRef.current);
       playbackTimeoutRef.current = null;
     }
+    if (continuousPlayback) return undefined;
     if (!playing) return undefined;
 
     if (waypoints.length === 0) {
@@ -204,9 +231,13 @@ export default function InteractiveTimelinePlayer({
         playbackTimeoutRef.current = null;
       }
     };
-  }, [activateWaypoint, activeWaypointIdx, currentTime, playbackRate, playing, waypoints]);
+  }, [activateWaypoint, activeWaypointIdx, continuousPlayback, currentTime, playbackRate, playing, waypoints]);
 
   const handlePlayPause = () => {
+    if (continuousPlayback) {
+      setPlaying((value) => !value);
+      return;
+    }
     if (playing) {
       setPlaying(false);
     } else {
@@ -221,6 +252,7 @@ export default function InteractiveTimelinePlayer({
     setPlaying(false);
     setCurrentTime(0);
     setActiveWaypointIdx(null);
+    onTimeChange?.(0);
   };
 
   const handleScrub = (e) => {
@@ -228,12 +260,14 @@ export default function InteractiveTimelinePlayer({
     setCurrentTime(val);
     setActiveWaypointIdx(null);
     if (playing) setPlaying(false);
+    onTimeChange?.(val);
   };
 
   const jumpToWaypoint = (idx) => {
     const wp = waypoints[idx];
     if (!wp) return;
     activateWaypoint(idx);
+    onTimeChange?.(wp.time_s);
   };
 
   const jumpNext = () => {
@@ -424,7 +458,9 @@ export default function InteractiveTimelinePlayer({
             </div>
           </div>
           <p className="text-center text-[10px] text-muted-foreground">
-            Events advance automatically. At {playbackRate}x, each waypoint holds for {Math.round(DEFAULT_EVENT_HOLD_MS / playbackRate / 100) / 10} seconds.
+            {continuousPlayback
+              ? "Video playback drives the timeline continuously. Use event ticks or the list to seek to a review moment."
+              : `Events advance automatically. At ${playbackRate}x, each waypoint holds for ${Math.round(DEFAULT_EVENT_HOLD_MS / playbackRate / 100) / 10} seconds.`}
           </p>
 
           {/* Waypoint list */}

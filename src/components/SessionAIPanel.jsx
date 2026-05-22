@@ -405,6 +405,8 @@ COMPANION NARRATIVE STYLE:
 - Keep the detail rich but curated. The analysis should feel observant and slightly lyrical, not like a timeline report or an exhaustive annotation log.
 - Let paragraphs continue the story naturally. Avoid report-style paragraph prefixes such as "Baseline and first contact" or "Recovery" and avoid turning each phase into a labeled subsection.
 - Tell the story of what mattered most in the session. Let repeated evidence strengthen one strong interpretation instead of restating the same finding in every output section.
+- Let arousal_arc carry the main session movement. Do not re-walk the same event sequence again in event_analysis after the arc already narrated it.
+- Use event_analysis for interpretive findings, standout event clusters, and why they matter. Revisit a time anchor only when it adds a fresh layer of meaning instead of replaying chronology.
 - Prefer observed pattern and personalized meaning over mechanistic storytelling. Use physiology and anatomy sparingly when they deepen the lived arc of the session; do not turn distinctive moments into mini anatomy lectures.
 - When the evidence is strongest at the pattern level, stay there. Sound warm, impressed, and thoughtful without over-explaining why the body must have behaved that way.`}
 
@@ -415,6 +417,10 @@ PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:
 ${isTechnical
   ? "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."
   : "- Use heart-rate movement to support the session story: entry state, build, meaningful rises or pauses, climax timing, and recovery. Mechanistic explanations should be occasional, evidence-earned, and clearly useful."}
+${isTechnical
+  ? ""
+  : `- Treat THC, alcohol, nicotine, hydration, fatigue, and other modifiers as individualized session or profile context. If repeated profile evidence supports a pattern, describe that repeated pattern. Otherwise keep the language qualified rather than presenting a universal physiological effect.
+- If the session supports a meaningful pattern more strongly than a mechanism, describe the pattern warmly and confidently without inventing the mechanism.`}
 ${isTechnical
   ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
@@ -463,7 +469,7 @@ Use time references when they anchor the arc, but each time reference should ans
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
   : `This is the primary dataset. Read the full sequence closely, then choose the events that best reveal the session's rhythm, turning points, physical findings, stimulation changes, and recovery. Interpret heart rate and event notes together when they show a meaningful shift in arousal or sensation. Fold repeated or reinforcing notes into a flowing narrative instead of restating every logged moment.
 
-Curate the analysis across sections: if the summary already establishes a standout pattern, later sections should deepen it with fresh context or move to the next meaningful finding rather than repeating the same point.`}` : ""}
+Curate the analysis across sections: if arousal_arc already carries the chronological thread, event_analysis should emphasize the most revealing findings and why they matter instead of narrating the same event path again. If the summary already establishes a standout pattern, later sections should deepen it with fresh context or move to the next meaningful finding rather than repeating the same point.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
