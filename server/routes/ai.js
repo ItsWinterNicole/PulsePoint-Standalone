@@ -1,5 +1,6 @@
 import express from 'express';
 import Anthropic from '@anthropic-ai/sdk';
+import { isAIForensicsEnabled, saveAIForensicFinal } from '../services/aiForensics.js';
 
 export const aiRouter = express.Router();
 
@@ -7,6 +8,15 @@ const MODEL_MAP = {
   claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
 };
+
+aiRouter.post('/forensics/:captureId/final', (req, res) => {
+  if (!isAIForensicsEnabled()) return res.json({ captured: false });
+  try {
+    res.json({ captured: saveAIForensicFinal(req.params.captureId, req.body || {}) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || String(error) });
+  }
+});
 
 function stripCodeFence(text = '') {
   const trimmed = String(text).trim();

@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { writeAIForensicArtifact } from '../services/aiForensics.js';
 
 const MODEL_MAP = {
   claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
@@ -38,7 +39,8 @@ async function createMessageWithRetries(anthropic, payload, attempts = 3, signal
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw new Error('Cancelled');
     try {
-      return await anthropic.messages.create(payload, signal ? { signal } : undefined);
+      const message = await anthropic.messages.create(payload, signal ? { signal } : undefined);
+      return { message, attemptsUsed: attempt + 1 };
     } catch (error) {
       lastError = error;
       if (signal?.aborted) throw new Error('Cancelled');
@@ -56,23 +58,67 @@ async function createMessageWithRetries(anthropic, payload, attempts = 3, signal
   throw lastError;
 }
 
-export async function aiInvokeInternal({ prompt, response_json_schema, model, max_tokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 8192), temperature = 0.3, signal }) {
+function jsonInstruction(responseJsonSchema, schemaMode) {
+  if (!responseJsonSchema) return '';
+  if (schemaMode === 'base44_parity') {
+    const fields = Object.keys(responseJsonSchema.properties || {});
+    const required = responseJsonSchema.required || [];
+    return `\n\nReturn the analysis as valid JSON with these fields: ${fields.join(', ')}. Required fields: ${required.join(', ')}. Use a string for summary and arrays of prose paragraphs for the other fields.`;
+  }
+  return `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(responseJsonSchema, null, 2)}`;
+}
+
+export async function aiInvokeInternal({
+  prompt,
+  response_json_schema,
+  model,
+  max_tokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 8192),
+  temperature = 0.3,
+  schema_mode = 'strict',
+  forensicCaptureId,
+  invocationAttempt = 1,
+  signal,
+}) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('Missing ANTHROPIC_API_KEY');
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const wantsJson = !!response_json_schema;
-  const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6',
+  const resolvedModel = MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6';
+  const providerMessage = `${prompt}${jsonInstruction(response_json_schema, schema_mode)}`;
+  const attemptPrefix = `attempt-${invocationAttempt}`;
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-prompt.txt`, prompt);
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-schema.json`, response_json_schema || null);
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-provider-message.txt`, providerMessage);
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-request-config.json`, {
+    requested_model_alias: model,
+    resolved_model_id: resolvedModel,
+    temperature,
+    max_tokens,
+    schema_mode,
+    structured_response_requested: wantsJson,
+    configured_transport_attempts: Number(process.env.ANTHROPIC_ATTEMPTS || 3),
+  });
+  const { message: msg, attemptsUsed } = await createMessageWithRetries(anthropic, {
+    model: resolvedModel,
     max_tokens,
     temperature,
     messages: [{
       role: 'user',
-      content: `${prompt}${wantsJson ? `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(response_json_schema, null, 2)}` : ''}`,
+      content: providerMessage,
     }],
   }, Number(process.env.ANTHROPIC_ATTEMPTS || 3), signal);
   const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-provider-metadata.json`, {
+    resolved_model_id: resolvedModel,
+    stop_reason: msg.stop_reason,
+    transport_attempts_used: attemptsUsed,
+    usage: msg.usage,
+  });
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-raw-provider-response.txt`, text);
   if (!wantsJson) return text;
   if (msg.stop_reason === 'max_tokens') {
     throw new Error('AI response was cut off before it finished. Try again, or use a smaller/batched analysis request.');
   }
-  return parseJsonOrThrow(text);
+  const parsed = parseJsonOrThrow(text);
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-parsed-result.json`, parsed);
+  return parsed;
 }

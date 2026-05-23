@@ -2,6 +2,7 @@ import express from 'express';
 import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { aiInvokeInternal } from './internalAi.js';
+import { startAIForensicCapture } from '../services/aiForensics.js';
 
 export const jobsRouter = express.Router();
 
@@ -20,15 +21,28 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     model,
     max_tokens,
     temperature,
+    schema_mode,
+    forensic_capture,
+    forensic_session_id,
+    experiment,
     label = 'AI analysis',
   } = payload || {};
   if (!prompt) throw new Error('AI job is missing a prompt');
+  const forensicCaptureId = forensic_capture ? startAIForensicCapture({
+    jobId: context.jobId,
+    label,
+    experiment,
+    sessionId: forensic_session_id,
+    requestedModelAlias: model,
+    schemaMode: schema_mode || 'strict',
+  }) : null;
   context.updateProgress({
     phase: 'preparing',
     current: 0,
     total: 3,
     message: `${label}: preparing prompt (${String(prompt).length.toLocaleString()} characters)…`,
     model: model || process.env.ANTHROPIC_MODEL || 'claude_sonnet_4_6',
+    ...(forensicCaptureId ? { forensic_capture_id: forensicCaptureId } : {}),
   });
   if (context.signal?.aborted) throw new Error('Cancelled');
 
@@ -46,6 +60,9 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       model,
       max_tokens,
       temperature,
+      schema_mode,
+      forensicCaptureId,
+      invocationAttempt: 1,
       signal: context.signal,
     });
   } catch (error) {
@@ -67,6 +84,9 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       model,
       max_tokens: retryMaxTokens,
       temperature,
+      schema_mode,
+      forensicCaptureId,
+      invocationAttempt: 2,
       signal: context.signal,
     });
   }

@@ -41,6 +41,15 @@ export function clearBackgroundJobs() {
   });
 }
 
+export function captureAIForensicFinal(captureId, payload) {
+  if (!captureId) return Promise.resolve(null);
+  return jobRequest(`/ai/forensics/${encodeURIComponent(captureId)}/final`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+}
+
 export function listBackgroundJobs(params = {}) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

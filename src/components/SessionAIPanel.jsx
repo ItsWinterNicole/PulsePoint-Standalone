@@ -5,7 +5,7 @@ import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
-import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { captureAIForensicFinal, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -189,6 +189,14 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result);
+        if (!isTechnical) {
+          await captureAIForensicFinal(completedJob.progress?.forensic_capture_id, {
+            experiment: "base44_companion_parity",
+            analysisField,
+            sessionId: session.id,
+            final_ai_analysis_before_save: parsed,
+          });
+        }
         setResult(parsed);
         setJobStatus({
           ...completedJob,
@@ -214,7 +222,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, result, session, session.id]);
+  }, [analysisField, analysisLabel, isTechnical, result, session, session.id]);
 
   const analyze = async () => {
     setLoading(true);
@@ -387,28 +395,25 @@ Factor the journal into your analysis — where the person's subjective experien
 
     const aiPayload = {
       model: "claude_sonnet_4_6",
-      max_tokens: isTechnical ? 12000 : 20000,
+      ...(isTechnical ? { max_tokens: 12000 } : {}),
+      ...(!isTechnical ? {
+        schema_mode: "base44_parity",
+        forensic_capture: true,
+        forensic_session_id: session.id,
+        experiment: "base44_companion_parity",
+      } : {}),
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `${isTechnical
         ? `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 TARGET SESSION ANALYSIS STYLE:
+- Keep all references to the person's anatomy and physiological experience personally addressed: say "your body," "your penis," "your feet," and "your response" rather than detached phrasing such as "the body" or "the penis," unless a general anatomical statement genuinely requires it.
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
 - Then explain the session through meaningful physiological windows: baseline/entry state, build, plateaus or transitions, pre-climax when supported, climax or non-climax outcome, and recovery.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
-        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
-
-COMPANION NARRATIVE STYLE:
-- Write with warm, fluid, companion-like flow. Sound personally attentive and naturally struck by what is distinctive in this session.
-- Keep the detail rich but curated. The analysis should feel observant and slightly lyrical, not like a timeline report or an exhaustive annotation log.
-- Let paragraphs continue the story naturally. Avoid report-style paragraph prefixes such as "Baseline and first contact" or "Recovery" and avoid turning each phase into a labeled subsection.
-- Tell the story of what mattered most in the session. Let repeated evidence strengthen one strong interpretation instead of restating the same finding in every output section.
-- Let arousal_arc carry the main session movement. Do not re-walk the same event sequence again in event_analysis after the arc already narrated it.
-- Use event_analysis for interpretive findings, standout event clusters, and why they matter. Revisit a time anchor only when it adds a fresh layer of meaning instead of replaying chronology.
-- Prefer observed pattern and personalized meaning over mechanistic storytelling. Use physiology and anatomy sparingly when they deepen the lived arc of the session; do not turn distinctive moments into mini anatomy lectures.
-- When the evidence is strongest at the pattern level, stay there. Sound warm, impressed, and thoughtful without over-explaining why the body must have behaved that way.`}
+        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. When contextually appropriate, prefer personalized embodied phrasing such as "your penis," "your erection," and "your body" over detached phrasing such as "the penis" or "the erection." Keep this natural, clinically grounded, and never forced.`}
 
 ${isTechnical ? groundingContext : ""}
 
@@ -416,11 +421,7 @@ PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
 ${isTechnical
   ? "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."
-  : "- Use heart-rate movement to support the session story: entry state, build, meaningful rises or pauses, climax timing, and recovery. Mechanistic explanations should be occasional, evidence-earned, and clearly useful."}
-${isTechnical
-  ? ""
-  : `- Treat THC, alcohol, nicotine, hydration, fatigue, and other modifiers as individualized session or profile context. If repeated profile evidence supports a pattern, describe that repeated pattern. Otherwise keep the language qualified rather than presenting a universal physiological effect.
-- If the session supports a meaningful pattern more strongly than a mechanism, describe the pattern warmly and confidently without inventing the mechanism.`}
+  : "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."}
 ${isTechnical
   ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
@@ -467,9 +468,7 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is the primary dataset. Read the full sequence closely, then choose the events that best reveal the session's rhythm, turning points, physical findings, stimulation changes, and recovery. Interpret heart rate and event notes together when they show a meaningful shift in arousal or sensation. Fold repeated or reinforcing notes into a flowing narrative instead of restating every logged moment.
-
-Curate the analysis across sections: if arousal_arc already carries the chronological thread, event_analysis should emphasize the most revealing findings and why they matter instead of narrating the same event path again. If the summary already establishes a standout pattern, later sections should deepen it with fresh context or move to the next meaningful finding rather than repeating the same point.`}` : ""}
+  : `This is the primary dataset. For each event: interpret the arousal state at that HR level, what the note reveals about the underlying physiology or anatomy, and how it connects to the session arc. Identify physiological turning points — moments where HR + event note together reveal a shift in autonomic or sensory state.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
@@ -534,7 +533,7 @@ ${journalContext}
 
 Provide ${isTechnical
   ? "a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience. It should be detailed enough to explain the HR arc, phase shifts, stimulation effectiveness, distinctive sensations, and recovery pattern, while remaining smooth enough for text-to-speech narration."
-  : "a warm, physiologically informed analysis that tells the story of this session with curated detail, personal meaning, and natural flow. Preserve what is distinctive. Explain only the physiology that makes the observation clearer."}`,
+  : "a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience."}`,
       response_json_schema: {
         type: "object",
         properties: {
@@ -576,6 +575,14 @@ Provide ${isTechnical
     });
 
     const parsed = normalizeSessionAnalysis(completedJob.result);
+    if (!isTechnical) {
+      await captureAIForensicFinal(completedJob.progress?.forensic_capture_id, {
+        experiment: "base44_companion_parity",
+        analysisField,
+        sessionId: session.id,
+        final_ai_analysis_before_save: parsed,
+      });
+    }
     setResult(parsed);
     setJobStatus({
       ...completedJob,
