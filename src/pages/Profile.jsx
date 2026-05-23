@@ -702,6 +702,7 @@ export default function Profile() {
       {/* AI Interview */}
       <AIChat
         mode="profile"
+        userProfile={form}
         context={[
           `Age: ${form.age ?? "not set"}, Weight: ${form.weight_kg ?? "not set"}kg, Fitness: ${form.fitness_level ?? "not set"}`,
           `Resting HR: ${form.resting_hr ?? "not set"} bpm, Max HR: ${form.max_hr ?? "not set"} bpm, Recovery HR drop 60s: ${form.recovery_hr_60s ?? "not set"} bpm`,

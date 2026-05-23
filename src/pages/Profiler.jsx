@@ -490,6 +490,7 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
 
     const res = await runProfilerAIJob({
       model: "claude_sonnet_4_6",
+      temperature: 0.5,
       prompt: `You are an expert physiological and sexual response analyst. Based on ${sessions.length} recorded sessions and profile notes, generate a comprehensive, deeply personal physiological and arousal profile. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
@@ -515,6 +516,7 @@ For this longitudinal profile, preserve the warm, personalized interpretive voic
 - Mechanism-level explanations about nerves, hormones, tissue adaptation, anatomy, or psychology must stay qualified unless directly supported by the available evidence.
 - When the person's own hypothesis appears in notes, identify it as their hypothesis or a plausible interpretation rather than silently upgrading it into fact.
 - Recommendations should follow demonstrated session patterns first; avoid turning a single evocative session or an attractive theory into a firm protocol.
+- When populated structured anatomical or functional mechanical profile fields are relevant, incorporate erect dimensions, glans or foreskin context, meatal or urethral dimensions, accommodation or device-fit observations, and functional response observations into the synthesis. Use them to deepen interpretation of supported session findings involving stimulation mechanics, fit, pressure distribution, sensitivity, device interaction, or repeated response patterns; do not force mention of measurements where unrelated or use them to invent causal mechanisms.
 
 MECHANISTIC DISCIPLINE:
 Describing repeated patterns is preferred over inventing internal mechanisms.

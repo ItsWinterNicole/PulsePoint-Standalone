@@ -23,6 +23,8 @@ const SESSION_CATEGORIES = [
   { key: "recovery", label: "Recovery & Aftermath", emoji: "🔄", hint: "Post-climax feelings, refractory, residual sensations" },
 ];
 
+const PROFILE_MECHANICAL_RULE = `STRUCTURED ANATOMICAL / FUNCTIONAL PROFILE RULE: If populated profile fields provide erect dimensions, glans or foreskin context, meatal or urethral dimensions, accommodation or device-fit observations, or functional response observations, you may use them to deepen A&P interpretation of the person's reported findings when analytically relevant. Connect dimensions to supported stimulation mechanics, fit, pressure distribution, sensitivity, device interaction, or repeated response patterns only when the available findings support that link. Do not force mention of measurements, and do not turn dimensional data into unsupported causal claims.`;
+
 export default function AIChat({
   mode = "session",
   context,
@@ -158,6 +160,7 @@ export default function AIChat({
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
@@ -213,7 +216,7 @@ ${ANATOMY_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
 
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${systemPrompt}\n\n${groundingContext}\n\nSession data:\n${context}\n\nConversation:\n${history}\n\nRespond now as the AI:`,
+      prompt: `${systemPrompt}${profileMechanicalContext}\n\n${groundingContext}\n\nSession data:\n${context}\n\nConversation:\n${history}\n\nRespond now as the AI:`,
     });
 
     const reply = typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
@@ -230,8 +233,9 @@ No affirmations or pleasantries. 2–3 sentences.`;
     setSavingFindings(true);
     const history = messages.map((m) => `${m.role === "user" ? "User" : "AI"}: ${m.text}`).join("\n");
     const groundingContext = buildAIGroundingContext(userProfile);
+    const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${groundingContext}\n\nBased on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them.\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
+      prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them.\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
     });
     const findings = typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
     const timestamp = new Date().toISOString().slice(0, 10);
