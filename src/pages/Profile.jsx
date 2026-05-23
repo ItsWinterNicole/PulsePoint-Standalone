@@ -514,20 +514,20 @@ export default function Profile() {
                 <UnitNumberField label="Flaccid Base Diameter" measure={mechanicalProfile.flaccid_base_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("flaccid_base_diameter", value)} placeholder="e.g. 30" hint="Optional resting width near the base with gentle contact." />
                 <UnitNumberField label="Resting Widest Glans Diameter" measure={mechanicalProfile.flaccid_widest_glans_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("flaccid_widest_glans_diameter", value)} placeholder="e.g. 32" hint="Optional widest visible glans width at rest." />
               </div>
-              <Field label="Resting Glans Observations">
+              <Field label="Resting Glans Observations" hint="Note visible resting shape, contour, tissue condition, or other neutral observations that may contextualize measurements.">
                 <RichTextEditor value={mechanicalProfile.resting_glans_observations ?? ""} onChange={(value) => updateMechanical("resting_glans_observations", value)} placeholder="Describe resting glans observations when relevant." />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Resting Foreskin Coverage / Mobility">
+                <Field label="Resting Foreskin Coverage / Mobility" hint="Describe coverage at rest and whether movement or retraction changes fit or measurement consistency.">
                   <RichTextEditor value={mechanicalProfile.resting_foreskin_coverage_mobility ?? ""} onChange={(value) => updateMechanical("resting_foreskin_coverage_mobility", value)} placeholder="Optional resting coverage or mobility observations." />
                 </Field>
-                <Field label="Resting Curvature / Orientation">
+                <Field label="Resting Curvature / Orientation" hint="Record resting position or curvature only when it may affect fit, placement, or comparison over time.">
                   <RichTextEditor value={mechanicalProfile.resting_curvature_orientation ?? ""} onChange={(value) => updateMechanical("resting_curvature_orientation", value)} placeholder="Optional curvature or orientation notes." />
                 </Field>
-                <Field label="Resting Meatal Observations">
+                <Field label="Resting Meatal Observations" hint="Record visible resting meatal characteristics that may help interpret accommodation or device fit.">
                   <RichTextEditor value={mechanicalProfile.resting_meatal_observations ?? ""} onChange={(value) => updateMechanical("resting_meatal_observations", value)} placeholder="Optional resting meatal observations." />
                 </Field>
-                <Field label="Resting Urethral Accommodation Notes">
+                <Field label="Resting Urethral Accommodation Notes" hint="Describe comfort, resistance, or repeatable accommodation observations in the resting state.">
                   <RichTextEditor value={mechanicalProfile.resting_urethral_accommodation_notes ?? ""} onChange={(value) => updateMechanical("resting_urethral_accommodation_notes", value)} placeholder="Optional resting accommodation observations." />
                 </Field>
               </div>
@@ -548,13 +548,13 @@ export default function Profile() {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Glans / Foreskin Context</h3>
               <div className="grid gap-4 sm:grid-cols-2">
                 <UnitNumberField label="Widest Glans Diameter" measure={mechanicalProfile.widest_glans_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("widest_glans_diameter", value)} placeholder="e.g. 42" hint="Measure the widest natural left-to-right span of the glans using gentle caliper contact." />
-                <Field label="Circumcision Status">
+                <Field label="Circumcision Status" hint="Provides anatomical context for glans exposure, mobility, and session fit observations.">
                   <SelectInput value={mechanicalProfile.circumcision_status} onChange={(value) => updateMechanical("circumcision_status", value)} options={["Circumcised", "Uncircumcised"]} />
                 </Field>
-                <Field label="Foreskin Behavior During Sessions">
+                <Field label="Foreskin Behavior During Sessions" hint="Select the pattern most consistently observed during activity or device interaction.">
                   <SelectInput value={mechanicalProfile.foreskin_behavior} onChange={(value) => updateMechanical("foreskin_behavior", value)} options={FORESKIN_OPTIONS} />
                 </Field>
-                <Field label="Glans Sensitivity">
+                <Field label="Glans Sensitivity" hint="Rate the usual functional sensitivity level rather than a single-session exception.">
                   <SelectInput value={mechanicalProfile.glans_sensitivity} onChange={(value) => updateMechanical("glans_sensitivity", value)} options={GLANS_SENSITIVITY_OPTIONS} />
                 </Field>
                 <Field label="Glans Overstimulation Near Climax" hint="Does glans stimulation become excessively intense or less effective near threshold?">
@@ -562,10 +562,10 @@ export default function Profile() {
                 </Field>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Erect Glans Observations">
+                <Field label="Erect Glans Observations" hint="Note observations in the erect state when they may affect fit, sensation, or interpretation of dimensions.">
                   <RichTextEditor value={mechanicalProfile.erect_glans_observations ?? ""} onChange={(value) => updateMechanical("erect_glans_observations", value)} placeholder="Optional erect glans observations." />
                 </Field>
-                <Field label="Erect Curvature / Orientation">
+                <Field label="Erect Curvature / Orientation" hint="Record erect curvature or orientation when relevant to stimulation mechanics or device placement.">
                   <RichTextEditor value={mechanicalProfile.erect_curvature_orientation ?? ""} onChange={(value) => updateMechanical("erect_curvature_orientation", value)} placeholder="Optional erect curvature or orientation notes." />
                 </Field>
               </div>
@@ -596,7 +596,7 @@ export default function Profile() {
                 <Field label="Meatal Mobility / Shape Change During Erection" hint="Does the visible opening or shape noticeably change with erection or device placement?">
                   <SelectInput value={mechanicalProfile.meatal_mobility_shape_change} onChange={(value) => updateMechanical("meatal_mobility_shape_change", value)} options={MEATAL_MOBILITY_OPTIONS} />
                 </Field>
-                <Field label="Meatal Sensitivity">
+                <Field label="Meatal Sensitivity" hint="Rate usual sensitivity at the meatal interface during relevant contact or instrumentation.">
                   <SelectInput value={mechanicalProfile.meatal_sensitivity} onChange={(value) => updateMechanical("meatal_sensitivity", value)} options={MEATAL_SENSITIVITY_OPTIONS} />
                 </Field>
                 <Field label="Device Stability at Meatus" hint="How stable do devices such as Foley catheters feel at the meatal interface?">
@@ -611,7 +611,7 @@ export default function Profile() {
                 <Field label="Preferred Foley Size (French)" hint="Preferred catheter size if applicable.">
                   <NumInput value={mechanicalProfile.preferred_foley_size_fr} onChange={(value) => updateMechanical("preferred_foley_size_fr", value)} placeholder="e.g. 18" min={0} />
                 </Field>
-                <Field label="Stable Foley Range">
+                <Field label="Stable Foley Range" hint="Enter the repeatably stable catheter-size range, such as 18-22 Fr, when known.">
                   <input value={mechanicalProfile.stable_foley_range ?? ""} onChange={(e) => updateMechanical("stable_foley_range", e.target.value)} placeholder="e.g. 18-22 Fr" className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
                 </Field>
               </div>
@@ -623,14 +623,14 @@ export default function Profile() {
                 />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Erect Meatal Observations">
+                <Field label="Erect Meatal Observations" hint="Describe visible changes or fit-relevant observations in the erect state.">
                   <RichTextEditor value={mechanicalProfile.erect_meatal_observations ?? ""} onChange={(value) => updateMechanical("erect_meatal_observations", value)} placeholder="Optional erect meatal observations." />
                 </Field>
-                <Field label="Erect Urethral Accommodation Notes">
+                <Field label="Erect Urethral Accommodation Notes" hint="Describe accommodation, comfort, or resistance differences observed during erection.">
                   <RichTextEditor value={mechanicalProfile.erect_urethral_accommodation_notes ?? ""} onChange={(value) => updateMechanical("erect_urethral_accommodation_notes", value)} placeholder="Optional erect accommodation observations." />
                 </Field>
               </div>
-              <Field label="Foley Discomfort Factors">
+              <Field label="Foley Discomfort Factors" hint="Select recurring discomfort contributors observed during instrumentation or prolonged wear.">
                 <MultiSelectButtons options={FOLEY_DISCOMFORT_OPTIONS} selected={mechanicalProfile.foley_discomfort_factors} onChange={(value) => updateMechanical("foley_discomfort_factors", value)} />
               </Field>
             </section>
@@ -638,60 +638,60 @@ export default function Profile() {
             <section className="space-y-3">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Dynamic Function & State Transition</h3>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Flaccid to Erect Expansion Characteristics">
+                <Field label="Flaccid to Erect Expansion Characteristics" hint="Describe how length, width, contour, or fit changes between resting and erect states.">
                   <RichTextEditor value={mechanicalProfile.flaccid_to_erect_expansion_characteristics ?? ""} onChange={(value) => updateMechanical("flaccid_to_erect_expansion_characteristics", value)} placeholder="Describe meaningful state-transition observations." />
                 </Field>
-                <Field label="Relative Girth Expansion">
+                <Field label="Relative Girth Expansion" hint="Note meaningful change in girth relative to length or baseline state; include measurements when known.">
                   <RichTextEditor value={mechanicalProfile.relative_girth_expansion ?? ""} onChange={(value) => updateMechanical("relative_girth_expansion", value)} placeholder="Describe functional changes in girth where relevant." />
                 </Field>
-                <Field label="Rigidity / Compliance Observations">
+                <Field label="Rigidity / Compliance Observations" hint="Describe firmness or tissue compliance only as it affects repeatable fit, pressure, or response.">
                   <RichTextEditor value={mechanicalProfile.rigidity_compliance_observations ?? ""} onChange={(value) => updateMechanical("rigidity_compliance_observations", value)} placeholder="Optional rigidity or compliance findings." />
                 </Field>
-                <Field label="Tissue Response Observations">
+                <Field label="Tissue Response Observations" hint="Record repeatable tissue responses such as compression, swelling, irritation, or recovery when relevant.">
                   <RichTextEditor value={mechanicalProfile.tissue_response_observations ?? ""} onChange={(value) => updateMechanical("tissue_response_observations", value)} placeholder="Optional tissue response observations." />
                 </Field>
-                <Field label="Fit Variability by Anatomical State">
+                <Field label="Fit Variability by Anatomical State" hint="Describe how device or hand fit differs between resting, partial, and erect states.">
                   <RichTextEditor value={mechanicalProfile.fit_variability_by_state ?? ""} onChange={(value) => updateMechanical("fit_variability_by_state", value)} placeholder="Optional fit changes between resting and erect states." />
                 </Field>
-                <Field label="Sensitivity Differences by State">
+                <Field label="Sensitivity Differences by State" hint="Record repeatable differences in sensation between anatomical states, without inferring a cause.">
                   <RichTextEditor value={mechanicalProfile.sensitivity_differences_by_state ?? ""} onChange={(value) => updateMechanical("sensitivity_differences_by_state", value)} placeholder="Optional sensitivity differences by state." />
                 </Field>
-                <Field label="Pressure Distribution Observations">
+                <Field label="Pressure Distribution Observations" hint="Note where pressure feels concentrated or relieved and whether this varies by fit or state.">
                   <RichTextEditor value={mechanicalProfile.pressure_distribution_observations ?? ""} onChange={(value) => updateMechanical("pressure_distribution_observations", value)} placeholder="Optional pressure distribution observations." />
                 </Field>
-                <Field label="Accommodation Differences by State">
+                <Field label="Accommodation Differences by State" hint="Describe meaningful changes in tolerance, comfort, or accommodation across anatomical states.">
                   <RichTextEditor value={mechanicalProfile.accommodation_differences_by_state ?? ""} onChange={(value) => updateMechanical("accommodation_differences_by_state", value)} placeholder="Optional accommodation differences by state." />
                 </Field>
-                <Field label="Device Interaction Observations">
+                <Field label="Device Interaction Observations" hint="Record fit, movement, sealing, contact, or stability observations tied to specific devices.">
                   <RichTextEditor value={mechanicalProfile.device_interaction_observations ?? ""} onChange={(value) => updateMechanical("device_interaction_observations", value)} placeholder="Optional device interaction observations." />
                 </Field>
-                <Field label="Repeated Instrumentation Fit Findings">
+                <Field label="Repeated Instrumentation Fit Findings" hint="Capture consistent findings across repeated insertions or fittings, including size when relevant.">
                   <RichTextEditor value={mechanicalProfile.repeated_instrumentation_fit_findings ?? ""} onChange={(value) => updateMechanical("repeated_instrumentation_fit_findings", value)} placeholder="Optional repeated fit findings." />
                 </Field>
               </div>
 
               <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80 pt-2">Functional Response Observations</h3>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Full Erection Stability Early Session">
+                <Field label="Full Erection Stability Early Session" hint="Select the typical early-session stability pattern observed repeatedly.">
                   <SelectInput value={mechanicalProfile.full_erection_stability_early_session} onChange={(value) => updateMechanical("full_erection_stability_early_session", value)} options={ERECTION_STABILITY_OPTIONS} />
                 </Field>
-                <Field label="Near-Threshold Erection Behavior">
+                <Field label="Near-Threshold Erection Behavior" hint="Select the pattern usually observed close to threshold, not a one-off variation.">
                   <SelectInput value={mechanicalProfile.near_threshold_erection_behavior} onChange={(value) => updateMechanical("near_threshold_erection_behavior", value)} options={NEAR_THRESHOLD_OPTIONS} />
                 </Field>
                 <Field label="Finger-on-Glans Recovery Effectiveness" hint="Used when recovering from near-threshold overstimulation or rebuilding erection quality.">
                   <SelectInput value={mechanicalProfile.finger_on_glans_recovery_effectiveness} onChange={(value) => updateMechanical("finger_on_glans_recovery_effectiveness", value)} options={RECOVERY_EFFECTIVENESS_OPTIONS} />
                 </Field>
-                <Field label="Full-Hand Stimulation Effectiveness Near Threshold">
+                <Field label="Full-Hand Stimulation Effectiveness Near Threshold" hint="Compare effectiveness near threshold relative to the user's typical alternatives.">
                   <SelectInput value={mechanicalProfile.full_hand_stimulation_effectiveness_near_threshold} onChange={(value) => updateMechanical("full_hand_stimulation_effectiveness_near_threshold", value)} options={HAND_EFFECTIVENESS_OPTIONS} />
                 </Field>
-                <Field label="Sleeve Fit Dynamics">
+                <Field label="Sleeve Fit Dynamics" hint="Describe the usual fit relationship during use, particularly where girth or state affects pressure.">
                   <SelectInput value={mechanicalProfile.sleeve_fit_dynamics} onChange={(value) => updateMechanical("sleeve_fit_dynamics", value)} options={SLEEVE_FIT_OPTIONS} />
                 </Field>
-                <Field label="Device Movement Sensitivity">
+                <Field label="Device Movement Sensitivity" hint="Rate sensitivity to device shifting, repositioning, or movement during sessions.">
                   <SelectInput value={mechanicalProfile.device_movement_sensitivity} onChange={(value) => updateMechanical("device_movement_sensitivity", value)} options={DEVICE_MOVEMENT_OPTIONS} />
                 </Field>
               </div>
-              <Field label="Erect Functional Observations">
+              <Field label="Erect Functional Observations" hint="Record repeatable erect-state findings that help connect anatomy, fit, and response.">
                 <RichTextEditor value={mechanicalProfile.erect_functional_observations ?? ""} onChange={(value) => updateMechanical("erect_functional_observations", value)} placeholder="Optional erect functional observations." />
               </Field>
               <Field label="Additional Functional Notes" hint="Any anatomy-related functional observations that affect stimulation, device interaction, or climax behavior.">
