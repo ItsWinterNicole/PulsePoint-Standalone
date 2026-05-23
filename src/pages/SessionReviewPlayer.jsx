@@ -5,6 +5,8 @@ import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import HRTimelineChart from "../components/HRTimelineChart";
 import InteractiveTimelinePlayer, { TimelineWaypointDetail } from "../components/InteractiveTimelinePlayer";
+import LocalMotionAnalysisPanel from "../components/LocalMotionAnalysisPanel";
+import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -144,6 +146,15 @@ export default function SessionReviewPlayer() {
     } finally {
       setLoadingReview(false);
     }
+  };
+
+  const handleSaveMotionSummary = async (summary) => {
+    if (!selectedSession?.id) throw new Error("Select a session before saving a motion summary.");
+    const updated = await base44.entities.Session.update(selectedSession.id, { motion_analysis_summary: summary });
+    setSelectedSession(updated);
+    setSessions((existing) => existing.map((session) => (
+      session.id === updated.id ? { ...session, motion_analysis_summary: summary } : session
+    )));
   };
 
   const seekVideoTo = useCallback((timeS, shouldPlay = false, waitForSeek = false) => {
@@ -293,6 +304,51 @@ export default function SessionReviewPlayer() {
             </Select>
           )}
         </div>
+
+        {videoSrc && !selectedSession && !loadingReview && (
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div className="border-b border-border px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Video Preview</p>
+              <p className="mt-1 truncate text-xs text-muted-foreground">{videoName}</p>
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="overflow-hidden rounded-lg bg-black">
+                <video
+                  ref={videoRef}
+                  src={videoSrc}
+                  controls
+                  playsInline
+                  className="aspect-video max-h-[58vh] w-full bg-black object-contain"
+                  onTimeUpdate={handleVideoTimeUpdate}
+                  onPlay={() => setVideoPlaying(true)}
+                  onPause={() => setVideoPlaying(false)}
+                  onSeeked={handleVideoSeeked}
+                  onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
+                />
+              </div>
+              <p className="rounded-lg bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+                This local preview supports motion analysis without attaching the recording to a stored session.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <LocalMotionAnalysisPanel
+          videoSrc={videoSrc}
+          videoDuration={videoDuration}
+          videoTime={videoTime}
+          selectedSession={selectedSession}
+          onSeek={(timeS) => seekVideoTo(timeS, false, true)}
+          onSaveSummary={handleSaveMotionSummary}
+        />
+
+        {selectedSession?.motion_analysis_summary && (
+          <SavedMotionSummaryCard
+            summary={selectedSession.motion_analysis_summary}
+            onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
+            playbackTime={videoTime}
+          />
+        )}
 
         {loadingReview && (
           <div className="flex h-28 items-center justify-center rounded-xl border border-border bg-card">
@@ -466,6 +522,12 @@ export default function SessionReviewPlayer() {
                         No imported heart-rate timeline is available for this session yet. Event review still works below.
                       </p>
                     )}
+                    <SavedMotionSummaryCard
+                      summary={selectedSession.motion_analysis_summary}
+                      onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
+                      playbackTime={videoTime}
+                      chartOnly
+                    />
                     <TimelineWaypointDetail
                       waypoint={timelineWaypointDetail?.waypoint}
                       currentHR={timelineWaypointDetail?.currentHR}

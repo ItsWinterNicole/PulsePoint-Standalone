@@ -257,6 +257,10 @@
         "type": "string"
       }
     },
+    "motion_analysis_summary": {
+      "type": "object",
+      "description": "Reviewed, media-derived movement summary generated locally from a selected video; excludes raw video and frame-level landmark traces."
+    },
     "video_link": {
       "type": "string"
     },

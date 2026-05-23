@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 import { base44 } from "@/api/base44Client";
+import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -687,6 +688,14 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     }
   };
 
+  const seekToMotionPeak = (timeS) => {
+    setPlayheadS(timeS);
+    const videoT = Math.max(0, timeS - videoOffset);
+    if (videoRef.current) {
+      videoRef.current.currentTime = videoT;
+    }
+  };
+
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -744,7 +753,8 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     return chartData.filter(d => d.t >= lo - 5 && d.t <= hi + 5);
   }, [chartData, xDomain]);
 
-  const hasSidebarContent = chartData.length > 0 || events.length > 0;
+  const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
+  const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -1143,6 +1153,15 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                   </ResponsiveContainer>
                 </div>
               </div>
+            )}
+
+            {savedMotionSummary && (
+              <SavedMotionSummaryCard
+                summary={savedMotionSummary}
+                onSeek={videoSrc ? seekToMotionPeak : undefined}
+                playbackTime={playheadS}
+                compact
+              />
             )}
 
             {/* Nearby Events */}

@@ -53,6 +53,7 @@ function buildProfileEvidenceDigest(sessions) {
   const withHr = sessions.filter((s) => s.avg_hr || s.max_hr || s.hr_at_climax);
   const climaxSessions = sessions.filter((s) => !s.no_climax && s.climax_offset_s != null);
   const favorites = sessions.filter((s) => s.is_favorite).length;
+  const withMotionAnalysis = sessions.filter((s) => s.motion_analysis_summary);
   const topRated = [...sessions]
     .sort((a, b) => ((b.satisfaction || 0) + (b.intensity || 0)) - ((a.satisfaction || 0) + (a.intensity || 0)))
     .slice(0, 5)
@@ -98,6 +99,7 @@ function buildProfileEvidenceDigest(sessions) {
 
   return [
     `Coverage: ${sessions.length} sessions, ${withHr.length} with HR, ${climaxSessions.length} with climax timing, ${favorites} favorites, ${sessions.filter((s) => s.no_climax).length} no-climax sessions.`,
+    withMotionAnalysis.length ? `Reviewed media-derived movement evidence: ${withMotionAnalysis.length} sessions include saved local motion summaries; treat side-specific activity, forefoot/toe-region activity, and motion timing as observational evidence, not mechanism. Activity scores are normalized within each analyzed video window and are not directly comparable absolute magnitudes across recordings.` : null,
     `HR: avg session HR ${fmtAvg(avg(sessions.map((s) => s.avg_hr)), 0)}, avg max HR ${fmtAvg(avg(sessions.map((s) => s.max_hr)), 0)}, avg HR at climax ${fmtAvg(avg(sessions.map((s) => s.hr_at_climax)), 0)}.`,
     `Ratings: avg satisfaction ${fmtAvg(avg(sessions.map((s) => s.satisfaction)))}, avg intensity ${fmtAvg(avg(sessions.map((s) => s.intensity)))}, avg build quality ${fmtAvg(avg(sessions.map((s) => s.build_quality)))}.`,
     topRated ? `Highest-rated evidence: ${topRated}` : null,
@@ -225,6 +227,17 @@ function compactSessionLine(s) {
     .slice(0, 4)
     .map((e) => `${fmtSec(e.time_s)} ${briefText(e.note, 70)}`)
     .join(" | ");
+  const motion = s.motion_analysis_summary;
+  const motionEvidence = motion
+    ? `media motion ${[
+      motion.left_lower_body_average_activity != null ? `left ${motion.left_lower_body_average_activity}` : null,
+      motion.right_lower_body_average_activity != null ? `right ${motion.right_lower_body_average_activity}` : null,
+      motion.left_forefoot_average_activity != null ? `left forefoot/toe-region ${motion.left_forefoot_average_activity}` : null,
+      motion.right_forefoot_average_activity != null ? `right forefoot/toe-region ${motion.right_forefoot_average_activity}` : null,
+      motion.hand_average_activity != null ? `hands ${motion.hand_average_activity}` : null,
+      (motion.findings || []).length ? briefText(motion.findings.join(" "), 140) : null,
+    ].filter(Boolean).join(", ")}`
+    : null;
   return [
     `${s.date?.slice(0, 10) || "unknown"}: ${s.duration_minutes || "?"}m`,
     `methods ${methods}`,
@@ -236,6 +249,7 @@ function compactSessionLine(s) {
     s.unusual_sensations ? `sensations ${briefText(s.unusual_sensations, 90)}` : null,
     s.notes ? `notes ${briefText(s.notes, 120)}` : null,
     events ? `events ${events}` : null,
+    motionEvidence,
   ].filter(Boolean).join("; ");
 }
 
