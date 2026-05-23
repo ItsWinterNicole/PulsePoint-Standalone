@@ -29,6 +29,7 @@ import NoClimaxAIPanel from "../components/NoClimaxAIPanel";
 import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
+import { sessionContextDisplayRows } from "@/lib/sessionContext";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
 
 function _getCategoryMeta(value) {
@@ -356,6 +357,7 @@ export default function SessionDetail() {
 
   const s = session;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
+  const contextRows = sessionContextDisplayRows(s);
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0;
   const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link;
   const sectionLinks = [
@@ -487,9 +489,7 @@ export default function SessionDetail() {
 
         <div className="bg-card rounded-xl border border-border p-4 space-y-1">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Context</h3>
-          <InfoRow label="Mood" value={cap(s.mood)} />
-          <InfoRow label="Environment" value={cap(s.environment)} />
-          <InfoRow label="Hydration" value={cap(s.hydration)} />
+          {contextRows.map((row) => <InfoRow key={row.label} label={row.label} value={row.value} />)}
         </div>
         </section>
 

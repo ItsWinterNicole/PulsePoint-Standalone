@@ -1,47 +1,173 @@
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  CANNABIS_ROUTE_OPTIONS,
+  FATIGUE_OPTIONS,
+  FOOD_OPTIONS,
+  HYDRATION_OPTIONS,
+  LEVEL_OPTIONS,
+  MENTAL_STATE_OPTIONS,
+  PREPARATION_OPTIONS,
+  PRIVACY_OPTIONS,
+  TIMING_OPTIONS,
+} from "@/lib/sessionContext";
+
+function ContextSelect({ label, value, placeholder, options, onValueChange }) {
+  return (
+    <div>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Select value={value || "unknown"} onValueChange={onValueChange}>
+        <SelectTrigger className="mt-1 h-12"><SelectValue placeholder={placeholder} /></SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function ChoiceChips({ options, selected, onToggle }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {options.map((option) => {
+        const active = selected.includes(option.value);
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onToggle(option.value)}
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${active ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ContextSection({ data, onChange }) {
-  const update = (field, value) => onChange({ ...data, [field]: value });
+  const context = data.session_context || {};
+  const updateLegacy = (field, value) => onChange({ ...data, [field]: value });
+  const updateContext = (patch) => onChange({ ...data, session_context: { ...context, ...patch } });
+  const updateNested = (field, patch) => updateContext({ [field]: { ...(context[field] || {}), ...patch } });
+
+  const setSubstanceStatus = (field, value) => {
+    if (value === "unrecorded") {
+      const nextContext = { ...context };
+      delete nextContext[field];
+      onChange({ ...data, session_context: nextContext });
+    } else if (value === "no") {
+      updateContext({ [field]: { used: false } });
+    } else {
+      updateContext({ [field]: { ...(context[field] || {}), used: true } });
+    }
+  };
+  const substanceStatus = (field) => (
+    context[field]?.used === true ? "yes" : context[field]?.used === false ? "no" : "unrecorded"
+  );
+  const toggleArray = (field, value) => {
+    const current = Array.isArray(context[field]) ? context[field] : [];
+    updateContext({ [field]: current.includes(value) ? current.filter((item) => item !== value) : [...current, value] });
+  };
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Context</h3>
-
+    <div className="space-y-6">
       <div>
-        <Label className="text-xs text-muted-foreground">Mood Before</Label>
-        <Select value={data.mood || ""} onValueChange={(v) => update("mood", v)}>
-          <SelectTrigger className="h-12 mt-1"><SelectValue placeholder="Select mood" /></SelectTrigger>
-          <SelectContent>
-            {["relaxed", "stressed", "neutral", "excited", "tired", "anxious"].map((m) => (
-              <SelectItem key={m} value={m} className="capitalize">{m}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Session Context</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Optional explicit context helps the AI interpret this session without guessing. Anything not entered remains unknown.
+        </p>
       </div>
 
-      <div>
-        <Label className="text-xs text-muted-foreground">Environment</Label>
-        <Select value={data.environment || ""} onValueChange={(v) => update("environment", v)}>
-          <SelectTrigger className="h-12 mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-          <SelectContent>
-            {["private", "clinical", "experimental", "other"].map((e) => (
-              <SelectItem key={e} value={e} className="capitalize">{e}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="space-y-3">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-foreground">Physiological State</h4>
+        <div className="grid gap-3 md:grid-cols-3">
+          <ContextSelect label="Fatigue" value={context.fatigue} options={FATIGUE_OPTIONS} onValueChange={(value) => updateContext({ fatigue: value })} />
+          <ContextSelect label="Hydration" value={context.hydration_state} options={HYDRATION_OPTIONS} onValueChange={(value) => updateContext({ hydration_state: value })} />
+          <ContextSelect label="Food State" value={context.food_state} options={FOOD_OPTIONS} onValueChange={(value) => updateContext({ food_state: value })} />
+        </div>
+        {!context.hydration_state && data.hydration && (
+          <p className="text-[11px] text-muted-foreground">Existing saved hydration entry: {data.hydration}. It remains available as legacy context until a structured hydration value is selected.</p>
+        )}
       </div>
 
-      <div>
-        <Label className="text-xs text-muted-foreground">Hydration</Label>
-        <Select value={data.hydration || ""} onValueChange={(v) => update("hydration", v)}>
-          <SelectTrigger className="h-12 mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="low">Low</SelectItem>
-            <SelectItem value="normal">Normal</SelectItem>
-            <SelectItem value="high">High</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="space-y-4 rounded-lg border border-border bg-muted/10 p-3">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-foreground">Substances</h4>
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <ContextSelect
+              label="Alcohol"
+              value={substanceStatus("alcohol")}
+              options={[{ value: "unrecorded", label: "Not recorded" }, { value: "no", label: "No" }, { value: "yes", label: "Yes" }]}
+              onValueChange={(value) => setSubstanceStatus("alcohol", value)}
+            />
+            {context.alcohol?.used && (
+              <>
+                <ContextSelect label="Alcohol Timing" value={context.alcohol.timing_relative_to_session} options={TIMING_OPTIONS} onValueChange={(value) => updateNested("alcohol", { timing_relative_to_session: value })} />
+                <ContextSelect label="Alcohol Level" value={context.alcohol.qualitative_level} options={LEVEL_OPTIONS} onValueChange={(value) => updateNested("alcohol", { qualitative_level: value })} />
+              </>
+            )}
+          </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            <ContextSelect
+              label="Cannabis / THC"
+              value={substanceStatus("cannabis")}
+              options={[{ value: "unrecorded", label: "Not recorded" }, { value: "no", label: "No" }, { value: "yes", label: "Yes" }]}
+              onValueChange={(value) => setSubstanceStatus("cannabis", value)}
+            />
+            {context.cannabis?.used && (
+              <>
+                <ContextSelect label="Route" value={context.cannabis.route} options={CANNABIS_ROUTE_OPTIONS} onValueChange={(value) => updateNested("cannabis", { route: value })} />
+                <ContextSelect label="Timing" value={context.cannabis.timing_relative_to_session} options={TIMING_OPTIONS} onValueChange={(value) => updateNested("cannabis", { timing_relative_to_session: value })} />
+                <ContextSelect label="Level" value={context.cannabis.qualitative_level} options={LEVEL_OPTIONS} onValueChange={(value) => updateNested("cannabis", { qualitative_level: value })} />
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-foreground">Mental / Environmental Context</h4>
+        <div>
+          <Label className="text-xs text-muted-foreground">Mental State</Label>
+          <ChoiceChips options={MENTAL_STATE_OPTIONS} selected={context.mental_state || []} onToggle={(value) => toggleArray("mental_state", value)} />
+        </div>
+        <ContextSelect label="Privacy / Interruption Risk" value={context.privacy_interruptibility} options={PRIVACY_OPTIONS} onValueChange={(value) => updateContext({ privacy_interruptibility: value })} />
+        <div>
+          <Label className="text-xs text-muted-foreground">Environmental Preparation</Label>
+          <ChoiceChips options={PREPARATION_OPTIONS} selected={context.environmental_preparation || []} onToggle={(value) => toggleArray("environmental_preparation", value)} />
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-border bg-muted/10 p-3">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Existing General Context</h4>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <Label className="text-xs text-muted-foreground">Mood Before</Label>
+            <Select value={data.mood || ""} onValueChange={(value) => updateLegacy("mood", value)}>
+              <SelectTrigger className="mt-1 h-12"><SelectValue placeholder="Select mood" /></SelectTrigger>
+              <SelectContent>
+                {["relaxed", "stressed", "neutral", "excited", "tired", "anxious"].map((value) => (
+                  <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground">Environment</Label>
+            <Select value={data.environment || ""} onValueChange={(value) => updateLegacy("environment", value)}>
+              <SelectTrigger className="mt-1 h-12"><SelectValue placeholder="Select" /></SelectTrigger>
+              <SelectContent>
+                {["private", "clinical", "experimental", "other"].map((value) => (
+                  <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
       </div>
     </div>
   );

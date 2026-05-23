@@ -221,8 +221,13 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
           {savedSummary.roi_configuration && (
             <p className="text-[11px] text-muted-foreground">
           Regions: {savedSummary.roi_configuration.layout === "pip"
-            ? `upper-left inset with separate left foot / leg, right foot / leg, and primary hand/activity regions${savedSummary.lower_body_tracking_method === "regionMotion" ? ", plus forefoot / toe-region motion boxes" : ""}`
+            ? `upper-left inset with separate left foot / leg, right foot / leg, and primary hand/activity regions${savedSummary.forefoot_enabled ? ", plus optional forefoot / toe-region motion boxes" : ""}`
             : "full-frame tracking"}.
+            </p>
+          )}
+          {savedSummary.left_right_orientation && (
+            <p className="text-[11px] text-muted-foreground">
+              Side assignment: anatomical left was mapped to {savedSummary.left_right_orientation === "anatomical_left_on_screen_right" ? "screen right" : "screen left"}.
             </p>
           )}
           {savedSummary.lower_body_tracking_method && (

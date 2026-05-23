@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -372,6 +373,7 @@ ${JSON.stringify({
 Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const structuredSessionContext = structuredSessionContextForAI(session);
 
     const journalContext = sessionJournal ? `
 
@@ -406,6 +408,7 @@ TARGET SESSION ANALYSIS STYLE:
         : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. When contextually appropriate, prefer personalized embodied phrasing such as "your penis," "your erection," and "your body" over detached phrasing such as "the penis" or "the erection." Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
 
 ${isTechnical ? groundingContext : ""}
+${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
@@ -505,6 +508,7 @@ ${JSON.stringify({
   ejaculate_volume: session.ejaculate_volume,
   hydration: session.hydration,
   substances: session.substances,
+  ...(!isTechnical && structuredSessionContext ? { session_context: structuredSessionContext } : {}),
   discomfort_entries: session.discomfort_entries?.length > 0 ? session.discomfort_entries : undefined,
   unusual_sensations: session.unusual_sensations,
   refractory_notes: session.refractory_notes,

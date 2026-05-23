@@ -242,6 +242,68 @@
         "high"
       ]
     },
+    "session_context": {
+      "type": "object",
+      "description": "Optional explicitly logged session context. Structured values take priority over legacy context fields when present; omitted values remain unknown.",
+      "properties": {
+        "alcohol": {
+          "type": "object",
+          "properties": {
+            "used": { "type": "boolean" },
+            "timing_relative_to_session": {
+              "type": "string",
+              "enum": ["during_session", "under_30_min", "30_to_90_min", "over_90_min", "earlier_same_day", "unknown"]
+            },
+            "qualitative_level": {
+              "type": "string",
+              "enum": ["mild", "moderate", "significant", "unknown"]
+            }
+          }
+        },
+        "cannabis": {
+          "type": "object",
+          "properties": {
+            "used": { "type": "boolean" },
+            "route": {
+              "type": "string",
+              "enum": ["smoked", "vaped", "edible", "other", "unknown"]
+            },
+            "timing_relative_to_session": {
+              "type": "string",
+              "enum": ["during_session", "under_30_min", "30_to_90_min", "over_90_min", "earlier_same_day", "unknown"]
+            },
+            "qualitative_level": {
+              "type": "string",
+              "enum": ["mild", "moderate", "significant", "unknown"]
+            }
+          }
+        },
+        "fatigue": {
+          "type": "string",
+          "enum": ["very_rested", "rested", "neutral", "tired", "exhausted", "unknown"]
+        },
+        "hydration_state": {
+          "type": "string",
+          "enum": ["poor", "fair", "good", "electrolyte_supported", "unknown"]
+        },
+        "food_state": {
+          "type": "string",
+          "enum": ["fasting", "light_meal", "normal_meal", "heavy_meal", "unknown"]
+        },
+        "mental_state": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "privacy_interruptibility": {
+          "type": "string",
+          "enum": ["fully_private", "moderate_risk", "high_risk", "unknown"]
+        },
+        "environmental_preparation": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "notes": {
       "type": "string"
     },

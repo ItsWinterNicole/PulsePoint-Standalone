@@ -30,17 +30,17 @@ const HAND_CONNECTIONS = [
 ];
 const FULL_FRAME_ROI = { x: 0, y: 0, width: 1, height: 1 };
 const PIP_ROI_PRESET = {
-  leftLowerBody: { x: 0.02, y: 0.03, width: 0.15, height: 0.36 },
-  rightLowerBody: { x: 0.17, y: 0.03, width: 0.15, height: 0.36 },
-  leftForefoot: { x: 0.02, y: 0.03, width: 0.15, height: 0.15 },
-  rightForefoot: { x: 0.17, y: 0.03, width: 0.15, height: 0.15 },
+  leftLowerBody: { x: 0.17, y: 0.03, width: 0.15, height: 0.36 },
+  rightLowerBody: { x: 0.02, y: 0.03, width: 0.15, height: 0.36 },
+  leftForefoot: { x: 0.17, y: 0.03, width: 0.15, height: 0.15 },
+  rightForefoot: { x: 0.02, y: 0.03, width: 0.15, height: 0.15 },
   hands: { x: 0.35, y: 0.08, width: 0.62, height: 0.86 },
 };
 
 const LOWER_BODY_METHODS = {
   regionMotion: {
     label: "Region motion (recommended for soles-facing view)",
-    description: "Measures local movement inside the selected foot and forefoot / toe-region boxes without requiring the model to identify individual toes.",
+    description: "Measures movement inside the selected foot regions without requiring the model to identify individual toes. Optional forefoot / toe-region comparison can be enabled separately.",
   },
   landmarks: {
     label: "Pose landmarks (experimental comparison)",
@@ -118,6 +118,12 @@ function resolveRois(layoutMode, configuredRois) {
 
 function formatRoiLabel(roi) {
   return `${Math.round(roi.width * 100)}% x ${Math.round(roi.height * 100)}% at ${Math.round(roi.x * 100)}%, ${Math.round(roi.y * 100)}%`;
+}
+
+function anatomicalScreenSide(orientation, side) {
+  const leftAppearsRight = orientation === "anatomical_left_on_screen_right";
+  if (side === "left") return leftAppearsRight ? "screen right" : "screen left";
+  return leftAppearsRight ? "screen left" : "screen right";
 }
 
 function pointerToCanvasFrame(event, canvas, clampOutside = false) {
@@ -322,7 +328,7 @@ function drawSignalRegion(context, roi, width, height, color, label) {
   context.fillText(label, (roi.x * width) + 6, (roi.y * height) + 16);
 }
 
-function drawPreviewFrame(canvas, video, legPreview, handResult, showLegs, showHands, rois) {
+function drawPreviewFrame(canvas, video, legPreview, handResult, showLegs, showHands, rois, orientation) {
   const width = video.videoWidth || 0;
   const height = video.videoHeight || 0;
   if (!canvas || !width || !height) return false;
@@ -336,10 +342,12 @@ function drawPreviewFrame(canvas, video, legPreview, handResult, showLegs, showH
 
   const posePoints = legPreview?.fullResult?.landmarks?.[0];
   if (showLegs && legPreview?.regionMotion) {
-    drawSignalRegion(context, rois.leftLowerBody, width, height, "#20d3c2", "Left foot signal");
-    drawSignalRegion(context, rois.rightLowerBody, width, height, "#f59e0b", "Right foot signal");
-    drawSignalRegion(context, rois.leftForefoot, width, height, "#2dd4bf", "Left forefoot");
-    drawSignalRegion(context, rois.rightForefoot, width, height, "#fb923c", "Right forefoot");
+    drawSignalRegion(context, rois.leftLowerBody, width, height, "#20d3c2", `Your left foot (${anatomicalScreenSide(orientation, "left")})`);
+    drawSignalRegion(context, rois.rightLowerBody, width, height, "#f59e0b", `Your right foot (${anatomicalScreenSide(orientation, "right")})`);
+    if (legPreview.forefootEnabled) {
+      drawSignalRegion(context, rois.leftForefoot, width, height, "#2dd4bf", "Left forefoot");
+      drawSignalRegion(context, rois.rightForefoot, width, height, "#fb923c", "Right forefoot");
+    }
   } else if (showLegs && posePoints) {
     LEG_CONNECTIONS.forEach(([from, to]) => {
       const color = LEFT_LEG_POINTS.includes(from) ? "#20d3c2" : "#f59e0b";
@@ -531,7 +539,9 @@ function QualityBadge({ coverage }) {
 function buildFindings(result) {
   const findings = [];
   if (result.hasLegs && result.lowerBodyMethod === "regionMotion") {
-    findings.push("Foot signals were measured from movement within the assigned left and right regions; forefoot / toe-region activity is available for visual comparison where selected.");
+    findings.push(result.hasForefoot
+      ? "Foot signals were measured from movement within the assigned left and right regions, with optional forefoot / toe-region activity included for visual comparison."
+      : "Foot signals were measured from movement within the assigned left and right regions; forefoot / toe-region comparison was not enabled for this run.");
   }
   if (result.hasLegs && result.leftCoverage >= 60 && result.rightCoverage >= 60) {
     const difference = result.leftAverage - result.rightAverage;
@@ -568,8 +578,8 @@ function buildDerivedTimeline(result, maximumPoints = 900) {
       activity: sample.score,
       left_lower_body_activity: result.hasLegs ? sample.leftScore : undefined,
       right_lower_body_activity: result.hasLegs ? sample.rightScore : undefined,
-      left_forefoot_activity: result.hasLegs ? sample.leftForefootScore : undefined,
-      right_forefoot_activity: result.hasLegs ? sample.rightForefootScore : undefined,
+      left_forefoot_activity: result.hasForefoot ? sample.leftForefootScore : undefined,
+      right_forefoot_activity: result.hasForefoot ? sample.rightForefootScore : undefined,
       hand_activity: result.hasHands ? (result.hasLegs ? sample.handScore : sample.score) : undefined,
     }));
 }
@@ -581,12 +591,14 @@ function buildSavedSummary(result) {
     analyzed_at: new Date().toISOString(),
     mode: result.mode,
     lower_body_tracking_method: result.hasLegs ? result.lowerBodyMethod : undefined,
+    left_right_orientation: result.hasLegs ? result.leftRightOrientation : undefined,
+    forefoot_enabled: result.hasForefoot,
     roi_configuration: {
       layout: result.roiLayout,
       left_lower_body: roundedRoi(result.rois.leftLowerBody),
       right_lower_body: roundedRoi(result.rois.rightLowerBody),
-      left_forefoot: roundedRoi(result.rois.leftForefoot),
-      right_forefoot: roundedRoi(result.rois.rightForefoot),
+      left_forefoot: result.hasForefoot ? roundedRoi(result.rois.leftForefoot) : undefined,
+      right_forefoot: result.hasForefoot ? roundedRoi(result.rois.rightForefoot) : undefined,
       hands: roundedRoi(result.rois.hands),
     },
     window_start_s: Math.round(result.start),
@@ -604,8 +616,8 @@ function buildSavedSummary(result) {
     asymmetry_summary: result.hasLegs && result.asymmetry ? result.asymmetry : undefined,
     left_lower_body_average_activity: result.hasLegs ? result.leftAverage : undefined,
     right_lower_body_average_activity: result.hasLegs ? result.rightAverage : undefined,
-    left_forefoot_average_activity: result.hasLegs ? result.leftForefootAverage : undefined,
-    right_forefoot_average_activity: result.hasLegs ? result.rightForefootAverage : undefined,
+    left_forefoot_average_activity: result.hasForefoot ? result.leftForefootAverage : undefined,
+    right_forefoot_average_activity: result.hasForefoot ? result.rightForefootAverage : undefined,
     hand_average_activity: result.hasHands ? result.handAverage : undefined,
     findings: result.findings,
     derived_timeline: buildDerivedTimeline(result),
@@ -614,8 +626,8 @@ function buildSavedSummary(result) {
       activity: moment.score,
       left_lower_body_activity: moment.leftScore,
       right_lower_body_activity: moment.rightScore,
-      left_forefoot_activity: moment.leftForefootScore,
-      right_forefoot_activity: moment.rightForefootScore,
+      left_forefoot_activity: result.hasForefoot ? moment.leftForefootScore : undefined,
+      right_forefoot_activity: result.hasForefoot ? moment.rightForefootScore : undefined,
       hand_activity: moment.handScore,
     })),
     interpretation_guardrail: "Media-derived movement signals are observational and require correlation with session notes and telemetry before physiological interpretation.",
@@ -672,6 +684,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [lowerBodyMethod, setLowerBodyMethod] = useState("regionMotion");
   const [rois, setRois] = useState(() => copyRois(PIP_ROI_PRESET));
   const [activeRoi, setActiveRoi] = useState("leftLowerBody");
+  const [forefootEnabled, setForefootEnabled] = useState(false);
+  const [leftRightOrientation, setLeftRightOrientation] = useState("anatomical_left_on_screen_right");
   const [roiFrameReady, setRoiFrameReady] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -728,6 +742,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     });
   }, [result]);
 
+  useEffect(() => {
+    if (!forefootEnabled && (activeRoi === "leftForefoot" || activeRoi === "rightForefoot")) {
+      setActiveRoi("leftLowerBody");
+    }
+  }, [activeRoi, forefootEnabled]);
+
   const selectedMode = MODES[mode];
   const appliedRois = useMemo(() => resolveRois(roiLayout, rois), [roiLayout, rois]);
   const appliedLowerBodyMethod = roiLayout === "pip" ? lowerBodyMethod : "landmarks";
@@ -763,13 +783,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
       return;
     }
-    [
-      { key: "leftLowerBody", color: "#20d3c2", label: "Left foot / leg" },
-      { key: "rightLowerBody", color: "#f59e0b", label: "Right foot / leg" },
-      { key: "leftForefoot", color: "#2dd4bf", label: "Left forefoot / toes" },
-      { key: "rightForefoot", color: "#fb923c", label: "Right forefoot / toes" },
+    const visibleRegions = [
+      { key: "leftLowerBody", color: "#20d3c2", label: `Your left foot (${anatomicalScreenSide(leftRightOrientation, "left")})` },
+      { key: "rightLowerBody", color: "#f59e0b", label: `Your right foot (${anatomicalScreenSide(leftRightOrientation, "right")})` },
       { key: "hands", color: "#a78bfa", label: "Hands / main" },
-    ].forEach(({ key, color, label }) => {
+    ];
+    if (forefootEnabled && lowerBodyMethod === "regionMotion") {
+      visibleRegions.splice(2, 0,
+        { key: "leftForefoot", color: "#2dd4bf", label: "Left forefoot / toes" },
+        { key: "rightForefoot", color: "#fb923c", label: "Right forefoot / toes" },
+      );
+    }
+    visibleRegions.forEach(({ key, color, label }) => {
       const roi = rois[key];
       const x = roi.x * canvas.width;
       const y = roi.y * canvas.height;
@@ -788,7 +813,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
   useEffect(() => {
     drawRoiSetupFrame();
-  }, [activeRoi, roiFrameReady, roiLayout, rois]);
+  }, [activeRoi, forefootEnabled, leftRightOrientation, lowerBodyMethod, roiFrameReady, roiLayout, rois]);
 
   const captureRoiSetupFrame = async () => {
     if (!videoSrc) return;
@@ -824,16 +849,13 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const canvas = event.currentTarget;
     const start = pointerToCanvasFrame(event, canvas);
     if (!start) return;
-    const roiKeys = ["leftForefoot", "rightForefoot", "leftLowerBody", "rightLowerBody", "hands"];
-    const containing = roiKeys
-      .filter((key) => {
-        const roi = rois[key];
-        return start.x >= roi.x && start.x <= roi.x + roi.width && start.y >= roi.y && start.y <= roi.y + roi.height;
-      })
-      .sort((a, b) => (rois[a].width * rois[a].height) - (rois[b].width * rois[b].height));
-    const movingKey = containing.includes(activeRoi) ? activeRoi : containing[0];
+    const selectedRoi = rois[activeRoi];
+    const movingKey = selectedRoi
+      && start.x >= selectedRoi.x && start.x <= selectedRoi.x + selectedRoi.width
+      && start.y >= selectedRoi.y && start.y <= selectedRoi.y + selectedRoi.height
+      ? activeRoi
+      : null;
     const initialRoi = movingKey ? rois[movingKey] : null;
-    if (movingKey && movingKey !== activeRoi) setActiveRoi(movingKey);
     roiDragStartRef.current = start;
     const onMove = (moveEvent) => {
       const current = pointerToCanvasFrame(moveEvent, canvas, true);
@@ -890,6 +912,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const leftForefootMotionCanvas = document.createElement("canvas");
     const rightForefootMotionCanvas = document.createElement("canvas");
     const analysisRois = resolveRois(roiLayout, rois);
+    const analyzeForefoot = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && forefootEnabled;
     try {
       const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
@@ -963,7 +986,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             : extractLegSides(poseResult))
           : null;
         const legPreview = appliedLowerBodyMethod === "regionMotion"
-          ? { regionMotion: true }
+          ? { regionMotion: true, forefootEnabled: analyzeForefoot }
           : (roiLayout === "pip"
             ? { left: extractRegionLeg(leftPoseResult), right: extractRegionLeg(rightPoseResult) }
             : { fullResult: poseResult });
@@ -977,6 +1000,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             previewLegsRef.current && mode !== "hands",
             previewHandsRef.current && mode !== "legs",
             analysisRois,
+            leftRightOrientation,
           );
           if (frameDrawn && !previewReadyRef.current) {
             previewReadyRef.current = true;
@@ -987,8 +1011,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           ? {
             left: readRoiGrayscale(probe, analysisRois.leftLowerBody, leftMotionCanvas),
             right: readRoiGrayscale(probe, analysisRois.rightLowerBody, rightMotionCanvas),
-            leftForefoot: readRoiGrayscale(probe, analysisRois.leftForefoot, leftForefootMotionCanvas),
-            rightForefoot: readRoiGrayscale(probe, analysisRois.rightForefoot, rightForefootMotionCanvas),
+            leftForefoot: analyzeForefoot ? readRoiGrayscale(probe, analysisRois.leftForefoot, leftForefootMotionCanvas) : null,
+            rightForefoot: analyzeForefoot ? readRoiGrayscale(probe, analysisRois.rightForefoot, rightForefootMotionCanvas) : null,
           }
           : null;
         const leftValue = appliedLowerBodyMethod === "regionMotion"
@@ -997,10 +1021,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         const rightValue = appliedLowerBodyMethod === "regionMotion"
           ? regionPixelMotion(regionFrames.right, previousRegionFrames.right)
           : sideMotion(legs?.right, previousLegs.right);
-        const leftForefootValue = appliedLowerBodyMethod === "regionMotion"
+        const leftForefootValue = analyzeForefoot
           ? regionPixelMotion(regionFrames.leftForefoot, previousRegionFrames.leftForefoot)
           : null;
-        const rightForefootValue = appliedLowerBodyMethod === "regionMotion"
+        const rightForefootValue = analyzeForefoot
           ? regionPixelMotion(regionFrames.rightForefoot, previousRegionFrames.rightForefoot)
           : null;
         const handValue = handMotion(hands, previousHands);
@@ -1043,6 +1067,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       if (!rawSamples.length) return;
       const hasLegs = mode !== "hands";
       const hasHands = mode !== "legs";
+      const hasForefoot = hasLegs && analyzeForefoot;
       const samples = hasLegs ? normalizeTrackedSamples(rawSamples, hasHands) : normalizeSingleSamples(rawSamples);
       const detectedSamples = samples.filter((sample) => sample.detected);
       const coverage = Math.round((detectedSamples.length / samples.length) * 100);
@@ -1054,7 +1079,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         coverage,
         hasLegs,
         hasHands,
+        hasForefoot,
         lowerBodyMethod: appliedLowerBodyMethod,
+        leftRightOrientation,
         sampleRate: selectedMode.fps,
         roiLayout,
         rois: analysisRois,
@@ -1069,8 +1096,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           : null,
         leftAverage: hasLegs ? averageScore(samples, "leftScore") : null,
         rightAverage: hasLegs ? averageScore(samples, "rightScore") : null,
-        leftForefootAverage: hasLegs && appliedLowerBodyMethod === "regionMotion" ? averageScore(samples, "leftForefootScore") : null,
-        rightForefootAverage: hasLegs && appliedLowerBodyMethod === "regionMotion" ? averageScore(samples, "rightForefootScore") : null,
+        leftForefootAverage: hasForefoot ? averageScore(samples, "leftForefootScore") : null,
+        rightForefootAverage: hasForefoot ? averageScore(samples, "rightForefootScore") : null,
         handAverage: hasHands ? averageScore(samples, hasLegs ? "handScore" : "score") : null,
         start,
         end,
@@ -1195,7 +1222,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Regions</p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              Assign each visible foot / leg separately within the upper-left inset, plus the primary hand/activity view. Teal becomes the left signal and gold becomes the right signal in the chart.
+              For your soles-facing upper-left inset, your anatomical left foot normally appears on screen right. Primary foot regions are enough for tracking; optional forefoot / toe-region boxes can be added when useful.
             </p>
           </div>
           <div className="inline-flex rounded-lg border border-border bg-card p-1 text-xs">
@@ -1204,6 +1231,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               onClick={() => {
                 setRoiLayout("pip");
                 setRois(copyRois(PIP_ROI_PRESET));
+                setForefootEnabled(false);
+                setLeftRightOrientation("anatomical_left_on_screen_right");
+                setActiveRoi("leftLowerBody");
               }}
               disabled={running}
               className={`rounded-md px-3 py-1.5 font-medium transition-colors ${roiLayout === "pip" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
@@ -1230,7 +1260,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 disabled={running}
                 className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "leftLowerBody" ? "border-primary bg-primary/[0.12] text-primary" : "border-border text-muted-foreground"}`}
               >
-                Draw left foot / leg
+                Edit your left foot ({anatomicalScreenSide(leftRightOrientation, "left")})
               </button>
               <button
                 type="button"
@@ -1238,7 +1268,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 disabled={running}
                 className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "rightLowerBody" ? "border-[#f59e0b] bg-[#f59e0b]/10 text-[#fbbf24]" : "border-border text-muted-foreground"}`}
               >
-                Draw right foot / leg
+                Edit your right foot ({anatomicalScreenSide(leftRightOrientation, "right")})
               </button>
               <button
                 type="button"
@@ -1246,38 +1276,89 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 disabled={running}
                 className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "hands" ? "border-[#a78bfa] bg-[#a78bfa]/10 text-[#c4b5fd]" : "border-border text-muted-foreground"}`}
               >
-                Draw hands / main view
+                Edit hands / main view
               </button>
               <button
                 type="button"
-                onClick={() => setActiveRoi("leftForefoot")}
-                disabled={running || appliedLowerBodyMethod !== "regionMotion"}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-45 ${activeRoi === "leftForefoot" ? "border-[#2dd4bf] bg-[#2dd4bf]/10 text-[#5eead4]" : "border-border text-muted-foreground"}`}
-              >
-                Draw left forefoot / toe region
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveRoi("rightForefoot")}
-                disabled={running || appliedLowerBodyMethod !== "regionMotion"}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-45 ${activeRoi === "rightForefoot" ? "border-[#fb923c] bg-[#fb923c]/10 text-[#fdba74]" : "border-border text-muted-foreground"}`}
-              >
-                Draw right forefoot / toe region
-              </button>
-              <button
-                type="button"
-                onClick={() => setRois(copyRois(PIP_ROI_PRESET))}
+                onClick={() => {
+                  setRois((current) => ({
+                    ...current,
+                    leftLowerBody: copyRoi(PIP_ROI_PRESET.leftLowerBody),
+                    rightLowerBody: copyRoi(PIP_ROI_PRESET.rightLowerBody),
+                    leftForefoot: copyRoi(PIP_ROI_PRESET.leftForefoot),
+                    rightForefoot: copyRoi(PIP_ROI_PRESET.rightForefoot),
+                  }));
+                  setLeftRightOrientation("anatomical_left_on_screen_right");
+                }}
                 disabled={running}
                 className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                Reset upper-left preset
+                Reset foot regions
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRois((current) => ({
+                    ...current,
+                    leftLowerBody: copyRoi(current.rightLowerBody),
+                    rightLowerBody: copyRoi(current.leftLowerBody),
+                    leftForefoot: copyRoi(current.rightForefoot),
+                    rightForefoot: copyRoi(current.leftForefoot),
+                  }));
+                  setLeftRightOrientation((current) => (
+                    current === "anatomical_left_on_screen_right"
+                      ? "anatomical_left_on_screen_left"
+                      : "anatomical_left_on_screen_right"
+                  ));
+                }}
+                disabled={running}
+                className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Mirror / swap left-right labels
               </button>
             </div>
+            {appliedLowerBodyMethod === "regionMotion" && (
+              <div className="space-y-2 rounded-lg border border-border bg-card/40 p-3">
+                <label className="inline-flex items-center gap-2 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={forefootEnabled}
+                    onChange={(event) => setForefootEnabled(event.target.checked)}
+                    disabled={running}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  Enable optional forefoot / toe-region analysis
+                </label>
+                {forefootEnabled && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveRoi("leftForefoot")}
+                      disabled={running}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "leftForefoot" ? "border-[#2dd4bf] bg-[#2dd4bf]/10 text-[#5eead4]" : "border-border text-muted-foreground"}`}
+                    >
+                      Edit left forefoot / toe region
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveRoi("rightForefoot")}
+                      disabled={running}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "rightForefoot" ? "border-[#fb923c] bg-[#fb923c]/10 text-[#fdba74]" : "border-border text-muted-foreground"}`}
+                    >
+                      Edit right forefoot / toe region
+                    </button>
+                  </div>
+                )}
+                <p className="text-[11px] text-muted-foreground">
+                  This comparison is optional. Standard left/right foot tracking runs without it.
+                </p>
+              </div>
+            )}
             <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
-              <p><span className="font-medium text-primary">Left foot / leg:</span> {formatRoiLabel(appliedRois.leftLowerBody)}</p>
-              <p><span className="font-medium text-[#fbbf24]">Right foot / leg:</span> {formatRoiLabel(appliedRois.rightLowerBody)}</p>
+              <p><span className="font-medium text-primary">Your left foot ({anatomicalScreenSide(leftRightOrientation, "left")}):</span> {formatRoiLabel(appliedRois.leftLowerBody)}</p>
+              <p><span className="font-medium text-[#fbbf24]">Your right foot ({anatomicalScreenSide(leftRightOrientation, "right")}):</span> {formatRoiLabel(appliedRois.rightLowerBody)}</p>
               <p><span className="font-medium text-[#c4b5fd]">Hands / main:</span> {formatRoiLabel(appliedRois.hands)}</p>
-              {appliedLowerBodyMethod === "regionMotion" && (
+              {appliedLowerBodyMethod === "regionMotion" && forefootEnabled && (
                 <>
                   <p><span className="font-medium text-[#5eead4]">Left forefoot / toe region:</span> {formatRoiLabel(appliedRois.leftForefoot)}</p>
                   <p><span className="font-medium text-[#fdba74]">Right forefoot / toe region:</span> {formatRoiLabel(appliedRois.rightForefoot)}</p>
@@ -1302,7 +1383,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           </button>
           <span className="text-[11px] text-muted-foreground">
             {roiFrameReady
-              ? roiLayout === "pip" ? "Drag inside an existing rectangle to move it. To redraw, select a channel above and drag in an empty area." : "The full frame will be analyzed."
+              ? roiLayout === "pip" ? "Choose the region to edit first. Drag inside that selected rectangle to move it, or drag elsewhere to redraw it." : "The full frame will be analyzed."
               : "Load a local video, then capture a frame to adjust the regions."}
           </span>
         </div>
@@ -1461,7 +1542,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   <p className="mt-1 font-mono text-lg font-semibold text-[#a78bfa]">{result.handAverage}</p>
                 </div>
               )}
-              {result.lowerBodyMethod === "regionMotion" && (
+              {result.hasForefoot && (
                 <>
                   <div className="rounded-lg border border-border bg-muted/10 px-3 py-2">
                     <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Left Forefoot / Toe-Region Average</p>
@@ -1547,7 +1628,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                     />
                     Right foot / leg
                   </label>
-                  {result.lowerBodyMethod === "regionMotion" && (
+                  {result.hasForefoot && (
                     <>
                       <label className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/20 px-2.5 py-1 text-[11px] text-foreground">
                         <input
@@ -1631,10 +1712,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                       {visibleSignals.right && (
                         <Line type="monotone" name="Right foot / leg" dataKey="rightScore" stroke="#f59e0b" dot={false} strokeWidth={2} />
                       )}
-                      {result.lowerBodyMethod === "regionMotion" && visibleSignals.leftForefoot && (
+                      {result.hasForefoot && visibleSignals.leftForefoot && (
                         <Line type="monotone" name="Left forefoot / toe region" dataKey="leftForefootScore" stroke="#2dd4bf" dot={false} strokeWidth={1.5} strokeDasharray="4 2" />
                       )}
-                      {result.lowerBodyMethod === "regionMotion" && visibleSignals.rightForefoot && (
+                      {result.hasForefoot && visibleSignals.rightForefoot && (
                         <Line type="monotone" name="Right forefoot / toe region" dataKey="rightForefootScore" stroke="#fb923c" dot={false} strokeWidth={1.5} strokeDasharray="4 2" />
                       )}
                       {result.hasHands && visibleSignals.hands && (

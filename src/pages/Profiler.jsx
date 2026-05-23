@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ function buildProfileEvidenceDigest(sessions) {
 
   const contextMap = new Map();
   for (const s of sessions) {
-    for (const raw of [s.mood, s.environment, s.build_type, s.substances].filter(Boolean)) {
+    for (const raw of [...sessionContextFactorLabels(s), s.build_type].filter(Boolean)) {
       const key = String(raw).toLowerCase();
       const row = contextMap.get(key) || { label: raw, count: 0, satisfaction: [], intensity: [] };
       row.count += 1;
@@ -212,7 +213,9 @@ function ProfilerJobStatus({ job, fallback }) {
 
 function compactSessionLine(s) {
   const methods = [...(s.methods || []), ...(s.custom_methods || [])].filter(Boolean).slice(0, 5).join(", ") || "none";
-  const context = [s.mood, s.environment, s.build_type, s.substances].filter(Boolean).join(", ") || "no context";
+  const structuredContext = sessionContextEvidenceText(s);
+  const substances = Array.isArray(s.substances) ? s.substances : [s.substances].filter(Boolean);
+  const context = structuredContext || [s.mood, s.environment, s.build_type, ...substances].filter(Boolean).join(", ") || "no context";
   const markers = [
     s.pre_climax_offset_s != null ? `pre ${fmtSec(s.pre_climax_offset_s)}` : null,
     s.climax_offset_s != null ? `climax ${fmtSec(s.climax_offset_s)}` : s.no_climax ? "no climax" : null,
@@ -546,6 +549,7 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
       prompt: `You are an expert physiological and sexual response analyst. Based on ${sessions.length} recorded sessions and profile notes, generate a comprehensive, deeply personal physiological and arousal profile. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${SESSION_CONTEXT_GROUNDING_RULE}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -846,6 +850,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
         prompt: `You are producing an Anatomical & Physiological Profile for one person. Create a detailed, evidence-grounded synthesis using only populated saved profile fields and supported patterns in the session data. This is distinct from a narrative arousal profile: its purpose is to explain relevant constitutional, anatomical, functional-mechanical, and instrumentation context.
 
 ${groundingContext}
+${SESSION_CONTEXT_GROUNDING_RULE}
 
 SYNTHESIS REQUIREMENTS:
 - Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.
