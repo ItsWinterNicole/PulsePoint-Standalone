@@ -397,6 +397,7 @@ Factor the journal into your analysis — where the person's subjective experien
       model: "claude_sonnet_4_6",
       ...(isTechnical ? { max_tokens: 12000 } : {}),
       ...(!isTechnical ? {
+        temperature: 0.5,
         schema_mode: "base44_parity",
         forensic_capture: true,
         forensic_session_id: session.id,
