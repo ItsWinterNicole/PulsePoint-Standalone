@@ -30,6 +30,25 @@ function fmtAvg(value, digits = 1) {
   return value == null ? "—" : Number(value).toFixed(digits).replace(/\.0$/, "");
 }
 
+function fmtNarrativeDate(value) {
+  if (!value) return "unknown date";
+  const raw = String(value).slice(0, 10);
+  const [year, month, day] = raw.split("-").map(Number);
+  if (!year || !month || !day) return String(value);
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function naturalizeSpokenDates(value) {
+  return String(value || "").replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (match, year, month, day) => (
+    fmtNarrativeDate(`${year}-${month}-${day}`) || match
+  ));
+}
+
 function buildProfileEvidenceDigest(sessions) {
   const withHr = sessions.filter((s) => s.avg_hr || s.max_hr || s.hr_at_climax);
   const climaxSessions = sessions.filter((s) => !s.no_climax && s.climax_offset_s != null);
@@ -218,6 +237,13 @@ function compactSessionLine(s) {
     s.notes ? `notes ${briefText(s.notes, 120)}` : null,
     events ? `events ${events}` : null,
   ].filter(Boolean).join("; ");
+}
+
+function compactAnatomicalSessionLine(s) {
+  return compactSessionLine(s).replace(
+    String(s.date?.slice(0, 10) || "unknown"),
+    fmtNarrativeDate(s.date),
+  );
 }
 
 function CompactError({ message }) {
@@ -797,8 +823,8 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
 
     try {
       const sortedSessions = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
-      const evidenceDigest = buildProfileEvidenceDigest(sortedSessions);
-      const sessionSummaries = sortedSessions.slice(0, 80).map(compactSessionLine).join("\n");
+      const evidenceDigest = naturalizeSpokenDates(buildProfileEvidenceDigest(sortedSessions));
+      const sessionSummaries = sortedSessions.slice(0, 80).map(compactAnatomicalSessionLine).join("\n");
       const groundingContext = buildAIGroundingContext(userProfile);
 
       const raw = await runProfilerAIJob({
@@ -816,6 +842,8 @@ SYNTHESIS REQUIREMENTS:
 - Genital or pelvic detail is optional and must be proportional to its relevance in the entered data and session evidence.
 - Do not invent unsupported anatomy or physiology, infer diagnoses, make deterministic mechanism claims, or produce erotic commentary.
 - Explicitly identify limitations and missing data where they constrain interpretation.
+- Write for natural spoken delivery as well as reading: use flowing complete sentences, avoid clipped data-dump phrasing, and retain all meaningful supported findings.
+- Whenever referencing a session date, spell it out in natural narration (for example, "May 4, 2026"), never use ISO formatting such as "2026-05-04".
 
 SESSION EVIDENCE SUMMARY (${sessions.length} sessions):
 ${evidenceDigest}
@@ -864,6 +892,21 @@ Write directly to the person in clear, clinically grounded language. Favor meani
     { key: "limitations_and_data_gaps", label: "Limitations & Data Gaps", color: "hsl(var(--muted-foreground))" },
   ];
 
+  const paragraphs = [];
+  const paragraphMeta = [];
+  if (result) {
+    if (result.overview) {
+      paragraphs.push(naturalizeSpokenDates(result.overview));
+      paragraphMeta.push({ type: "overview" });
+    }
+    for (const section of sections) {
+      for (const finding of (result[section.key] || [])) {
+        paragraphs.push(naturalizeSpokenDates(finding));
+        paragraphMeta.push({ type: "section", section });
+      }
+    }
+  }
+
   return (
     <SectionCard icon={<Activity className="w-4 h-4" />} title="Anatomical & Physiological Profile" color="hsl(var(--chart-2))" defaultCollapsed={true}>
       <div className="flex items-center justify-between gap-3">
@@ -885,29 +928,51 @@ Write directly to the person in clear, clinically grounded language. Favor meani
         </p>
       )}
       {result && (
-        <div className="space-y-3">
-          <p className="text-base font-medium leading-relaxed border-l-2 border-chart-2/60 pl-3 py-1">
-            {result.overview}
-          </p>
-          {sections.map((section) => {
-            const findings = result[section.key] || [];
-            if (!findings.length) return null;
-            return (
-              <div key={section.key} className="border-t border-border pt-3">
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: section.color }}>
-                  {section.label}
+        <TTSReader
+          sessionId="profiler_anatomical_physiological_profile"
+          title="Anatomical and Physiological Profile"
+          paragraphs={paragraphs}
+          renderParagraph={(text, idx, isActive) => {
+            const meta = paragraphMeta[idx];
+            if (!meta) return null;
+
+            if (meta.type === "overview") {
+              return (
+                <p
+                  className="text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md text-foreground"
+                  style={{
+                    borderColor: isActive ? "hsl(var(--chart-2))" : "hsl(var(--chart-2) / 0.6)",
+                    background: isActive ? "hsl(var(--chart-2) / 0.1)" : "transparent",
+                  }}
+                >
+                  {text}
                 </p>
-                <div className="space-y-1.5">
-                  {findings.map((finding, index) => (
-                    <p key={index} className="border-l-2 pl-3 py-1 text-sm leading-relaxed" style={{ borderColor: section.color + "66" }}>
-                      {finding}
-                    </p>
-                  ))}
-                </div>
+              );
+            }
+
+            const { section } = meta;
+            const firstInSection = paragraphs.findIndex((_, i) => paragraphMeta[i]?.type === "section" && paragraphMeta[i]?.section?.key === section.key) === idx;
+
+            return (
+              <div>
+                {firstInSection && (
+                  <p className="text-xs font-semibold uppercase tracking-wider mt-4 mb-1.5 pt-3 border-t border-border" style={{ color: section.color }}>
+                    {section.label}
+                  </p>
+                )}
+                <p
+                  className="border-l-2 pl-3 py-1 text-sm leading-relaxed transition-all duration-200 rounded-r-md"
+                  style={{
+                    borderColor: isActive ? section.color : section.color + "66",
+                    background: isActive ? section.color + "18" : "transparent",
+                  }}
+                >
+                  {text}
+                </p>
               </div>
             );
-          })}
-        </div>
+          }}
+        />
       )}
     </SectionCard>
   );
