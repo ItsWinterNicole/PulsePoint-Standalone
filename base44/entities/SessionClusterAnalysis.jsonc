@@ -14,6 +14,10 @@
       "type": "object",
       "description": "Stored AI near-climax event narrative and stats"
     },
+    "anatomical_physiological_profile_result": {
+      "type": "object",
+      "description": "Stored Anatomical & Physiological Profile synthesis generated from optional profile data and supported session evidence"
+    },
     "best_session_result": {
       "type": "object",
       "description": "Stored AI best session determination result"

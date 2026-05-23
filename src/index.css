@@ -88,6 +88,30 @@
     @apply bg-background text-foreground font-inter;
     text-rendering: optimizeLegibility;
   }
+
+  .ProseMirror p.is-editor-empty:first-child::before {
+    color: hsl(var(--muted-foreground));
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .ProseMirror ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+
+  .ProseMirror ol {
+    list-style: decimal;
+    padding-left: 1.25rem;
+  }
+
+  .ProseMirror p + p,
+  .ProseMirror ul + p,
+  .ProseMirror ol + p {
+    margin-top: 0.45rem;
+  }
 }
 
 @layer utilities {

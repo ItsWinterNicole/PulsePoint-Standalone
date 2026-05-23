@@ -5,7 +5,7 @@ import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
-import { captureAIForensicFinal, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -189,14 +189,6 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result);
-        if (!isTechnical) {
-          await captureAIForensicFinal(completedJob.progress?.forensic_capture_id, {
-            experiment: "base44_companion_parity",
-            analysisField,
-            sessionId: session.id,
-            final_ai_analysis_before_save: parsed,
-          });
-        }
         setResult(parsed);
         setJobStatus({
           ...completedJob,
@@ -222,7 +214,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, isTechnical, result, session, session.id]);
+  }, [analysisField, analysisLabel, result, session, session.id]);
 
   const analyze = async () => {
     setLoading(true);
@@ -399,9 +391,6 @@ Factor the journal into your analysis — where the person's subjective experien
       ...(!isTechnical ? {
         temperature: 0.5,
         schema_mode: "base44_parity",
-        forensic_capture: true,
-        forensic_session_id: session.id,
-        experiment: "base44_companion_parity",
       } : {}),
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `${isTechnical
@@ -576,14 +565,6 @@ Provide ${isTechnical
     });
 
     const parsed = normalizeSessionAnalysis(completedJob.result);
-    if (!isTechnical) {
-      await captureAIForensicFinal(completedJob.progress?.forensic_capture_id, {
-        experiment: "base44_companion_parity",
-        analysisField,
-        sessionId: session.id,
-        final_ai_analysis_before_save: parsed,
-      });
-    }
     setResult(parsed);
     setJobStatus({
       ...completedJob,

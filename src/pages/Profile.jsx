@@ -3,6 +3,8 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { User, Heart, Scan, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Flame, Ruler } from "lucide-react";
 import AIChat from "../components/AIChat";
+import RichTextEditor from "../components/RichTextEditor";
+import { richTextToCanonicalText, richTextToPlainText } from "@/lib/richText";
 
 function Field({ label, hint, children }) {
   return (
@@ -52,6 +54,10 @@ function SelectInput({ value, onChange, options, placeholder = "Not set" }) {
 const LENGTH_UNITS = ["inches", "cm"];
 const DIAMETER_UNITS = ["mm", "inches"];
 const DEFAULT_MECHANICAL_PROFILE = {
+  flaccid_length: { value: null, unit: "inches" },
+  flaccid_mid_shaft_diameter: { value: null, unit: "mm" },
+  flaccid_base_diameter: { value: null, unit: "mm" },
+  flaccid_widest_glans_diameter: { value: null, unit: "mm" },
   bone_pressed_erect_length: { value: null, unit: "inches" },
   visible_erect_length: { value: null, unit: "inches" },
   mid_shaft_diameter: { value: null, unit: "mm" },
@@ -105,6 +111,30 @@ const FOLEY_DISCOMFORT_OPTIONS = [
   "Friction",
   "Other",
 ];
+const RICH_TEXT_MECHANICAL_FIELDS = [
+  "resting_glans_observations",
+  "resting_foreskin_coverage_mobility",
+  "resting_curvature_orientation",
+  "resting_meatal_observations",
+  "resting_urethral_accommodation_notes",
+  "erect_glans_observations",
+  "erect_curvature_orientation",
+  "meatal_tension_fit_notes",
+  "erect_meatal_observations",
+  "erect_urethral_accommodation_notes",
+  "flaccid_to_erect_expansion_characteristics",
+  "relative_girth_expansion",
+  "rigidity_compliance_observations",
+  "tissue_response_observations",
+  "fit_variability_by_state",
+  "sensitivity_differences_by_state",
+  "pressure_distribution_observations",
+  "accommodation_differences_by_state",
+  "device_interaction_observations",
+  "repeated_instrumentation_fit_findings",
+  "erect_functional_observations",
+  "additional_functional_notes",
+];
 
 function normalizeMechanicalProfile(profile) {
   const normalized = { ...DEFAULT_MECHANICAL_PROFILE, ...(profile || {}) };
@@ -116,6 +146,9 @@ function normalizeMechanicalProfile(profile) {
   normalized.foley_discomfort_factors = Array.isArray(normalized.foley_discomfort_factors)
     ? normalized.foley_discomfort_factors
     : [];
+  RICH_TEXT_MECHANICAL_FIELDS.forEach((key) => {
+    normalized[key] = richTextToCanonicalText(normalized[key]);
+  });
   if (normalized.visible_meatal_horizontal_width?.value == null && normalized.visible_meatal_width_mm != null) {
     normalized.visible_meatal_horizontal_width = {
       value: normalized.visible_meatal_width_mm,
@@ -261,14 +294,14 @@ export default function Profile() {
         resting_hr: u.resting_hr ?? null,
         max_hr: u.max_hr ?? null,
         recovery_hr_60s: u.recovery_hr_60s ?? null,
-        medications: u.medications ?? "",
+        medications: richTextToCanonicalText(u.medications ?? ""),
         fitness_level: u.fitness_level ?? "moderate",
         arousal_response_style: u.arousal_response_style ?? null,
         typical_build_duration: u.typical_build_duration ?? null,
         climax_sensitivity: u.climax_sensitivity ?? null,
         preferred_stimulation: u.preferred_stimulation ?? [],
         refractory_pattern: u.refractory_pattern ?? null,
-        arousal_notes: u.arousal_notes ?? "",
+        arousal_notes: richTextToCanonicalText(u.arousal_notes ?? ""),
         anatomical_mechanical_profile: normalizeMechanicalProfile(u.anatomical_mechanical_profile),
       });
       setChatMessages(u.profile_chat_messages || []);
@@ -303,7 +336,14 @@ export default function Profile() {
 
   const save = async () => {
     setSaving(true);
-    await base44.auth.updateMe(form);
+    const canonicalForm = {
+      ...form,
+      medications: richTextToCanonicalText(form.medications),
+      arousal_notes: richTextToCanonicalText(form.arousal_notes),
+      anatomical_mechanical_profile: normalizeMechanicalProfile(form.anatomical_mechanical_profile),
+    };
+    await base44.auth.updateMe(canonicalForm);
+    setForm(canonicalForm);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -338,7 +378,7 @@ export default function Profile() {
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:items-start">
+      <div className="space-y-6">
         <div className="space-y-6">
           {/* Demographics */}
           <div className="bg-card rounded-xl border border-border p-4 space-y-4">
@@ -437,20 +477,18 @@ export default function Profile() {
           </p>
         </div>
         <Field label="Current Physical & Anatomical Context" hint="Anatomy, surgeries, chronic conditions, medications, nerve/muscle factors affecting response — anything the AI should factor into its interpretation">
-          <textarea
+          <RichTextEditor
             value={form.medications ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, medications: e.target.value }))}
+            onChange={(value) => setForm((f) => ({ ...f, medications: value }))}
             placeholder="e.g. Prostate enlargement, prior inguinal hernia repair (left side), on Tamsulosin. Reduced pudendal nerve sensitivity since 2022. Pelvic floor tends to hypertonate under stress."
-            rows={4}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
         </Field>
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="flex flex-col gap-6">
           {/* Anatomical / Functional Mechanical Profile */}
-          <div className="bg-card rounded-xl border border-border overflow-hidden">
+          <div className="order-2 bg-card rounded-xl border border-border overflow-hidden">
         <button
           type="button"
           onClick={() => setMechanicalOpen((open) => !open)}
@@ -469,7 +507,34 @@ export default function Profile() {
         {mechanicalOpen && (
           <div className="space-y-5 border-t border-border p-4">
             <section className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Erect Dimensions</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Resting / Flaccid Anatomy</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <UnitNumberField label="Flaccid Length" measure={mechanicalProfile.flaccid_length} units={LENGTH_UNITS} onChange={(value) => updateMechanical("flaccid_length", value)} placeholder="e.g. 3.5" hint="Optional resting measurement without stretching or compression." />
+                <UnitNumberField label="Flaccid Mid-Shaft Diameter" measure={mechanicalProfile.flaccid_mid_shaft_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("flaccid_mid_shaft_diameter", value)} placeholder="e.g. 28" hint="Optional resting width at mid-shaft with gentle contact." />
+                <UnitNumberField label="Flaccid Base Diameter" measure={mechanicalProfile.flaccid_base_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("flaccid_base_diameter", value)} placeholder="e.g. 30" hint="Optional resting width near the base with gentle contact." />
+                <UnitNumberField label="Resting Widest Glans Diameter" measure={mechanicalProfile.flaccid_widest_glans_diameter} units={DIAMETER_UNITS} onChange={(value) => updateMechanical("flaccid_widest_glans_diameter", value)} placeholder="e.g. 32" hint="Optional widest visible glans width at rest." />
+              </div>
+              <Field label="Resting Glans Observations">
+                <RichTextEditor value={mechanicalProfile.resting_glans_observations ?? ""} onChange={(value) => updateMechanical("resting_glans_observations", value)} placeholder="Describe resting glans observations when relevant." />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Resting Foreskin Coverage / Mobility">
+                  <RichTextEditor value={mechanicalProfile.resting_foreskin_coverage_mobility ?? ""} onChange={(value) => updateMechanical("resting_foreskin_coverage_mobility", value)} placeholder="Optional resting coverage or mobility observations." />
+                </Field>
+                <Field label="Resting Curvature / Orientation">
+                  <RichTextEditor value={mechanicalProfile.resting_curvature_orientation ?? ""} onChange={(value) => updateMechanical("resting_curvature_orientation", value)} placeholder="Optional curvature or orientation notes." />
+                </Field>
+                <Field label="Resting Meatal Observations">
+                  <RichTextEditor value={mechanicalProfile.resting_meatal_observations ?? ""} onChange={(value) => updateMechanical("resting_meatal_observations", value)} placeholder="Optional resting meatal observations." />
+                </Field>
+                <Field label="Resting Urethral Accommodation Notes">
+                  <RichTextEditor value={mechanicalProfile.resting_urethral_accommodation_notes ?? ""} onChange={(value) => updateMechanical("resting_urethral_accommodation_notes", value)} placeholder="Optional resting accommodation observations." />
+                </Field>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Erect Anatomy</h3>
               <div className="grid gap-4 sm:grid-cols-2">
                 <UnitNumberField label="Bone-Pressed Erect Length" measure={mechanicalProfile.bone_pressed_erect_length} units={LENGTH_UNITS} onChange={(value) => updateMechanical("bone_pressed_erect_length", value)} placeholder="e.g. 6.5" hint="Measure along the top (dorsal side) from pubic bone to tip of glans. Compress gently to bone for consistency." />
                 <UnitNumberField label="Visible Erect Length" measure={mechanicalProfile.visible_erect_length} units={LENGTH_UNITS} onChange={(value) => updateMechanical("visible_erect_length", value)} placeholder="e.g. 6.0" hint="Same measurement as above, but without compressing to the pubic bone." />
@@ -494,6 +559,14 @@ export default function Profile() {
                 </Field>
                 <Field label="Glans Overstimulation Near Climax" hint="Does glans stimulation become excessively intense or less effective near threshold?">
                   <SelectInput value={mechanicalProfile.glans_overstimulation_near_climax} onChange={(value) => updateMechanical("glans_overstimulation_near_climax", value)} options={YES_NO_VARIABLE_OPTIONS} />
+                </Field>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Erect Glans Observations">
+                  <RichTextEditor value={mechanicalProfile.erect_glans_observations ?? ""} onChange={(value) => updateMechanical("erect_glans_observations", value)} placeholder="Optional erect glans observations." />
+                </Field>
+                <Field label="Erect Curvature / Orientation">
+                  <RichTextEditor value={mechanicalProfile.erect_curvature_orientation ?? ""} onChange={(value) => updateMechanical("erect_curvature_orientation", value)} placeholder="Optional erect curvature or orientation notes." />
                 </Field>
               </div>
             </section>
@@ -543,20 +616,61 @@ export default function Profile() {
                 </Field>
               </div>
               <Field label="Meatal Tension / Fit Notes" hint="Any observations related to tension, movement, sealing, pressure, irritation, or device interaction at the meatus.">
-                <textarea
+                <RichTextEditor
                   value={mechanicalProfile.meatal_tension_fit_notes ?? ""}
-                  onChange={(e) => updateMechanical("meatal_tension_fit_notes", e.target.value)}
-                  rows={3}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                  onChange={(value) => updateMechanical("meatal_tension_fit_notes", value)}
+                  placeholder="Add relevant fit, pressure, movement, or irritation notes."
                 />
               </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Erect Meatal Observations">
+                  <RichTextEditor value={mechanicalProfile.erect_meatal_observations ?? ""} onChange={(value) => updateMechanical("erect_meatal_observations", value)} placeholder="Optional erect meatal observations." />
+                </Field>
+                <Field label="Erect Urethral Accommodation Notes">
+                  <RichTextEditor value={mechanicalProfile.erect_urethral_accommodation_notes ?? ""} onChange={(value) => updateMechanical("erect_urethral_accommodation_notes", value)} placeholder="Optional erect accommodation observations." />
+                </Field>
+              </div>
               <Field label="Foley Discomfort Factors">
                 <MultiSelectButtons options={FOLEY_DISCOMFORT_OPTIONS} selected={mechanicalProfile.foley_discomfort_factors} onChange={(value) => updateMechanical("foley_discomfort_factors", value)} />
               </Field>
             </section>
 
             <section className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Functional Observations</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80">Dynamic Function & State Transition</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Flaccid to Erect Expansion Characteristics">
+                  <RichTextEditor value={mechanicalProfile.flaccid_to_erect_expansion_characteristics ?? ""} onChange={(value) => updateMechanical("flaccid_to_erect_expansion_characteristics", value)} placeholder="Describe meaningful state-transition observations." />
+                </Field>
+                <Field label="Relative Girth Expansion">
+                  <RichTextEditor value={mechanicalProfile.relative_girth_expansion ?? ""} onChange={(value) => updateMechanical("relative_girth_expansion", value)} placeholder="Describe functional changes in girth where relevant." />
+                </Field>
+                <Field label="Rigidity / Compliance Observations">
+                  <RichTextEditor value={mechanicalProfile.rigidity_compliance_observations ?? ""} onChange={(value) => updateMechanical("rigidity_compliance_observations", value)} placeholder="Optional rigidity or compliance findings." />
+                </Field>
+                <Field label="Tissue Response Observations">
+                  <RichTextEditor value={mechanicalProfile.tissue_response_observations ?? ""} onChange={(value) => updateMechanical("tissue_response_observations", value)} placeholder="Optional tissue response observations." />
+                </Field>
+                <Field label="Fit Variability by Anatomical State">
+                  <RichTextEditor value={mechanicalProfile.fit_variability_by_state ?? ""} onChange={(value) => updateMechanical("fit_variability_by_state", value)} placeholder="Optional fit changes between resting and erect states." />
+                </Field>
+                <Field label="Sensitivity Differences by State">
+                  <RichTextEditor value={mechanicalProfile.sensitivity_differences_by_state ?? ""} onChange={(value) => updateMechanical("sensitivity_differences_by_state", value)} placeholder="Optional sensitivity differences by state." />
+                </Field>
+                <Field label="Pressure Distribution Observations">
+                  <RichTextEditor value={mechanicalProfile.pressure_distribution_observations ?? ""} onChange={(value) => updateMechanical("pressure_distribution_observations", value)} placeholder="Optional pressure distribution observations." />
+                </Field>
+                <Field label="Accommodation Differences by State">
+                  <RichTextEditor value={mechanicalProfile.accommodation_differences_by_state ?? ""} onChange={(value) => updateMechanical("accommodation_differences_by_state", value)} placeholder="Optional accommodation differences by state." />
+                </Field>
+                <Field label="Device Interaction Observations">
+                  <RichTextEditor value={mechanicalProfile.device_interaction_observations ?? ""} onChange={(value) => updateMechanical("device_interaction_observations", value)} placeholder="Optional device interaction observations." />
+                </Field>
+                <Field label="Repeated Instrumentation Fit Findings">
+                  <RichTextEditor value={mechanicalProfile.repeated_instrumentation_fit_findings ?? ""} onChange={(value) => updateMechanical("repeated_instrumentation_fit_findings", value)} placeholder="Optional repeated fit findings." />
+                </Field>
+              </div>
+
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/80 pt-2">Functional Response Observations</h3>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Full Erection Stability Early Session">
                   <SelectInput value={mechanicalProfile.full_erection_stability_early_session} onChange={(value) => updateMechanical("full_erection_stability_early_session", value)} options={ERECTION_STABILITY_OPTIONS} />
@@ -577,12 +691,14 @@ export default function Profile() {
                   <SelectInput value={mechanicalProfile.device_movement_sensitivity} onChange={(value) => updateMechanical("device_movement_sensitivity", value)} options={DEVICE_MOVEMENT_OPTIONS} />
                 </Field>
               </div>
+              <Field label="Erect Functional Observations">
+                <RichTextEditor value={mechanicalProfile.erect_functional_observations ?? ""} onChange={(value) => updateMechanical("erect_functional_observations", value)} placeholder="Optional erect functional observations." />
+              </Field>
               <Field label="Additional Functional Notes" hint="Any anatomy-related functional observations that affect stimulation, device interaction, or climax behavior.">
-                <textarea
+                <RichTextEditor
                   value={mechanicalProfile.additional_functional_notes ?? ""}
-                  onChange={(e) => updateMechanical("additional_functional_notes", e.target.value)}
-                  rows={4}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                  onChange={(value) => updateMechanical("additional_functional_notes", value)}
+                  placeholder="Add functional observations relevant to later interpretation."
                 />
               </Field>
             </section>
@@ -591,7 +707,7 @@ export default function Profile() {
           </div>
 
           {/* Arousal Profile */}
-          <div className="bg-card rounded-xl border border-border p-4 space-y-4">
+          <div className="order-1 bg-card rounded-xl border border-border p-4 space-y-4">
         <div>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Flame className="w-3.5 h-3.5" /> Arousal Profile
@@ -687,12 +803,10 @@ export default function Profile() {
         </Field>
 
         <Field label="Arousal Notes" hint="Unique patterns, what consistently works or doesn't, edge cases — used directly by AI">
-          <textarea
+          <RichTextEditor
             value={form.arousal_notes ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, arousal_notes: e.target.value }))}
+            onChange={(value) => setForm((f) => ({ ...f, arousal_notes: value }))}
             placeholder="e.g. Arousal builds slowly but climax is intense and long. E-stim on low frequency always extends the plateau phase. High stress days reduce sensitivity significantly."
-            rows={4}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
         </Field>
           </div>
@@ -706,14 +820,14 @@ export default function Profile() {
         context={[
           `Age: ${form.age ?? "not set"}, Weight: ${form.weight_kg ?? "not set"}kg, Fitness: ${form.fitness_level ?? "not set"}`,
           `Resting HR: ${form.resting_hr ?? "not set"} bpm, Max HR: ${form.max_hr ?? "not set"} bpm, Recovery HR drop 60s: ${form.recovery_hr_60s ?? "not set"} bpm`,
-          `Physical & anatomical context: ${form.medications || "none"}`,
+          `Physical & anatomical context: ${richTextToPlainText(form.medications) || "none"}`,
           `Arousal response style: ${form.arousal_response_style ?? "not set"}`,
           `Typical build duration: ${form.typical_build_duration ?? "not set"}`,
           `Climax sensitivity: ${form.climax_sensitivity ?? "not set"}`,
           `Refractory pattern: ${form.refractory_pattern ?? "not set"}`,
           `Preferred stimulation: ${(form.preferred_stimulation || []).join(", ") || "not set"}`,
-          `Arousal notes: ${form.arousal_notes || "none"}`,
-          `Functional mechanical profile: ${Object.entries(mechanicalProfile).filter(([, value]) => Array.isArray(value) ? value.length : typeof value === "object" ? value?.value != null : value).map(([key, value]) => `${key}: ${typeof value === "object" && !Array.isArray(value) ? `${value.value} ${value.unit}` : Array.isArray(value) ? value.join(", ") : value}`).join("; ") || "not set"}`,
+          `Arousal notes: ${richTextToPlainText(form.arousal_notes) || "none"}`,
+          `Functional mechanical profile: ${Object.entries(mechanicalProfile).filter(([, value]) => Array.isArray(value) ? value.length : typeof value === "object" ? value?.value != null : value).map(([key, value]) => `${key}: ${typeof value === "object" && !Array.isArray(value) ? `${value.value} ${value.unit}` : Array.isArray(value) ? value.join(", ") : richTextToPlainText(value)}`).join("; ") || "not set"}`,
         ].join("\n")}
         savedMessages={chatMessages}
         savedNotes={form.arousal_notes}
@@ -722,8 +836,9 @@ export default function Profile() {
           await base44.auth.updateMe({ profile_chat_messages: msgs });
         }}
         onSaveNotes={async (merged) => {
-          setForm((f) => ({ ...f, arousal_notes: merged }));
-          await base44.auth.updateMe({ arousal_notes: merged });
+          const canonicalNotes = richTextToCanonicalText(merged);
+          setForm((f) => ({ ...f, arousal_notes: canonicalNotes }));
+          await base44.auth.updateMe({ arousal_notes: canonicalNotes });
         }}
       />
 

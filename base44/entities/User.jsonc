@@ -102,6 +102,42 @@
         "type": "object"
       },
       "description": "Persisted AI interview chat messages for the profile page"
+    },
+    "anatomical_mechanical_profile": {
+      "type": "object",
+      "description": "Optional structured anatomy, dynamic function, fit, and instrumentation observations used only when analytically relevant.",
+      "properties": {
+        "flaccid_length": { "type": "object" },
+        "flaccid_mid_shaft_diameter": { "type": "object" },
+        "flaccid_base_diameter": { "type": "object" },
+        "flaccid_widest_glans_diameter": { "type": "object" },
+        "resting_glans_observations": { "type": "string" },
+        "resting_foreskin_coverage_mobility": { "type": "string" },
+        "resting_curvature_orientation": { "type": "string" },
+        "resting_meatal_observations": { "type": "string" },
+        "resting_urethral_accommodation_notes": { "type": "string" },
+        "bone_pressed_erect_length": { "type": "object" },
+        "visible_erect_length": { "type": "object" },
+        "mid_shaft_diameter": { "type": "object" },
+        "base_diameter": { "type": "object" },
+        "below_glans_diameter": { "type": "object" },
+        "widest_glans_diameter": { "type": "object" },
+        "erect_glans_observations": { "type": "string" },
+        "erect_curvature_orientation": { "type": "string" },
+        "erect_meatal_observations": { "type": "string" },
+        "erect_urethral_accommodation_notes": { "type": "string" },
+        "flaccid_to_erect_expansion_characteristics": { "type": "string" },
+        "relative_girth_expansion": { "type": "string" },
+        "rigidity_compliance_observations": { "type": "string" },
+        "tissue_response_observations": { "type": "string" },
+        "fit_variability_by_state": { "type": "string" },
+        "sensitivity_differences_by_state": { "type": "string" },
+        "pressure_distribution_observations": { "type": "string" },
+        "accommodation_differences_by_state": { "type": "string" },
+        "device_interaction_observations": { "type": "string" },
+        "repeated_instrumentation_fit_findings": { "type": "string" },
+        "erect_functional_observations": { "type": "string" }
+      }
     }
   },
   "required": [

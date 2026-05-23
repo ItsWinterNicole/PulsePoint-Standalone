@@ -99,6 +99,18 @@ function normalizeAIProfileResult(raw) {
   return parsed;
 }
 
+function normalizeAnatomicalProfileResult(raw) {
+  const parsed = raw?.response ?? raw;
+  if (!parsed) return null;
+  if (typeof parsed === "string") {
+    return { overview: parsed };
+  }
+  if (parsed.raw && typeof parsed.raw === "string") {
+    return { overview: parsed.raw };
+  }
+  return parsed;
+}
+
 function aiErrorMessage(error) {
   const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
   try {
@@ -701,6 +713,206 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
   );
 }
 
+function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
+  const [loading, setLoading] = useState(false);
+  const [jobStatus, setJobStatus] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+      if (rows[0]?.anatomical_physiological_profile_result) {
+        setResult(rows[0].anatomical_physiological_profile_result);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const reconnect = async () => {
+      try {
+        const activeData = await listBackgroundJobs({
+          type: "ai_invoke",
+          status: "queued,running",
+          metaSource: "Profiler",
+          limit: 12,
+        });
+        if (cancelled) return;
+        let job = (activeData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Anatomical & Physiological Profile");
+        if (!job && !result) {
+          const completedData = await listBackgroundJobs({
+            type: "ai_invoke",
+            status: "complete",
+            metaSource: "Profiler",
+            limit: 12,
+          });
+          if (cancelled) return;
+          job = (completedData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Anatomical & Physiological Profile");
+        }
+        if (!job) return;
+
+        setJobStatus(job);
+        setLoading(job.status !== "complete");
+        const completedJob = job.status === "complete"
+          ? job
+          : await waitForBackgroundJob(job.id, {
+            intervalMs: 1200,
+            onProgress: (nextJob) => {
+              if (!cancelled) setJobStatus(nextJob);
+            },
+          });
+        if (cancelled) return;
+
+        const parsed = normalizeAnatomicalProfileResult(completedJob.result);
+        if (!parsed?.overview) return;
+        setResult(parsed);
+        await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: parsed }, sessions.length);
+      } catch (err) {
+        if (!cancelled) console.warn("Anatomical physiological profile reconnect skipped:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    reconnect();
+    return () => {
+      cancelled = true;
+    };
+  }, [result, sessions.length]);
+
+  const analyze = async () => {
+    setLoading(true);
+    setResult(null);
+    setError("");
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: "Preparing anatomical and physiological context for background synthesis...",
+      },
+    });
+
+    try {
+      const sortedSessions = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
+      const evidenceDigest = buildProfileEvidenceDigest(sortedSessions);
+      const sessionSummaries = sortedSessions.slice(0, 80).map(compactSessionLine).join("\n");
+      const groundingContext = buildAIGroundingContext(userProfile);
+
+      const raw = await runProfilerAIJob({
+        model: "claude_sonnet_4_6",
+        prompt: `You are producing an Anatomical & Physiological Profile for one person. Create a detailed, evidence-grounded synthesis using only populated saved profile fields and supported patterns in the session data. This is distinct from a narrative arousal profile: its purpose is to explain relevant constitutional, anatomical, functional-mechanical, and instrumentation context.
+
+${groundingContext}
+
+SYNTHESIS REQUIREMENTS:
+- Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.
+- Separate directly entered anatomical observations from repeated session-linked findings and from cautious interpretations.
+- Consider constitutional/body habitus, cardiovascular/autonomic, respiratory, neurological/sensory, musculoskeletal/biomechanical, and endocrine/metabolic context only when those data were provided.
+- When populated, integrate static resting or flaccid anatomy, static erect anatomy, dynamic transition findings, glans or foreskin context, meatal structure, urethral accommodation, fit or tolerance, pressure distribution, device interaction, instrumentation compatibility or limitations, and repeated functional response observations.
+- Use anatomical dimensions analytically, such as when dynamic expansion, fit variability, accommodation, pressure distribution, stimulation mechanics, or session findings make them relevant. Do not recite measurements without purpose.
+- Genital or pelvic detail is optional and must be proportional to its relevance in the entered data and session evidence.
+- Do not invent unsupported anatomy or physiology, infer diagnoses, make deterministic mechanism claims, or produce erotic commentary.
+- Explicitly identify limitations and missing data where they constrain interpretation.
+
+SESSION EVIDENCE SUMMARY (${sessions.length} sessions):
+${evidenceDigest}
+
+SELECTED SESSION-BY-SESSION EVIDENCE:
+${sessionSummaries || "No session evidence is available; rely only on populated profile entries."}
+
+Write directly to the person in clear, clinically grounded language. Favor meaningful synthesis over measurement recital.`,
+        response_json_schema: {
+          type: "object",
+          properties: {
+            overview: { type: "string" },
+            constitutional_and_systemic_context: { type: "array", items: { type: "string" } },
+            cardiovascular_and_autonomic_context: { type: "array", items: { type: "string" } },
+            sensory_and_biomechanical_context: { type: "array", items: { type: "string" } },
+            pelvic_and_external_anatomy: { type: "array", items: { type: "string" } },
+            dynamic_anatomical_function: { type: "array", items: { type: "string" } },
+            instrumentation_and_fit_findings: { type: "array", items: { type: "string" } },
+            session_linked_interpretations: { type: "array", items: { type: "string" } },
+            limitations_and_data_gaps: { type: "array", items: { type: "string" } },
+          },
+          required: ["overview", "limitations_and_data_gaps"],
+        },
+      }, "AI Profiler: Anatomical & Physiological Profile", setJobStatus);
+
+      const parsed = normalizeAnatomicalProfileResult(typeof raw === "string" ? JSON.parse(raw) : raw);
+      if (!parsed?.overview) throw new Error("Claude returned an empty anatomical and physiological profile.");
+      setResult(parsed);
+      await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: parsed }, sessions.length);
+    } catch (err) {
+      console.error("Anatomical physiological profile generation failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sections = [
+    { key: "constitutional_and_systemic_context", label: "Constitutional & Systemic Context", color: "hsl(var(--primary))" },
+    { key: "cardiovascular_and_autonomic_context", label: "Cardiovascular & Autonomic Context", color: "hsl(var(--chart-3))" },
+    { key: "sensory_and_biomechanical_context", label: "Sensory & Biomechanical Context", color: "hsl(var(--chart-2))" },
+    { key: "pelvic_and_external_anatomy", label: "Pelvic & External Anatomy", color: "hsl(var(--accent))" },
+    { key: "dynamic_anatomical_function", label: "Dynamic Anatomical Function", color: "hsl(var(--chart-4))" },
+    { key: "instrumentation_and_fit_findings", label: "Instrumentation & Fit", color: "hsl(var(--primary))" },
+    { key: "session_linked_interpretations", label: "Session-Linked Interpretations", color: "hsl(var(--chart-3))" },
+    { key: "limitations_and_data_gaps", label: "Limitations & Data Gaps", color: "hsl(var(--muted-foreground))" },
+  ];
+
+  return (
+    <SectionCard icon={<Activity className="w-4 h-4" />} title="Anatomical & Physiological Profile" color="hsl(var(--chart-2))" defaultCollapsed={true}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          Evidence-grounded anatomy, dynamic function, fit, and instrumentation synthesis from your optional profile data and supported session findings.
+        </p>
+        <Button size="sm" onClick={analyze} disabled={loading || !userProfile} className="h-7 text-xs gap-1.5 shrink-0">
+          {loading
+            ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Synthesizing...</>
+            : <><Activity className="w-3 h-3" />{result ? "Re-generate" : "Generate A&P"}</>}
+        </Button>
+      </div>
+
+      <CompactError message={error} />
+      {loading && <ProfilerJobStatus job={jobStatus} fallback="The anatomical and physiological profile is running in the background..." />}
+      {!result && !loading && (
+        <p className="text-xs text-muted-foreground">
+          Populate any relevant optional Profile fields, then generate this dedicated A&P synthesis. Unpopulated details will not be inferred.
+        </p>
+      )}
+      {result && (
+        <div className="space-y-3">
+          <p className="text-base font-medium leading-relaxed border-l-2 border-chart-2/60 pl-3 py-1">
+            {result.overview}
+          </p>
+          {sections.map((section) => {
+            const findings = result[section.key] || [];
+            if (!findings.length) return null;
+            return (
+              <div key={section.key} className="border-t border-border pt-3">
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color: section.color }}>
+                  {section.label}
+                </p>
+                <div className="space-y-1.5">
+                  {findings.map((finding, index) => (
+                    <p key={index} className="border-l-2 pl-3 py-1 text-sm leading-relaxed" style={{ borderColor: section.color + "66" }}>
+                      {finding}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 function NearClimaxPanel({ sessions, allTimelines, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -1208,6 +1420,7 @@ export default function Profiler() {
       </div>
 
       <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} />
+      <AnatomicalPhysiologicalProfilePanel sessions={sessions} userProfile={userProfile} />
       <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} />
       <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} />
     </div>

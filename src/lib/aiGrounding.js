@@ -1,3 +1,5 @@
+import { richTextToPlainText } from "@/lib/richText";
+
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
   return value !== null && value !== undefined && String(value).trim() !== "";
@@ -5,7 +7,7 @@ function hasValue(value) {
 
 function cleanText(value, maxLength = 900) {
   if (!hasValue(value)) return "";
-  const text = Array.isArray(value) ? value.join(", ") : String(value);
+  const text = richTextToPlainText(Array.isArray(value) ? value.join(", ") : String(value));
   return text.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
@@ -23,6 +25,15 @@ function buildMechanicalProfileContext(profile) {
   if (!profile) return [];
 
   const lines = [];
+  addMeasurementLine(lines, "Flaccid length", profile.flaccid_length);
+  addMeasurementLine(lines, "Flaccid mid-shaft diameter", profile.flaccid_mid_shaft_diameter);
+  addMeasurementLine(lines, "Flaccid base diameter", profile.flaccid_base_diameter);
+  addMeasurementLine(lines, "Resting widest glans diameter", profile.flaccid_widest_glans_diameter);
+  addLine(lines, "Resting glans observations", profile.resting_glans_observations, 900);
+  addLine(lines, "Resting foreskin coverage or mobility", profile.resting_foreskin_coverage_mobility, 900);
+  addLine(lines, "Resting curvature or orientation", profile.resting_curvature_orientation, 900);
+  addLine(lines, "Resting meatal observations", profile.resting_meatal_observations, 900);
+  addLine(lines, "Resting urethral accommodation notes", profile.resting_urethral_accommodation_notes, 1200);
   addMeasurementLine(lines, "Bone-pressed erect length", profile.bone_pressed_erect_length);
   addMeasurementLine(lines, "Visible erect length", profile.visible_erect_length);
   addMeasurementLine(lines, "Mid-shaft diameter", profile.mid_shaft_diameter);
@@ -33,6 +44,8 @@ function buildMechanicalProfileContext(profile) {
   addLine(lines, "Foreskin behavior during sessions", profile.foreskin_behavior);
   addLine(lines, "Glans sensitivity", profile.glans_sensitivity);
   addLine(lines, "Glans overstimulation near climax", profile.glans_overstimulation_near_climax);
+  addLine(lines, "Erect glans observations", profile.erect_glans_observations, 900);
+  addLine(lines, "Erect curvature or orientation", profile.erect_curvature_orientation, 900);
   addLine(lines, "Meatal shape", profile.meatal_shape);
   addMeasurementLine(lines, "Visible meatal vertical length", profile.visible_meatal_vertical_length);
   addMeasurementLine(lines, "Visible meatal horizontal width", profile.visible_meatal_horizontal_width);
@@ -43,17 +56,30 @@ function buildMechanicalProfileContext(profile) {
   addLine(lines, "Meatal sensitivity", profile.meatal_sensitivity);
   addLine(lines, "Device stability at meatus", profile.device_stability_at_meatus);
   addLine(lines, "Meatal tension or fit notes", profile.meatal_tension_fit_notes, 900);
+  addLine(lines, "Erect meatal observations", profile.erect_meatal_observations, 900);
+  addLine(lines, "Erect urethral accommodation notes", profile.erect_urethral_accommodation_notes, 1200);
   addLine(lines, "Comfortable inserted diameter", profile.comfortable_inserted_diameter_mm != null ? `${profile.comfortable_inserted_diameter_mm} mm` : "");
   addLine(lines, "Maximum tolerated diameter", profile.maximum_tolerated_diameter_mm != null ? `${profile.maximum_tolerated_diameter_mm} mm` : "");
   addLine(lines, "Preferred Foley size", profile.preferred_foley_size_fr != null ? `${profile.preferred_foley_size_fr} French` : "");
   addLine(lines, "Stable Foley range", profile.stable_foley_range);
   addLine(lines, "Foley discomfort factors", profile.foley_discomfort_factors);
+  addLine(lines, "Flaccid to erect expansion characteristics", profile.flaccid_to_erect_expansion_characteristics, 1200);
+  addLine(lines, "Relative girth expansion", profile.relative_girth_expansion, 900);
+  addLine(lines, "Rigidity or compliance observations", profile.rigidity_compliance_observations, 1200);
+  addLine(lines, "Tissue response observations", profile.tissue_response_observations, 1200);
+  addLine(lines, "Fit variability by anatomical state", profile.fit_variability_by_state, 1200);
+  addLine(lines, "Sensitivity differences by state", profile.sensitivity_differences_by_state, 1200);
+  addLine(lines, "Pressure distribution observations", profile.pressure_distribution_observations, 1200);
+  addLine(lines, "Accommodation differences by state", profile.accommodation_differences_by_state, 1200);
+  addLine(lines, "Device interaction observations", profile.device_interaction_observations, 1200);
+  addLine(lines, "Repeated instrumentation fit findings", profile.repeated_instrumentation_fit_findings, 1200);
   addLine(lines, "Full erection stability early session", profile.full_erection_stability_early_session);
   addLine(lines, "Near-threshold erection behavior", profile.near_threshold_erection_behavior);
   addLine(lines, "Finger-on-glans recovery effectiveness", profile.finger_on_glans_recovery_effectiveness);
   addLine(lines, "Full-hand stimulation effectiveness near threshold", profile.full_hand_stimulation_effectiveness_near_threshold);
   addLine(lines, "Sleeve fit dynamics", profile.sleeve_fit_dynamics);
   addLine(lines, "Device movement sensitivity", profile.device_movement_sensitivity);
+  addLine(lines, "Erect functional observations", profile.erect_functional_observations, 1200);
   addLine(lines, "Additional functional notes", profile.additional_functional_notes, 1200);
   return lines;
 }
