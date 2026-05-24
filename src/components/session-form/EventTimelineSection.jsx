@@ -10,6 +10,8 @@ export const EVENT_CATEGORIES = [
   { value: "stimulation_paused", label: "Stim Paused", color: "#f97316" },
   { value: "stimulation_resumed", label: "Stim Resumed", color: "#22c55e" },
   { value: "stimulation_stopped", label: "Stim Stopped", color: "#ef4444" },
+  { value: "motion_pause", label: "Motion Pause", color: "#f59e0b" },
+  { value: "motion_resume", label: "Motion Resume", color: "#14b8a6" },
   { value: "sensation", label: "Sensation", color: "#a855f7" },
   { value: "physical", label: "Physical", color: "#10b981" },
   { value: "other", label: "Other", color: "#94a3b8" },
@@ -56,6 +58,14 @@ function CategoryPill({ value, small }) {
       style={{ background: meta.color + "22", color: meta.color, border: `1px solid ${meta.color}44` }}
     >
       {meta.label}
+    </span>
+  );
+}
+
+function MotionDerivedBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0 text-[9px] font-medium text-primary">
+      Motion-derived
     </span>
   );
 }
@@ -144,6 +154,7 @@ function EventRow({ ev, idx, onRemove, onUpdate, categories }) {
         <div className="flex flex-wrap gap-1 mb-0.5">
           {cats.map((c) => <CategoryPill key={c} value={c} small />)}
           {cats.length === 0 && <CategoryPill value="other" small />}
+          {ev.source === "motion_derived" && <MotionDerivedBadge />}
         </div>
         <p className="text-sm text-foreground leading-snug whitespace-pre-wrap">{ev.note}</p>
       </div>
@@ -178,7 +189,7 @@ export default function EventTimelineSection({ data, onChange }) {
     if (!noteInput.trim()) return;
     setTimeError(false);
     const totalSeconds = m * 60 + s;
-    const newEvent = { time_s: totalSeconds, note: noteInput.trim(), category: categories };
+    const newEvent = { time_s: totalSeconds, note: noteInput.trim(), category: categories, source: "manual" };
     const sorted = [...events, newEvent].sort((a, b) => a.time_s - b.time_s);
     update(sorted);
     setMinutes("");

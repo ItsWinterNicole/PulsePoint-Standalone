@@ -129,6 +129,14 @@ function AnnotationTagPill({ value }) {
   );
 }
 
+function MotionDerivedBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0 text-[8px] font-medium text-primary">
+      Motion-derived
+    </span>
+  );
+}
+
 function normalizeTagResult(result, categoryOptions, annotationTagOptions) {
   const validEventCategories = new Set(categoryOptions.map((category) => category.value));
   const validAnnotationTags = new Set(annotationTagOptions);
@@ -539,6 +547,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         time_s: m * 60 + s,
         note: cleanNote,
         category: categories,
+        source: "manual",
         annotation_tags: classification.annotation_tags,
         ai_annotation: {
           source: classification.rationale === "Local keyword fallback" ? "local-fallback" : "ai",
@@ -1204,6 +1213,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                                 </span>
                               );
                             })}
+                            {ev.source === "motion_derived" && <MotionDerivedBadge />}
                           </div>
                           {annotationTags.length > 0 && (
                             <div className="mb-0.5 flex flex-wrap gap-0.5">
@@ -1262,6 +1272,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                               </span>
                             );
                           })}
+                          {ev.source === "motion_derived" && <MotionDerivedBadge />}
                         </div>
                         {annotationTags.length > 0 && (
                           <div className="flex flex-wrap gap-0.5">
@@ -1366,6 +1377,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                           </span>
                         );
                       })}
+                      {ev.source === "motion_derived" && <MotionDerivedBadge />}
                     </div>
                     {annotationTags.length > 0 && (
                       <div className="mb-0.5 flex flex-wrap gap-0.5">

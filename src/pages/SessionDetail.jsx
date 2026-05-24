@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle } from "lucide-react";
+import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard } from "lucide-react";
 import AITagSuggester from "../components/AITagSuggester";
 import AIChat from "../components/AIChat";
 import SessionExportButton from "../components/SessionExportButton";
@@ -27,6 +27,7 @@ import InteractiveSessionTimeline from "../components/InteractiveSessionTimeline
 import InteractiveTimelinePlayer, { TimelineWaypointDetail } from "../components/InteractiveTimelinePlayer";
 import NoClimaxAIPanel from "../components/NoClimaxAIPanel";
 import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
+import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
@@ -133,6 +134,11 @@ function EventNotesPanel({
                       </span>
                     );
                   })}
+                  {event.source === "motion_derived" && (
+                    <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                      Motion-derived
+                    </span>
+                  )}
                 </div>
               </div>
               <p className="mt-1 text-sm leading-relaxed text-foreground/90">{event.note || "No note"}</p>
@@ -358,7 +364,7 @@ export default function SessionDetail() {
   const s = session;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
-  const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0;
+  const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link;
   const sectionLinks = [
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
@@ -842,7 +848,7 @@ export default function SessionDetail() {
         })()}
 
         {/* Interactive Timeline Player */}
-        {(timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0) && (
+        {(timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || s.motion_analysis_summary) && (
           <section id="session-timeline" className="scroll-mt-24 space-y-4">
             <div className="rounded-xl border border-border bg-card p-4 space-y-3">
               <div>
@@ -876,6 +882,21 @@ export default function SessionDetail() {
                 waypoint={timelineWaypointDetail?.waypoint}
                 currentHR={timelineWaypointDetail?.currentHR}
               />
+              {s.motion_analysis_summary && (
+                <div className="space-y-2 border-t border-border pt-3">
+                  <SavedMotionSummaryCard summary={s.motion_analysis_summary} compact />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
+                    className="gap-1.5"
+                  >
+                    <Clapperboard className="h-3.5 w-3.5" />
+                    Review motion against video
+                  </Button>
+                </div>
+              )}
             </div>
             <InteractiveTimelinePlayer
               session={s}

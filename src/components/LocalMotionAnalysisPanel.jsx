@@ -557,6 +557,186 @@ function calculateAsymmetry(samples) {
   };
 }
 
+function calculateHandRhythmSummary(samples, scoreKey, handCoverage, sampleRate) {
+  if (!samples.length || handCoverage < 65 || sampleRate < 6) {
+    return {
+      reliability: "insufficient",
+      reason: handCoverage < 65
+        ? "Hand visibility coverage was below the threshold required for cadence estimation."
+        : "The sampling rate was too low for cadence estimation.",
+    };
+  }
+
+  const detected = samples
+    .filter((sample) => sample.handsDetected || (!("handsDetected" in sample) && sample.detected))
+    .map((sample) => ({ timeS: sample.timeS, score: Number(sample[scoreKey]) || 0 }));
+  if (detected.length < sampleRate * 8) {
+    return {
+      reliability: "insufficient",
+      reason: "Not enough continuously visible hand movement was available for cadence estimation.",
+    };
+  }
+
+  const smoothed = detected.map((sample, index) => ({
+    ...sample,
+    score: mean(detected.slice(Math.max(0, index - 1), Math.min(detected.length, index + 2)).map((point) => point.score)) || 0,
+  }));
+  const activeThreshold = 22;
+  const peakThreshold = 35;
+  const minimumPeakSpacingS = 0.45;
+  const peaks = [];
+  smoothed.forEach((sample, index) => {
+    if (
+      sample.score >= peakThreshold
+      && sample.score >= (smoothed[index - 1]?.score ?? -1)
+      && sample.score > (smoothed[index + 1]?.score ?? -1)
+      && (!peaks.length || sample.timeS - peaks[peaks.length - 1].timeS >= minimumPeakSpacingS)
+    ) {
+      peaks.push(sample);
+    }
+  });
+
+  const intervals = peaks
+    .slice(1)
+    .map((sample, index) => sample.timeS - peaks[index].timeS)
+    .filter((duration) => duration >= minimumPeakSpacingS && duration <= 3);
+  const cadence = intervals.length >= 3 ? Math.round(60 / (mean(intervals) || 1)) : null;
+  let pauseStart = null;
+  let pauseCount = 0;
+  let pausedSeconds = 0;
+  smoothed.forEach((sample, index) => {
+    const inactive = sample.score < activeThreshold;
+    if (inactive && pauseStart == null) pauseStart = sample.timeS;
+    if ((!inactive || index === smoothed.length - 1) && pauseStart != null) {
+      const end = inactive ? sample.timeS : (smoothed[index - 1]?.timeS ?? sample.timeS);
+      const duration = end - pauseStart;
+      if (duration >= 2) {
+        pauseCount += 1;
+        pausedSeconds += duration;
+      }
+      pauseStart = null;
+    }
+  });
+
+  return {
+    reliability: cadence != null && peaks.length >= 4 ? "moderate" : "limited",
+    movement_cycles_per_minute_estimate: cadence,
+    detected_cycle_peaks: peaks.length,
+    pause_count: pauseCount,
+    paused_time_s: Math.round(pausedSeconds),
+    active_time_pct: Math.round((smoothed.filter((sample) => sample.score >= activeThreshold).length / smoothed.length) * 100),
+    method_note: "Estimated from normalized repeated hand-movement oscillations; this is an observational cadence proxy, not confirmed stroke speed.",
+  };
+}
+
+const MOTION_SUGGESTION_SENSITIVITY = {
+  conservative: { inactiveThreshold: 18, resumeDurationS: 1, minimumCoverage: 75 },
+  balanced: { inactiveThreshold: 22, resumeDurationS: 0.75, minimumCoverage: 65 },
+  sensitive: { inactiveThreshold: 28, resumeDurationS: 0.5, minimumCoverage: 65 },
+};
+
+function buildHandTransitionSuggestions(result, settings) {
+  if (!result?.hasHands || !result.samples?.length || result.sampleRate < 6) return [];
+  const sensitivity = MOTION_SUGGESTION_SENSITIVITY[settings.sensitivity] || MOTION_SUGGESTION_SENSITIVITY.balanced;
+  if (result.handCoverage < sensitivity.minimumCoverage) return [];
+
+  const stepS = 1 / result.sampleRate;
+  const scoreKey = result.hasLegs ? "handScore" : "score";
+  const points = result.samples.map((sample) => ({
+    timeS: sample.timeS,
+    score: Number(sample[scoreKey]) || 0,
+    detected: Boolean(sample.handsDetected),
+  }));
+  const rawPauses = [];
+  let pauseStart = null;
+  points.forEach((point, index) => {
+    const inactive = point.detected && point.score < sensitivity.inactiveThreshold;
+    if (inactive && pauseStart == null) pauseStart = index;
+    if ((!inactive || index === points.length - 1) && pauseStart != null) {
+      const endIndex = inactive ? index : index - 1;
+      rawPauses.push({ startIndex: pauseStart, endIndex });
+      pauseStart = null;
+    }
+  });
+
+  const mergedPauses = rawPauses.reduce((segments, segment) => {
+    const prior = segments[segments.length - 1];
+    if (!prior || !settings.mergeNearby) {
+      segments.push(segment);
+      return segments;
+    }
+    const gapStart = prior.endIndex + 1;
+    const gapEnd = segment.startIndex - 1;
+    const gap = points.slice(gapStart, gapEnd + 1);
+    const gapDuration = Math.max(0, points[segment.startIndex].timeS - points[prior.endIndex].timeS - stepS);
+    const bridgeIsLowMotion = gap.every((point) => point.detected && point.score < sensitivity.inactiveThreshold * 1.4);
+    if (gapDuration <= 0.5 && bridgeIsLowMotion) {
+      prior.endIndex = segment.endIndex;
+    } else {
+      segments.push(segment);
+    }
+    return segments;
+  }, []);
+
+  const candidates = [];
+  let lastPairStart = -Infinity;
+  mergedPauses.forEach((segment, pairIndex) => {
+    const start = points[segment.startIndex].timeS;
+    const end = points[segment.endIndex].timeS + stepS;
+    const duration = end - start;
+    if (duration < settings.minimumPauseDuration || start - lastPairStart < settings.minimumSpacing) return;
+
+    const prePause = points.filter((point) => point.timeS >= start - 2 && point.timeS < start && point.detected);
+    const postResume = points.filter((point) => point.timeS >= end && point.timeS < end + sensitivity.resumeDurationS && point.detected);
+    const preAverage = mean(prePause.map((point) => point.score));
+    const postAverage = mean(postResume.map((point) => point.score));
+    const minimumResumeSamples = Math.max(1, Math.ceil(result.sampleRate * sensitivity.resumeDurationS * 0.65));
+    const activePostSamples = postResume.filter((point) => point.score >= sensitivity.inactiveThreshold).length;
+    if (
+      preAverage == null
+      || preAverage < sensitivity.inactiveThreshold
+      || postAverage == null
+      || postResume.length < minimumResumeSamples
+      || activePostSamples < minimumResumeSamples
+    ) return;
+
+    const id = `motion-pause-${Math.round(start * 10)}-${pairIndex}`;
+    const shared = {
+      pairId: id,
+      pauseStartTimeS: Math.round(start * 10) / 10,
+      pauseEndTimeS: Math.round(end * 10) / 10,
+      pauseDurationS: Math.round(duration * 10) / 10,
+      confidence: "moderate",
+      prePauseHandActivityAverage: Math.round(preAverage),
+      postResumeHandActivityAverage: Math.round(postAverage),
+    };
+    candidates.push({ ...shared, id: `${id}-pause`, type: "motion_pause", timeS: shared.pauseStartTimeS });
+    candidates.push({ ...shared, id: `${id}-resume`, type: "motion_resume", timeS: shared.pauseEndTimeS });
+    lastPairStart = start;
+  });
+  return candidates;
+}
+
+function motionSuggestionEvent(suggestion) {
+  const pauseSeconds = suggestion.pauseDurationS.toFixed(1).replace(/\.0$/, "");
+  const isPause = suggestion.type === "motion_pause";
+  return {
+    time_s: suggestion.timeS,
+    note: isPause
+      ? "Motion-derived: observed hand activity pause candidate."
+      : `Motion-derived: observed hand activity resumed after approximately ${pauseSeconds} seconds of reduced activity.`,
+    category: [isPause ? "motion_pause" : "motion_resume"],
+    annotation_tags: ["other_context"],
+    source: "motion_derived",
+    motion_evidence: {
+      candidate_id: suggestion.pairId,
+      suggestion_type: suggestion.type,
+      confidence: suggestion.confidence,
+      ...(isPause ? { pause_duration_s: suggestion.pauseDurationS } : { preceding_pause_duration_s: suggestion.pauseDurationS }),
+    },
+  };
+}
+
 function QualityBadge({ coverage }) {
   const quality = qualityFromCoverage(coverage);
   if (!quality) return null;
@@ -587,6 +767,9 @@ function buildFindings(result) {
   }
   if (result.hasHands && result.handCoverage >= 60) {
     findings.push("Hand motion was detected reliably enough to compare its timing against visible foot / leg activity peaks.");
+  }
+  if (result.handRhythm?.reliability === "moderate" && result.handRhythm.movement_cycles_per_minute_estimate != null) {
+    findings.push(`Repeated hand-movement oscillations support a cautious cadence estimate of approximately ${result.handRhythm.movement_cycles_per_minute_estimate} movement cycles per minute, with ${result.handRhythm.pause_count} pauses of at least two seconds; this is not confirmed stroke speed.`);
   }
   if (result.asymmetry && result.leftCoverage >= 50 && result.rightCoverage >= 50) {
     if (result.asymmetry.predominantSide === "balanced") {
@@ -650,6 +833,7 @@ function buildSavedSummary(result) {
     left_forefoot_average_activity: result.hasForefoot ? result.leftForefootAverage : undefined,
     right_forefoot_average_activity: result.hasForefoot ? result.rightForefootAverage : undefined,
     hand_average_activity: result.hasHands ? result.handAverage : undefined,
+    hand_movement_summary: result.hasHands ? result.handRhythm : undefined,
     findings: result.findings,
     derived_timeline: buildDerivedTimeline(result),
     review_peaks: result.moments.map((moment) => ({
@@ -699,7 +883,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, selectedSession, onSeek, onSaveSummary }) {
+export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, selectedSession, onSeek, onSaveSummary, onAcceptSuggestions }) {
   const stopRequestedRef = useRef(false);
   const previewCanvasRef = useRef(null);
   const previewEnabledRef = useRef(false);
@@ -736,6 +920,16 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [previewLegs, setPreviewLegs] = useState(true);
   const [previewHands, setPreviewHands] = useState(true);
   const [previewReady, setPreviewReady] = useState(false);
+  const [suggestionSettings, setSuggestionSettings] = useState({
+    minimumPauseDuration: 2,
+    sensitivity: "balanced",
+    mergeNearby: true,
+    minimumSpacing: 2,
+  });
+  const [visibleSuggestionTypes, setVisibleSuggestionTypes] = useState({ motion_pause: true, motion_resume: true });
+  const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState([]);
+  const [acceptedSuggestionIds, setAcceptedSuggestionIds] = useState([]);
+  const [acceptingSuggestions, setAcceptingSuggestions] = useState(false);
 
   useEffect(() => {
     stopRequestedRef.current = true;
@@ -747,6 +941,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setRoiFrameReady(false);
     roiFrameCanvasRef.current = null;
     previewReadyRef.current = false;
+    setDismissedSuggestionIds([]);
+    setAcceptedSuggestionIds([]);
   }, [videoSrc]);
 
   useEffect(() => {
@@ -782,6 +978,15 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const selectedMode = MODES[mode];
   const appliedRois = useMemo(() => resolveRois(roiLayout, rois), [roiLayout, rois]);
   const appliedLowerBodyMethod = roiLayout === "pip" ? lowerBodyMethod : "landmarks";
+  const motionSuggestions = useMemo(
+    () => buildHandTransitionSuggestions(result, suggestionSettings),
+    [result, suggestionSettings],
+  );
+  const visibleMotionSuggestions = motionSuggestions.filter((suggestion) => (
+    visibleSuggestionTypes[suggestion.type]
+    && !dismissedSuggestionIds.includes(suggestion.id)
+    && !acceptedSuggestionIds.includes(suggestion.id)
+  ));
   const analysisRange = useMemo(() => {
     const duration = Number(videoDuration) || 0;
     if (!duration) return { start: 0, end: 0 };
@@ -1099,6 +1304,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           rawSamples.push({
             timeS,
             motion: handValue,
+            handsDetected: !!hands,
             detected: !!hands,
           });
         }
@@ -1157,6 +1363,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         peakActivity: Math.round(Math.max(0, ...detectedSamples.map((sample) => sample.score))),
       };
       nextResult.asymmetry = hasLegs ? calculateAsymmetry(samples) : null;
+      nextResult.handRhythm = hasHands
+        ? calculateHandRhythmSummary(samples, hasLegs ? "handScore" : "score", nextResult.handCoverage, selectedMode.fps)
+        : null;
       nextResult.findings = buildFindings(nextResult);
       setResult(nextResult);
     } catch (caughtError) {
@@ -1185,6 +1394,20 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       setError(caughtError?.message || "The motion summary could not be saved to this session.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const acceptSuggestions = async (suggestions) => {
+    if (!suggestions.length || !selectedSession || !onAcceptSuggestions) return;
+    setAcceptingSuggestions(true);
+    setError("");
+    try {
+      await onAcceptSuggestions(suggestions.map(motionSuggestionEvent));
+      setAcceptedSuggestionIds((current) => [...new Set([...current, ...suggestions.map((suggestion) => suggestion.id)])]);
+    } catch (caughtError) {
+      setError(caughtError?.message || "The motion-derived event suggestions could not be saved.");
+    } finally {
+      setAcceptingSuggestions(false);
     }
   };
 
@@ -1635,6 +1858,186 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               <p className="text-[11px] text-muted-foreground">
                 Calculated only from active samples where both selected lower-body regions were detected. Left and right use one shared comparison scale; index direction reflects the labels assigned to your rectangles.
               </p>
+            </div>
+          )}
+
+          {result.hasHands && result.handRhythm?.reliability === "moderate" && (
+            <div className="rounded-lg border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#a78bfa]">Hand Movement Rhythm Estimate</p>
+                <span className="text-[10px] text-muted-foreground">Observational proxy only</span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Cadence Estimate</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.handRhythm.movement_cycles_per_minute_estimate} cycles/min</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Pauses Of Two Seconds Or Longer</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.handRhythm.pause_count}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Active Windows</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.handRhythm.active_time_pct}%</p>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">{result.handRhythm.method_note}</p>
+            </div>
+          )}
+
+          {result.hasHands && (
+            <div className="rounded-lg border border-primary/25 bg-primary/[0.04] p-3 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Motion-Derived Event Suggestions</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">Draft observations only. Review against video before saving.</p>
+                </div>
+                {motionSuggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => acceptSuggestions(visibleMotionSuggestions)}
+                      disabled={!selectedSession || acceptingSuggestions || visibleMotionSuggestions.length === 0}
+                      className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-45"
+                    >
+                      Accept all visible
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDismissedSuggestionIds((current) => [...new Set([...current, ...visibleMotionSuggestions.map((suggestion) => suggestion.id)])])}
+                      disabled={visibleMotionSuggestions.length === 0}
+                      className="rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground disabled:opacity-45"
+                    >
+                      Dismiss all visible
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-4">
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Minimum Pause</p>
+                  <Select
+                    value={String(suggestionSettings.minimumPauseDuration)}
+                    onValueChange={(value) => setSuggestionSettings((current) => ({ ...current, minimumPauseDuration: Number(value) }))}
+                  >
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="2">2 seconds</SelectItem>
+                      <SelectItem value="3">3 seconds</SelectItem>
+                      <SelectItem value="5">5 seconds</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Sensitivity</p>
+                  <Select
+                    value={suggestionSettings.sensitivity}
+                    onValueChange={(value) => setSuggestionSettings((current) => ({ ...current, sensitivity: value }))}
+                  >
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="conservative">Conservative</SelectItem>
+                      <SelectItem value="balanced">Balanced</SelectItem>
+                      <SelectItem value="sensitive">Sensitive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Minimum Spacing</p>
+                  <Select
+                    value={String(suggestionSettings.minimumSpacing)}
+                    onValueChange={(value) => setSuggestionSettings((current) => ({ ...current, minimumSpacing: Number(value) }))}
+                  >
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="2">2 seconds</SelectItem>
+                      <SelectItem value="5">5 seconds</SelectItem>
+                      <SelectItem value="10">10 seconds</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <label className="flex items-end gap-2 rounded-md border border-border px-2.5 py-2 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={suggestionSettings.mergeNearby}
+                    onChange={(event) => setSuggestionSettings((current) => ({ ...current, mergeNearby: event.target.checked }))}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  Merge nearby gaps
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: "motion_pause", label: "Pauses" },
+                  { key: "motion_resume", label: "Resumptions" },
+                ].map(({ key, label }) => (
+                  <label key={key} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/20 px-2.5 py-1 text-[11px] text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={visibleSuggestionTypes[key]}
+                      onChange={(event) => setVisibleSuggestionTypes((current) => ({ ...current, [key]: event.target.checked }))}
+                      className="h-3 w-3 accent-primary"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              {motionSuggestions.length === 0 ? (
+                <p className="rounded-md border border-border bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+                  No confidence-gated hand pause/resumption candidates were identified for this run.
+                </p>
+              ) : visibleMotionSuggestions.length === 0 ? (
+                <p className="rounded-md border border-border bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+                  No remaining visible draft suggestions. Dismissed drafts are not saved.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {visibleMotionSuggestions.map((suggestion) => {
+                    const isPause = suggestion.type === "motion_pause";
+                    const pauseSeconds = suggestion.pauseDurationS.toFixed(1).replace(/\.0$/, "");
+                    return (
+                      <div key={suggestion.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2">
+                        <button type="button" onClick={() => onSeek?.(suggestion.timeS)} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                          <Play className="h-3 w-3" />
+                          {formatTime(suggestion.timeS)}
+                        </button>
+                        <span className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-0.5 text-[10px] font-semibold text-primary">
+                          {isPause ? "Pause candidate" : "Resumption candidate"}
+                        </span>
+                        <span className="rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                          {suggestion.confidence}
+                        </span>
+                        <p className="min-w-[16rem] flex-1 text-xs text-foreground">
+                          {isPause
+                            ? `Motion-derived: observed hand activity pause candidate (${pauseSeconds} seconds).`
+                            : `Motion-derived: observed hand activity resumed after approximately ${pauseSeconds} seconds.`}
+                        </p>
+                        <span className="text-[10px] text-muted-foreground">
+                          pre {suggestion.prePauseHandActivityAverage} / post {suggestion.postResumeHandActivityAverage}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => acceptSuggestions([suggestion])}
+                          disabled={!selectedSession || acceptingSuggestions}
+                          className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-45"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDismissedSuggestionIds((current) => [...new Set([...current, suggestion.id])])}
+                          className="rounded-md border border-border px-2.5 py-1 text-[11px] text-muted-foreground"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!selectedSession && motionSuggestions.length > 0 && (
+                <p className="text-[11px] text-muted-foreground">Select a session before accepting draft suggestions into its timeline.</p>
+              )}
             </div>
           )}
 

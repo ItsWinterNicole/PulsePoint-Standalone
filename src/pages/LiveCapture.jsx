@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Activity, Brain, CheckCircle2, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import PageHeader from "@/components/PageHeader";
 import { base44 } from "@/api/base44Client";
+import { useToast } from "@/components/ui/use-toast";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 const MAX_TELEMETRY_POINTS = 240;
@@ -29,7 +30,7 @@ const CAPTURE_MODES = [
   { value: "full", label: "Full telemetry", helper: "HR, EMG, OBS, and voice notes" },
   { value: "media", label: "Media", helper: "Video-first live review" },
   { value: "hr_emg", label: "HR + EMG", helper: "Telemetry-focused capture" },
-  { value: "hr", label: "HR only", helper: "Hide EMG until needed" },
+  { value: "hr", label: "HR Only / Main Telemetry", helper: "Distance-readable HR and EMG dashboard" },
   { value: "video", label: "Video sync", helper: "OBS-first review workflow" },
 ];
 
@@ -230,13 +231,13 @@ function StatusDot({ active }) {
   );
 }
 
-function MetricCard({ icon, label, value, helper, active, level }) {
+function MetricCard({ icon, label, value, helper, active, level, large = false }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border p-4 ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"}`}
-      style={hasLevel ? { borderColor: `${color}80`, background: `linear-gradient(135deg, ${color}24, hsl(var(--card)) 58%)` } : undefined}
+      className={`relative overflow-hidden rounded-xl border ${large ? "p-5" : "p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"}`}
+      style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
       {hasLevel && (
         <div
@@ -251,19 +252,24 @@ function MetricCard({ icon, label, value, helper, active, level }) {
         </div>
         <StatusDot active={active || hasLevel} />
       </div>
-      <p className="mt-3 text-3xl font-bold tracking-tight text-foreground">{value}</p>
-      {helper && <p className="mt-1 text-xs text-muted-foreground">{helper}</p>}
+      <p className={`mt-3 font-bold tracking-tight text-foreground ${large ? "text-5xl" : "text-3xl"}`}>{value}</p>
+      {helper && <p className={`mt-1 text-muted-foreground ${large ? "text-sm" : "text-xs"}`}>{helper}</p>}
     </div>
   );
 }
 
-function CompactStat({ label, value, helper, tone = "primary" }) {
-  const toneClass = tone === "danger" ? "text-destructive" : tone === "muted" ? "text-muted-foreground" : "text-primary";
+function CompactStat({ label, value, helper, level, emphasis = false }) {
+  const hasLevel = Number.isFinite(Number(level));
+  const color = hasLevel ? levelColor(level) : null;
   return (
-    <div className="rounded-lg border border-border bg-muted/25 px-3 py-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p className={`mt-1 text-2xl font-bold tracking-tight ${toneClass}`}>{value}</p>
-      {helper && <p className="mt-0.5 text-[10px] text-muted-foreground">{helper}</p>}
+    <div
+      className={`relative overflow-hidden rounded-xl border px-4 py-3 ${emphasis ? "min-h-[7.5rem]" : "min-h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"}`}
+      style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}42, ${color}12 54%, hsl(var(--card)) 100%)` } : undefined}
+    >
+      {hasLevel && <div className="absolute inset-x-0 bottom-0 h-1.5" style={{ backgroundColor: color }} />}
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+      <p className={`mt-2 font-bold tracking-tight text-foreground ${emphasis ? "text-5xl" : "text-4xl"}`}>{value}</p>
+      {helper && <p className="mt-1 text-sm font-medium text-foreground/75">{helper}</p>}
     </div>
   );
 }
@@ -301,13 +307,13 @@ function EmptyChartState() {
   );
 }
 
-function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56" }) {
+function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", distanceView = false }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-primary">{title}</p>
-          {subtitle && <p className="mt-0.5 text-[11px] text-muted-foreground">{subtitle}</p>}
+          <p className={`${distanceView ? "text-sm" : "text-xs"} font-semibold uppercase tracking-wider text-primary`}>{title}</p>
+          {subtitle && <p className={`mt-0.5 text-muted-foreground ${distanceView ? "text-sm" : "text-[11px]"}`}>{subtitle}</p>}
         </div>
       </div>
       <div className={heightClass}>
@@ -369,6 +375,9 @@ function computePrediction(hrTelemetry, emgTelemetry, history = []) {
 }
 
 export default function LiveCapture() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusView = searchParams.get("display") === "focus";
+  const { toast } = useToast();
   const [status, setStatus] = useState(null);
   const [hrTelemetry, setHrTelemetry] = useState(null);
   const [emgTelemetry, setEmgTelemetry] = useState(null);
@@ -381,6 +390,7 @@ export default function LiveCapture() {
   const [liveEvents, setLiveEvents] = useState([]);
   const [phaseMarkers, setPhaseMarkers] = useState([]);
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
+  const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
   const [wakeListening, setWakeListening] = useState(false);
   const [annotationRecording, setAnnotationRecording] = useState(false);
@@ -489,6 +499,10 @@ export default function LiveCapture() {
   }, [captureMode]);
 
   useEffect(() => {
+    localStorage.setItem("pulsepoint.telemetryNotices", telemetryNoticesEnabled ? "on" : "off");
+  }, [telemetryNoticesEnabled]);
+
+  useEffect(() => {
     if (!presetModalOpen) return undefined;
     const onKeyDown = (event) => {
       if (event.key === "Escape") setPresetModalOpen(false);
@@ -517,6 +531,9 @@ export default function LiveCapture() {
   const hrConnected = Boolean(status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
   const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
+  const mainTelemetryView = captureMode === "hr";
+  const telemetryEmgLive = recordingActive && isRecent(emgSourceAt);
+  const distanceTelemetryView = mainTelemetryView || focusView;
   const hasHrTrend = telemetryHistory.some((point) => point.hr != null || point.hrSmoothed != null);
   const hasEmgTrend = telemetryHistory.some((point) => point.left != null || point.right != null || point.diff != null);
   const currentHrLevel = hrLevelPercent(hrTelemetry?.currentHr, hrTelemetry?.baselineHr);
@@ -533,6 +550,16 @@ export default function LiveCapture() {
     if (current != null) values.push(current);
     return values.length ? Math.max(...values) : null;
   }, [hrTelemetry, telemetryHistory]);
+
+  const setFocusView = useCallback((enabled) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (enabled) {
+      nextParams.set("display", "focus");
+    } else {
+      nextParams.delete("display");
+    }
+    setSearchParams(nextParams);
+  }, [searchParams, setSearchParams]);
 
   const clearMediaVideo = useCallback(() => {
     if (mediaObjectUrlRef.current) {
@@ -622,9 +649,11 @@ export default function LiveCapture() {
   useEffect(() => {
     if (!recordingActive || !telemetryHistory.length) return;
     const strongLabel = prediction.nearClimax >= 75
-      ? "Near-climax watch"
+      ? "Near-climax possibility"
       : prediction.recovery >= 70
         ? "Recovery watch"
+        : Number(buildLevel) >= 55 && prediction.recentSlope > 0
+          ? "Sustained build observed"
         : prediction.nearClimax >= 45
           ? "Build intensifying"
           : "";
@@ -643,7 +672,15 @@ export default function LiveCapture() {
         reason: prediction.reason || strongLabel,
       },
     ].slice(-20));
-  }, [getCurrentSessionTime, prediction, recordingActive, telemetryHistory]);
+    if (telemetryNoticesEnabled) {
+      toast({
+        title: <span className="text-lg font-semibold tracking-tight">{strongLabel}</span>,
+        description: <span className="text-base leading-relaxed">{prediction.reason || "Meaningful live telemetry pattern detected."}</span>,
+        duration: 6500,
+        className: "min-w-[22rem] border-primary/50 bg-card/95 p-5 shadow-2xl",
+      });
+    }
+  }, [buildLevel, getCurrentSessionTime, prediction, recordingActive, telemetryHistory, telemetryNoticesEnabled, toast]);
 
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -1061,18 +1098,35 @@ export default function LiveCapture() {
     </div>
   );
 
-  const mediaPanel = captureMode === "media" ? (
-    <div className="rounded-xl border border-border bg-card p-3 md:p-4">
+  const mediaPanel = (captureMode === "media" || focusView) ? (
+    <div className={focusView ? "flex h-full flex-col bg-background p-3" : "rounded-xl border border-border bg-card p-3 md:p-4"}>
       <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
+          <p className={`${focusView ? "text-sm" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5`}>
             <Video className="h-4 w-4" /> Media Review
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className={`mt-1 text-muted-foreground ${focusView ? "text-base" : "text-sm"}`}>
             Local video playback with live HR context kept in view.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">
+            <input
+              type="checkbox"
+              checked={telemetryNoticesEnabled}
+              onChange={(event) => setTelemetryNoticesEnabled(event.target.checked)}
+              className="h-4 w-4 accent-primary"
+            />
+            Live notices
+          </label>
+          <button
+            type="button"
+            onClick={() => setFocusView(!focusView)}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+          >
+            {focusView ? <X className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            {focusView ? "Exit Display View" : "Display View"}
+          </button>
           <input
             ref={mediaInputRef}
             type="file"
@@ -1109,9 +1163,9 @@ export default function LiveCapture() {
         </div>
       </div>
 
-      <div className="grid min-h-[calc(100vh-15rem)] gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className={`grid gap-3 ${focusView ? "min-h-0 flex-1 xl:grid-cols-[minmax(0,1fr)_30rem]" : "min-h-[calc(100vh-15rem)] xl:grid-cols-[minmax(0,1fr)_27rem]"}`}>
         <div
-          className={`relative flex min-h-[22rem] items-center justify-center overflow-hidden rounded-xl border ${
+          className={`relative flex items-center justify-center overflow-hidden rounded-xl border ${focusView ? "min-h-0" : "min-h-[22rem]"} ${
             mediaDragging ? "border-primary bg-primary/10" : "border-border bg-black"
           }`}
           onDragEnter={(event) => {
@@ -1138,7 +1192,7 @@ export default function LiveCapture() {
               src={mediaVideo.url}
               controls
               playsInline
-              className="max-h-[calc(100vh-17rem)] min-h-[22rem] w-full bg-black object-contain"
+              className={`${focusView ? "h-full min-h-0 max-h-full" : "max-h-[calc(100vh-17rem)] min-h-[22rem]"} w-full bg-black object-contain`}
             />
           ) : (
             <button
@@ -1159,29 +1213,32 @@ export default function LiveCapture() {
         </div>
 
         {!mediaFullscreen && (
-          <div className="grid content-start gap-3 xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden">
+          <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
             <div className="grid grid-cols-2 gap-2">
-              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" />
-              <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" tone="danger" />
-              <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} />
-              <CompactStat label="Watch" value={`${prediction.nearClimax}%`} helper={prediction.label} />
+              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis />
+              <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
+              <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
+              <CompactStat label="Near-Climax Watch" value={`${prediction.nearClimax}%`} helper={prediction.label} level={prediction.nearClimax} />
             </div>
 
-            <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div
+              className="rounded-xl border p-4"
+              style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(prediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
+            >
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
-                  <p className="mt-1 text-xs text-foreground">{prediction.label}</p>
+                  <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
+                  <p className="mt-1 text-base font-medium text-foreground">{prediction.label}</p>
                 </div>
-                <Brain className="h-4 w-4 text-primary" />
+                <Brain className="h-5 w-5 text-primary" />
               </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${prediction.nearClimax}%` }} />
+              <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
               </div>
-              {prediction.reason && <p className="mt-2 line-clamp-2 text-[10px] text-muted-foreground">{prediction.reason}</p>}
+              {prediction.reason && <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{prediction.reason}</p>}
             </div>
 
-            <TrendPanel title="HR Trend" subtitle="Compact live view" empty={!hasHrTrend} heightClass="h-44">
+            <TrendPanel title="HR Trend" subtitle="Compact live view" empty={!hasHrTrend} heightClass="h-48" distanceView>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={telemetryHistory} margin={{ top: 8, right: 8, bottom: 0, left: -22 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.35} />
@@ -1205,7 +1262,7 @@ export default function LiveCapture() {
             </TrendPanel>
 
             <div className="rounded-xl border border-border bg-muted/20 p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Quick Phase Marks</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Quick Phase Marks</p>
               <div className="mt-2 grid grid-cols-3 gap-1.5">
                 {[
                   { key: "pre_climax_offset_s", label: "Pre" },
@@ -1216,7 +1273,7 @@ export default function LiveCapture() {
                     key={item.key}
                     type="button"
                     onClick={() => applyLiveCommand({ type: "mark_phase", key: item.key, label: item.label === "Pre" ? "Pre-climax" : item.label })}
-                    className="rounded-lg bg-muted px-2 py-1.5 text-[10px] font-semibold text-foreground hover:bg-muted/80"
+                    className="rounded-lg bg-muted px-2 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
                   >
                     {item.label}
                   </button>
@@ -1229,25 +1286,52 @@ export default function LiveCapture() {
     </div>
   ) : null;
 
+  if (focusView && captureMode === "media") {
+    return (
+      <div className="h-screen overflow-hidden bg-background">
+        {mediaPanel}
+      </div>
+    );
+  }
+
   return (
-    <div className="p-4 md:p-6 space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+    <div className={`${focusView ? "h-screen overflow-hidden p-4" : "p-4 md:p-6"} space-y-4`}>
+      {!focusView && <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <PageHeader
           title="Live Capture"
           subtitle="Real-time HR, EMG, OBS recording state, and prediction telemetry"
           icon={Radio}
         />
-        <button
-          type="button"
-          onClick={() => setPresetModalOpen(true)}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-muted/50 md:mt-1"
-        >
-          <SlidersHorizontal className="h-4 w-4 text-primary" />
-          <span>{selectedCaptureMode.label}</span>
-        </button>
-      </div>
+        <div className="flex flex-wrap items-center gap-2 md:mt-1">
+          <label className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm">
+            <input
+              type="checkbox"
+              checked={telemetryNoticesEnabled}
+              onChange={(event) => setTelemetryNoticesEnabled(event.target.checked)}
+              className="h-4 w-4 accent-primary"
+            />
+            Live notices
+          </label>
+          <button
+            type="button"
+            onClick={() => setFocusView(true)}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-primary/15"
+          >
+            <Maximize2 className="h-4 w-4 text-primary" />
+            <span>Display View</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setPresetModalOpen(true)}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-muted/50"
+          >
+            <SlidersHorizontal className="h-4 w-4 text-primary" />
+            <span>{selectedCaptureMode.label}</span>
+          </button>
+        </div>
+      </div>}
 
-      {presetModalOpen && (
+      {!focusView && presetModalOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/20 p-4 pt-20 md:p-6 md:pt-24" onMouseDown={() => setPresetModalOpen(false)}>
           <div
             className="w-full max-w-lg rounded-xl border border-border bg-card p-4 shadow-2xl"
@@ -1291,9 +1375,9 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {mediaPanel}
+      {!focusView && mediaPanel}
 
-      <div className="rounded-xl border border-border bg-card p-4">
+      {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Capture Readiness</p>
@@ -1340,20 +1424,20 @@ export default function LiveCapture() {
             optional
           />
         </div>
-      </div>
+      </div>}
 
-      {voiceAnnotationPanel}
+      {!focusView && !mainTelemetryView && voiceAnnotationPanel}
 
       {captureMode !== "media" && (
         <>
-      <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+      {!focusView && !mainTelemetryView && <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <MetricCard icon={<Radio className="w-4 h-4" />} label="PulsePoint Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
         <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Relay" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
         {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
         <MetricCard icon={<Video className="w-4 h-4" />} label="OBS Recording" value={recordingActive ? "Recording" : "Stopped"} helper={recording?.filename || "No active capture"} active={recordingActive} />
-      </div>
+      </div>}
 
-      <div className="rounded-xl border border-border bg-card p-4">
+      {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -1441,25 +1525,47 @@ export default function LiveCapture() {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
-      <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+      <div className={`rounded-xl border border-border bg-card ${distanceTelemetryView ? "p-5 md:p-6 space-y-6" : "p-4 space-y-4"} ${focusView ? "h-[calc(100vh-2rem)] overflow-y-auto" : ""}`}>
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
-            <CircleDot className="w-4 h-4" /> Live Telemetry
+          <h3 className={`${distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
+            <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
           </h3>
-          <span className="text-[10px] text-muted-foreground">
-            HR {fmtTime(status?.hr?.lastMessageAt)}{emgLive ? ` · EMG ${fmtTime(status?.emg?.lastMessageAt || status?.emg?.lastPollAt)}` : ""}
-          </span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
+              HR {fmtTime(status?.hr?.lastMessageAt)}{telemetryEmgLive ? ` · EMG ${fmtTime(status?.emg?.lastMessageAt || status?.emg?.lastPollAt)}` : ""}
+            </span>
+            {focusView && (
+              <>
+                <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={telemetryNoticesEnabled}
+                    onChange={(event) => setTelemetryNoticesEnabled(event.target.checked)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  Live notices
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setFocusView(false)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+                >
+                  <X className="h-4 w-4" /> Exit Display View
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
-        <div className={`grid gap-3 sm:grid-cols-2 ${emgLive ? "lg:grid-cols-4" : "lg:grid-cols-2"}`}>
-          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} />
-          <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} />
-          {emgLive && (
+        <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive ? "lg:grid-cols-4" : "lg:grid-cols-2"}`}>
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large />
+          <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
+          {telemetryEmgLive && (
             <>
-              <MetricCard icon={<Activity className="w-4 h-4" />} label="Left EMG" value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper="normalized activation" active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} />
-              <MetricCard icon={<Activity className="w-4 h-4" />} label="Right EMG" value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={`diff ${fmtNumber(emgTelemetry?.diff_pct)}%`} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label="Left EMG" value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper="normalized activation" active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label="Right EMG" value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={`diff ${fmtNumber(emgTelemetry?.diff_pct)}%`} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large />
             </>
           )}
         </div>
@@ -1470,21 +1576,21 @@ export default function LiveCapture() {
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
                 <Brain className="w-4 h-4" /> Real-Time Phase Watch
               </p>
-              <p className="mt-1 text-sm text-foreground">{prediction.label}</p>
+              <p className="mt-1 text-lg font-medium text-foreground">{prediction.label}</p>
             </div>
             <div className="grid grid-cols-2 gap-2 text-right">
-              <div className="rounded-lg bg-primary/10 px-3 py-2">
-                <p className="text-[10px] uppercase tracking-wider text-primary font-semibold">Near-Climax</p>
-                <p className="text-2xl font-bold text-foreground">{prediction.nearClimax}%</p>
+              <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, backgroundColor: `${levelColor(prediction.nearClimax)}20` }}>
+                <p className="text-xs uppercase tracking-wider text-primary font-semibold">Near-Climax</p>
+                <p className="text-4xl font-bold text-foreground">{prediction.nearClimax}%</p>
               </div>
-              <div className="rounded-lg bg-chart-2/10 px-3 py-2">
-                <p className="text-[10px] uppercase tracking-wider text-chart-2 font-semibold">Recovery</p>
-                <p className="text-2xl font-bold text-foreground">{prediction.recovery}%</p>
+              <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.recovery)}80`, backgroundColor: `${levelColor(prediction.recovery)}20` }}>
+                <p className="text-xs uppercase tracking-wider text-chart-2 font-semibold">Recovery</p>
+                <p className="text-4xl font-bold text-foreground">{prediction.recovery}%</p>
               </div>
             </div>
           </div>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${prediction.nearClimax}%` }} />
+          <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {[
@@ -1518,14 +1624,15 @@ export default function LiveCapture() {
           )}
         </div>
 
-        <TrendPanel title="Heart Rate Trend" subtitle="Current, smoothed, and baseline HR" empty={!hasHrTrend} heightClass="h-72 md:h-80">
+        <div className={distanceTelemetryView && telemetryEmgLive ? "grid gap-4 xl:grid-cols-2" : "space-y-4"}>
+        <TrendPanel title="Heart Rate Trend" subtitle="Current, smoothed, and baseline HR" empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
-              <XAxis dataKey="time" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
-              <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={34} />
+              <XAxis dataKey="time" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={distanceTelemetryView ? 44 : 34} />
               <Tooltip content={<ChartTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
               {phaseMarkers.map((marker, index) => marker.chartTime ? (
                 <ReferenceLine
                   key={`${marker.label}-${marker.chartTime}-${index}`}
@@ -1543,15 +1650,15 @@ export default function LiveCapture() {
           </ResponsiveContainer>
         </TrendPanel>
 
-        {emgLive && (
-          <TrendPanel title="EMG Activation" subtitle="Left, right, and side-to-side differential" empty={!hasEmgTrend} heightClass="h-64 md:h-72">
+        {telemetryEmgLive && (
+          <TrendPanel title="EMG Activation" subtitle="Left, right, and side-to-side differential" empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
-                <XAxis dataKey="time" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
-                <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={34} />
+                <XAxis dataKey="time" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={distanceTelemetryView ? 44 : 34} />
                 <Tooltip content={<ChartTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
                 <Line type="monotone" dataKey="left" name="Left" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
                 <Line type="monotone" dataKey="right" name="Right" stroke="hsl(var(--chart-2))" strokeWidth={2.5} dot={false} connectNulls />
                 <Line type="monotone" dataKey="diff" name="Diff" stroke="hsl(var(--chart-4))" strokeWidth={1.75} dot={false} connectNulls />
@@ -1559,9 +1666,10 @@ export default function LiveCapture() {
             </ResponsiveContainer>
           </TrendPanel>
         )}
+        </div>
       </div>
 
-      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      {!focusView && <div className="rounded-xl border border-border bg-card p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <FileText className="w-4 h-4" /> Capture Files
@@ -1577,7 +1685,7 @@ export default function LiveCapture() {
           <FileCard title="Latest Heart Rate CSV" file={files?.latestHrCsv} />
           {emgLive && <FileCard title="Latest EMG CSV" file={files?.latestEmgCsv} />}
         </div>
-      </div>
+      </div>}
         </>
       )}
     </div>

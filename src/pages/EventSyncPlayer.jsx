@@ -39,6 +39,14 @@ function CategoryPill({ value }) {
   );
 }
 
+function MotionDerivedBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0 text-[9px] font-medium text-primary">
+      Motion-derived
+    </span>
+  );
+}
+
 function nearestHR(chartData, time_s) {
   if (!chartData.length) return null;
   let best = chartData[0];
@@ -472,7 +480,7 @@ export default function EventSyncPlayer() {
     if (!note || !selectedSession) return;
     setSavingEvent(true);
     const existing = selectedSession.event_timeline || [];
-    const newEv = { time_s: Math.round(playbackTime), note, category: newEventCats };
+    const newEv = { time_s: Math.round(playbackTime), note, category: newEventCats, source: "manual" };
     const sorted = [...existing, newEv].sort((a, b) => a.time_s - b.time_s);
     await base44.entities.Session.update(selectedSession.id, { event_timeline: sorted });
     setSelectedSession((prev) => ({ ...prev, event_timeline: sorted }));
@@ -853,7 +861,10 @@ export default function EventSyncPlayer() {
                         <ChevronRight className="w-4 h-4" style={{ color: navColor }} />
                       </button>
                     </div>
-                    <div className="flex flex-wrap gap-1 mb-1">{getCategories(navEv).map((c) => <CategoryPill key={c} value={c} />)}</div>
+                    <div className="flex flex-wrap gap-1 mb-1">
+                      {getCategories(navEv).map((c) => <CategoryPill key={c} value={c} />)}
+                      {navEv.source === "motion_derived" && <MotionDerivedBadge />}
+                    </div>
                     <p className="text-xs text-foreground/90 leading-relaxed">{navEv.note}</p>
                   </div>
                 ) : (
@@ -878,7 +889,10 @@ export default function EventSyncPlayer() {
                           E{i + 1} {fmtMmSs(ev.time_s)}
                         </span>
                         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                          <div className="flex flex-wrap gap-0.5">{cats.map((c) => <CategoryPill key={c} value={c} />)}</div>
+                          <div className="flex flex-wrap gap-0.5">
+                            {cats.map((c) => <CategoryPill key={c} value={c} />)}
+                            {ev.source === "motion_derived" && <MotionDerivedBadge />}
+                          </div>
                           <span className="text-[10px] text-foreground/90 leading-snug truncate">{ev.note}</span>
                         </div>
                         {(() => { const hr = nearestHR(chartData, ev.time_s); return hr && <span className="font-mono text-[9px] shrink-0 font-bold text-primary/80 mt-0.5">{hr}</span>; })()}

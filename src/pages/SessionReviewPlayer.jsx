@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Clapperboard, ScanSearch, Video } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
@@ -30,6 +31,14 @@ function getCategoryMeta(value) {
     || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
 
+function MotionDerivedBadge() {
+  return (
+    <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">
+      Motion-derived
+    </span>
+  );
+}
+
 function describeEventDistance(eventTime, currentTime) {
   const delta = Math.round(Number(eventTime || 0) - Number(currentTime || 0));
   if (Math.abs(delta) <= 1) return "now";
@@ -54,6 +63,8 @@ function nearestHeartRate(rows, timeS) {
 }
 
 export default function SessionReviewPlayer() {
+  const [searchParams] = useSearchParams();
+  const requestedSessionId = searchParams.get("session") || "";
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
   const videoUrlRef = useRef(null);
@@ -127,7 +138,7 @@ export default function SessionReviewPlayer() {
     event.target.value = "";
   };
 
-  const handleSelectSession = async (id) => {
+  const handleSelectSession = useCallback(async (id) => {
     setSelectedId(id);
     setSelectedSession(null);
     setTimelineRows([]);
@@ -146,7 +157,12 @@ export default function SessionReviewPlayer() {
     } finally {
       setLoadingReview(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!requestedSessionId || loadingSessions || selectedId || !sessions.some((session) => session.id === requestedSessionId)) return;
+    handleSelectSession(requestedSessionId);
+  }, [handleSelectSession, loadingSessions, requestedSessionId, selectedId, sessions]);
 
   const handleSaveMotionSummary = async (summary) => {
     if (!selectedSession?.id) throw new Error("Select a session before saving a motion summary.");
@@ -155,6 +171,27 @@ export default function SessionReviewPlayer() {
     setSessions((existing) => existing.map((session) => (
       session.id === updated.id ? { ...session, motion_analysis_summary: summary } : session
     )));
+  };
+
+  const handleAcceptMotionSuggestions = async (suggestedEvents) => {
+    if (!selectedSession?.id) throw new Error("Select a session before accepting motion-derived suggestions.");
+    const existingEvents = selectedSession.event_timeline || [];
+    const additions = (Array.isArray(suggestedEvents) ? suggestedEvents : []).filter((suggestion) => (
+      !existingEvents.some((event) => (
+        event.source === "motion_derived"
+        && event.motion_evidence?.candidate_id === suggestion.motion_evidence?.candidate_id
+        && event.motion_evidence?.suggestion_type === suggestion.motion_evidence?.suggestion_type
+      ))
+    ));
+    if (!additions.length) return selectedSession;
+    const eventTimeline = [...existingEvents, ...additions].sort((a, b) => Number(a.time_s) - Number(b.time_s));
+    const updated = await base44.entities.Session.update(selectedSession.id, { event_timeline: eventTimeline });
+    const nextSession = { ...updated, event_timeline: eventTimeline };
+    setSelectedSession(nextSession);
+    setSessions((existing) => existing.map((session) => (
+      session.id === nextSession.id ? { ...session, event_timeline: eventTimeline } : session
+    )));
+    return nextSession;
   };
 
   const seekVideoTo = useCallback((timeS, shouldPlay = false, waitForSeek = false) => {
@@ -340,6 +377,7 @@ export default function SessionReviewPlayer() {
           selectedSession={selectedSession}
           onSeek={(timeS) => seekVideoTo(timeS, false, true)}
           onSaveSummary={handleSaveMotionSummary}
+          onAcceptSuggestions={handleAcceptMotionSuggestions}
         />
 
         {selectedSession?.motion_analysis_summary && (
@@ -413,6 +451,7 @@ export default function SessionReviewPlayer() {
                               </span>
                             );
                           })}
+                          {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge />}
                         </div>
                         <p className="text-sm leading-relaxed text-foreground">
                           {currentReviewEvent.event.note || "Event note"}
@@ -568,6 +607,7 @@ export default function SessionReviewPlayer() {
                                         </span>
                                       );
                                     })}
+                                    {event.source === "motion_derived" && <MotionDerivedBadge />}
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
                                     <span>{formatTime(event.time_s)}</span>

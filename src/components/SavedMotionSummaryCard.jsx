@@ -190,7 +190,7 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Saved Motion Summary</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Reviewed media-derived evidence saved for AI Profiler synthesis.
+              Reviewed media-derived evidence saved for timeline review and AI synthesis.
             </p>
           </div>
         </div>
@@ -369,6 +369,23 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
                 : `${savedSummary.asymmetry_summary.predominantSide === "left" ? "Left" : "Right"} ${savedSummary.asymmetry_summary.predominantPct}%`}
             />
           </div>
+        </div>
+          )}
+
+          {savedSummary.hand_movement_summary?.reliability === "moderate" && (
+        <div className="rounded-lg border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[#a78bfa]">Saved Hand Movement Rhythm Estimate</p>
+            <span className="text-[10px] text-muted-foreground">Observational proxy only</span>
+          </div>
+          <div className={`grid gap-2 ${compact ? "grid-cols-2" : "sm:grid-cols-3"}`}>
+            <Metric label="Cadence Estimate" value={savedSummary.hand_movement_summary.movement_cycles_per_minute_estimate} suffix=" cycles/min" />
+            <Metric label="Pauses Of Two Seconds Or Longer" value={savedSummary.hand_movement_summary.pause_count} />
+            <Metric label="Active Windows" value={savedSummary.hand_movement_summary.active_time_pct} suffix="%" />
+          </div>
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            {savedSummary.hand_movement_summary.method_note}
+          </p>
         </div>
           )}
 

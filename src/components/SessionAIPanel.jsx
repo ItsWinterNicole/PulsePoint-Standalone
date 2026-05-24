@@ -54,6 +54,43 @@ function buildSessionContext(session, timelineRows) {
   ].filter(Boolean).join("\n");
 }
 
+function buildWarmMotionEvidence(session) {
+  const motion = session.motion_analysis_summary;
+  if (!motion) return "";
+  const rhythm = motion.hand_movement_summary;
+  const details = [
+    motion.left_lower_body_average_activity != null ? `Left foot / leg average activity: ${motion.left_lower_body_average_activity}` : null,
+    motion.right_lower_body_average_activity != null ? `Right foot / leg average activity: ${motion.right_lower_body_average_activity}` : null,
+    motion.hand_average_activity != null ? `Hand average activity: ${motion.hand_average_activity}` : null,
+    motion.asymmetry_summary
+      ? `Lower-body asymmetry: average index ${motion.asymmetry_summary.averageIndex}; ${motion.asymmetry_summary.predominantSide === "balanced" ? "no clear predominance" : `${motion.asymmetry_summary.predominantSide} predominance in ${motion.asymmetry_summary.predominantPct}% of active paired windows`}.`
+      : null,
+    rhythm?.reliability === "moderate" && rhythm.movement_cycles_per_minute_estimate != null
+      ? `Estimated hand-movement cadence proxy: approximately ${rhythm.movement_cycles_per_minute_estimate} movement cycles per minute; pauses of at least two seconds: ${rhythm.pause_count}.`
+      : null,
+    ...(motion.findings || [])
+      .filter((finding) => !finding.startsWith("Repeated hand-movement oscillations support"))
+      .slice(0, 5),
+  ].filter(Boolean);
+  if (!details.length) return "";
+  return `
+
+REVIEWED MEDIA-DERIVED MOTION SUMMARY (observational evidence only):
+${details.map((detail) => `- ${detail}`).join("\n")}
+
+MOTION INTERPRETATION RULES:
+- This summary contains compact locally derived movement signals, not raw video or raw landmarks.
+- Use it only for visible movement timing, side-to-side comparison, or cautious correlation with heart rate and logged events.
+- Do not infer intent, mechanism, muscle force, neurological meaning, or arousal state from movement alone.
+- Any hand cadence estimate is an observational hand-movement cadence proxy, not confirmed stroke speed.
+
+EVIDENCE PRECEDENCE HIERARCHY FOR MOVEMENT:
+- Saved motion telemetry has precedence for visible movement timing, left/right comparison, asymmetry, pause/resumption timing, cadence proxy, and motion peaks.
+- Manual notes remain valuable when they add context motion cannot infer, such as repositioning, method changes, breathing changes, subjective sensation, or interruption.
+- If a vague manual movement description conflicts with saved motion telemetry, prefer telemetry for the visible movement description while preserving the note as subjective or contextual history.
+- Treat motion-derived evidence as observational only. Do not infer intent, arousal phase, muscle force, neurological meaning, or physiological mechanism from motion alone.`;
+}
+
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
@@ -374,6 +411,7 @@ Use this arousal profile to personalize analysis: compare the observed build arc
 
     const groundingContext = buildAIGroundingContext(userProfile);
     const structuredSessionContext = structuredSessionContextForAI(session);
+    const warmMotionEvidence = !isTechnical ? buildWarmMotionEvidence(session) : "";
 
     const journalContext = sessionJournal ? `
 
@@ -409,6 +447,7 @@ TARGET SESSION ANALYSIS STYLE:
 
 ${isTechnical ? groundingContext : ""}
 ${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
+${warmMotionEvidence}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.

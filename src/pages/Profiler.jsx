@@ -238,7 +238,12 @@ function compactSessionLine(s) {
       motion.left_forefoot_average_activity != null ? `left forefoot/toe-region ${motion.left_forefoot_average_activity}` : null,
       motion.right_forefoot_average_activity != null ? `right forefoot/toe-region ${motion.right_forefoot_average_activity}` : null,
       motion.hand_average_activity != null ? `hands ${motion.hand_average_activity}` : null,
-      (motion.findings || []).length ? briefText(motion.findings.join(" "), 140) : null,
+      motion.hand_movement_summary?.reliability === "moderate" && motion.hand_movement_summary.movement_cycles_per_minute_estimate != null
+        ? `estimated hand-movement cadence ${motion.hand_movement_summary.movement_cycles_per_minute_estimate} movement cycles/min with ${motion.hand_movement_summary.pause_count} pauses of at least two seconds (observational proxy, not confirmed stroke speed)`
+        : null,
+      (motion.findings || []).length
+        ? briefText(motion.findings.filter((finding) => !finding.startsWith("Repeated hand-movement oscillations support")).join(" "), 140)
+        : null,
     ].filter(Boolean).join(", ")}`
     : null;
   return [
