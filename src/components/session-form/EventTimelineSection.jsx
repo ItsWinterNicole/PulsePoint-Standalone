@@ -12,6 +12,7 @@ export const EVENT_CATEGORIES = [
   { value: "stimulation_stopped", label: "Stim Stopped", color: "#ef4444" },
   { value: "motion_pause", label: "Motion Pause", color: "#f59e0b" },
   { value: "motion_resume", label: "Motion Resume", color: "#14b8a6" },
+  { value: "movement_observed", label: "Movement Observed", color: "#2dd4bf" },
   { value: "sensation", label: "Sensation", color: "#a855f7" },
   { value: "physical", label: "Physical", color: "#10b981" },
   { value: "other", label: "Other", color: "#94a3b8" },

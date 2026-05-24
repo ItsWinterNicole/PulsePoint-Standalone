@@ -897,7 +897,115 @@ function buildHandTransitionSuggestions(result, settings) {
   return candidates;
 }
 
+function candidateOverlaps(first, second, paddingS = 0.5) {
+  const firstStart = Number(first.start_time_s ?? first.time_s);
+  const firstEnd = firstStart + Number(first.duration_s || 0);
+  const secondStart = Number(second.start_time_s ?? second.time_s);
+  const secondEnd = secondStart + Number(second.duration_s || 0);
+  return firstStart <= secondEnd + paddingS && secondStart <= firstEnd + paddingS;
+}
+
+function lowerBodySidePattern(result, candidate) {
+  const start = Number(candidate.start_time_s ?? candidate.time_s);
+  const end = start + Number(candidate.duration_s || 0);
+  const windowSamples = result.samples.filter((sample) => sample.timeS >= start && sample.timeS <= end);
+  const left = mean(windowSamples.map((sample) => Number(sample.leftScore) || 0)) || 0;
+  const right = mean(windowSamples.map((sample) => Number(sample.rightScore) || 0)) || 0;
+  const difference = left - right;
+  if (left >= 20 && right < 8) return { value: "left_only", phrase: "left-side only" };
+  if (right >= 20 && left < 8) return { value: "right_only", phrase: "right-side only" };
+  if (Math.abs(difference) < 10) return { value: "bilateral_similar", phrase: "bilaterally similar" };
+  return difference > 0
+    ? { value: "left_greater_than_right", phrase: "left greater than right" }
+    : { value: "right_greater_than_left", phrase: "right greater than left" };
+}
+
+function lowerBodyIntensity(peakActivity) {
+  if (peakActivity >= 75) return "marked";
+  if (peakActivity >= 45) return "moderate";
+  return "mild";
+}
+
+function buildLowerBodySemanticSuggestions(result) {
+  const patterns = result?.lowerBodyPatterns;
+  if (!result?.hasLegs || !patterns) return [];
+  const oscillatory = (patterns.oscillatory_candidates || []).map((candidate) => ({
+    ...candidate,
+    semanticQuality: "rapid_oscillatory_shudder_like_activity",
+    qualityPhrase: "rapid oscillatory / shudder-like lower-body activity candidate",
+  }));
+  const sustained = (patterns.sustained_activity_shift_candidates || [])
+    .filter((candidate) => !oscillatory.some((existing) => candidateOverlaps(candidate, existing)))
+    .map((candidate) => ({
+      ...candidate,
+      semanticQuality: "sustained_activity_elevation",
+      qualityPhrase: "sustained lower-body activity elevation candidate",
+    }));
+  const bursts = (patterns.burst_candidates || [])
+    .filter((candidate) => ![...oscillatory, ...sustained].some((existing) => candidateOverlaps(candidate, existing)))
+    .map((candidate) => ({
+      ...candidate,
+      semanticQuality: "brief_movement_burst",
+      qualityPhrase: "brief lower-body movement burst candidate",
+    }));
+  const divergenceOnly = (patterns.divergence_candidates || [])
+    .filter((candidate) => ![...oscillatory, ...sustained, ...bursts].some((existing) => candidateOverlaps(candidate, existing)))
+    .map((candidate) => ({
+      ...candidate,
+      semanticQuality: "left_right_divergence",
+      qualityPhrase: "left / right lower-body divergence candidate",
+    }));
+
+  return [...oscillatory, ...sustained, ...bursts, ...divergenceOnly]
+    .sort((a, b) => a.time_s - b.time_s)
+    .slice(0, 16)
+    .map((candidate, index) => {
+      const sidePattern = lowerBodySidePattern(result, candidate);
+      const intensity = lowerBodyIntensity(candidate.peak_activity);
+      const hasOverlappingDivergence = (patterns.divergence_candidates || [])
+        .some((divergence) => candidateOverlaps(candidate, divergence));
+      const sideClause = hasOverlappingDivergence || sidePattern.value !== "bilateral_similar"
+        ? `, ${sidePattern.phrase}`
+        : ", bilaterally similar";
+      const note = `Motion-derived: ${intensity} ${candidate.qualityPhrase}${sideClause}.`;
+      return {
+        id: `lower-body-semantic-${candidate.semanticQuality}-${Math.round(candidate.time_s * 10)}-${index}`,
+        pairId: `lower-body-semantic-${candidate.semanticQuality}-${Math.round(candidate.time_s * 10)}`,
+        type: "lower_body_semantic_finding",
+        timeS: candidate.time_s,
+        durationS: candidate.duration_s,
+        confidence: "moderate",
+        note,
+        semanticLabel: candidate.qualityPhrase,
+        sidePattern: sidePattern.value,
+        sidePatternPhrase: sidePattern.phrase,
+        intensity,
+        movementQuality: [candidate.semanticQuality],
+        posture: "not_classified_from_activity_trace",
+      };
+    });
+}
+
 function motionSuggestionEvent(suggestion) {
+  if (suggestion.type === "lower_body_semantic_finding") {
+    return {
+      time_s: suggestion.timeS,
+      note: suggestion.note,
+      category: ["movement_observed"],
+      annotation_tags: ["lower_body", "motion_derived"],
+      source: "motion_derived",
+      motion_evidence: {
+        candidate_id: suggestion.pairId,
+        suggestion_type: suggestion.type,
+        confidence: suggestion.confidence,
+        side_pattern: suggestion.sidePattern,
+        posture: suggestion.posture,
+        movement_quality: suggestion.movementQuality,
+        intensity: suggestion.intensity,
+        duration_s: suggestion.durationS,
+      },
+    };
+  }
   const pauseSeconds = suggestion.pauseDurationS.toFixed(1).replace(/\.0$/, "");
   const isPause = suggestion.type === "motion_pause";
   return {
@@ -1108,7 +1216,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     mergeNearby: true,
     minimumSpacing: 2,
   });
-  const [visibleSuggestionTypes, setVisibleSuggestionTypes] = useState({ motion_pause: true, motion_resume: true });
+  const [visibleSuggestionTypes, setVisibleSuggestionTypes] = useState({
+    motion_pause: true,
+    motion_resume: true,
+    lower_body_semantic_finding: true,
+  });
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState([]);
   const [acceptedSuggestionIds, setAcceptedSuggestionIds] = useState([]);
   const [acceptingSuggestions, setAcceptingSuggestions] = useState(false);
@@ -1160,9 +1272,17 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const selectedMode = MODES[mode];
   const appliedRois = useMemo(() => resolveRois(roiLayout, rois), [roiLayout, rois]);
   const appliedLowerBodyMethod = roiLayout === "pip" ? lowerBodyMethod : "landmarks";
-  const motionSuggestions = useMemo(
+  const handTransitionSuggestions = useMemo(
     () => buildHandTransitionSuggestions(result, suggestionSettings),
     [result, suggestionSettings],
+  );
+  const lowerBodySemanticSuggestions = useMemo(
+    () => buildLowerBodySemanticSuggestions(result),
+    [result],
+  );
+  const motionSuggestions = useMemo(
+    () => [...handTransitionSuggestions, ...lowerBodySemanticSuggestions].sort((a, b) => a.timeS - b.timeS),
+    [handTransitionSuggestions, lowerBodySemanticSuggestions],
   );
   const visibleMotionSuggestions = motionSuggestions.filter((suggestion) => (
     visibleSuggestionTypes[suggestion.type]
@@ -2117,7 +2237,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             </div>
           )}
 
-          {result.hasHands && (
+          {(result.hasHands || result.hasLegs) && (
             <div className="rounded-lg border border-primary/25 bg-primary/[0.04] p-3 space-y-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
@@ -2145,6 +2265,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   </div>
                 )}
               </div>
+              {result.hasHands && (
               <div className="grid gap-2 sm:grid-cols-4">
                 <div>
                   <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Minimum Pause</p>
@@ -2198,10 +2319,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   Merge nearby gaps
                 </label>
               </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 {[
                   { key: "motion_pause", label: "Pauses" },
                   { key: "motion_resume", label: "Resumptions" },
+                  { key: "lower_body_semantic_finding", label: "Lower-body findings" },
                 ].map(({ key, label }) => (
                   <label key={key} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/20 px-2.5 py-1 text-[11px] text-foreground">
                     <input
@@ -2216,7 +2339,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               </div>
               {motionSuggestions.length === 0 ? (
                 <p className="rounded-md border border-border bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
-                  No confidence-gated hand pause/resumption candidates were identified for this run.
+                  No confidence-gated motion-derived event candidates were identified for this run.
                 </p>
               ) : visibleMotionSuggestions.length === 0 ? (
                 <p className="rounded-md border border-border bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
@@ -2226,7 +2349,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 <div className="space-y-2">
                   {visibleMotionSuggestions.map((suggestion) => {
                     const isPause = suggestion.type === "motion_pause";
-                    const pauseSeconds = suggestion.pauseDurationS.toFixed(1).replace(/\.0$/, "");
+                    const isLowerBody = suggestion.type === "lower_body_semantic_finding";
+                    const pauseSeconds = suggestion.pauseDurationS?.toFixed(1).replace(/\.0$/, "");
                     return (
                       <div key={suggestion.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2">
                         <button type="button" onClick={() => onSeek?.(suggestion.timeS)} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
@@ -2234,19 +2358,27 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                           {formatTime(suggestion.timeS)}
                         </button>
                         <span className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-0.5 text-[10px] font-semibold text-primary">
-                          {isPause ? "Pause candidate" : "Resumption candidate"}
+                          {isLowerBody ? "Lower-body finding" : isPause ? "Pause candidate" : "Resumption candidate"}
                         </span>
                         <span className="rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[10px] font-semibold text-amber-300">
                           {suggestion.confidence}
                         </span>
                         <p className="min-w-[16rem] flex-1 text-xs text-foreground">
-                          {isPause
+                          {isLowerBody
+                            ? suggestion.note
+                            : isPause
                             ? `Motion-derived: observed hand activity pause candidate (${pauseSeconds} seconds).`
                             : `Motion-derived: observed hand activity resumed after approximately ${pauseSeconds} seconds.`}
                         </p>
-                        <span className="text-[10px] text-muted-foreground">
-                          pre {suggestion.prePauseHandActivityAverage} / post {suggestion.postResumeHandActivityAverage}
-                        </span>
+                        {isLowerBody ? (
+                          <span className="text-[10px] text-muted-foreground">
+                            {suggestion.sidePatternPhrase} / {suggestion.intensity}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">
+                            pre {suggestion.prePauseHandActivityAverage} / post {suggestion.postResumeHandActivityAverage}
+                          </span>
+                        )}
                         <button
                           type="button"
                           onClick={() => acceptSuggestions([suggestion])}
