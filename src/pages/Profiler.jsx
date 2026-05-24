@@ -50,6 +50,17 @@ function naturalizeSpokenDates(value) {
   ));
 }
 
+const MOTION_EVIDENCE_PRECEDENCE_RULE = `
+MOVEMENT EVIDENCE PRECEDENCE RULE (apply only when saved media-derived motion evidence exists):
+- For visible movement interpretation, prioritize saved MediaPipe-derived motion telemetry over vague or conflicting movement-only notes.
+- Media-derived evidence may support observational synthesis of lower-body movement timing, left/right activity comparison, asymmetry, forefoot or toe-region activity proxies, hand-movement cadence proxy, pause/resume structure, movement clustering, and confidence or reliability limitations.
+- Manual notes remain valuable when they contribute context that motion telemetry cannot know, including repositioning, method or grip change, breathing changes, interruption, subjective sensation, threshold behavior explicitly noted by the person, or environmental context.
+- Treat older vague movement-only notes such as "feet moving," "toes twitching," "left foot active," "bilateral tremors," or "hand moving faster" as secondary when saved motion telemetry addresses the same visible behavior.
+- If saved telemetry conflicts with vague manual movement notes, characterize visible movement from telemetry and preserve the manual note only as subjective or contextual history unless it adds distinct information.
+- Motion evidence remains observational only. Do not infer intent, arousal phase, muscle force, neurological mechanism, autonomic cause, or physiological cause from motion alone.
+- A cadence estimate is a visible hand-movement rhythm proxy, not confirmed stroke speed, technique, force, or stimulation intensity.
+`;
+
 function buildProfileEvidenceDigest(sessions) {
   const withHr = sessions.filter((s) => s.avg_hr || s.max_hr || s.hr_at_climax);
   const climaxSessions = sessions.filter((s) => !s.no_climax && s.climax_offset_s != null);
@@ -228,9 +239,16 @@ function compactSessionLine(s) {
   ].filter(Boolean).join("/");
   const events = (s.event_timeline || [])
     .slice(0, 4)
-    .map((e) => `${fmtSec(e.time_s)} ${briefText(e.note, 70)}`)
+    .map((e) => `${fmtSec(e.time_s)}${e.source === "motion_derived" ? " [motion-derived observation]" : ""} ${briefText(e.note, 70)}`)
     .join(" | ");
   const motion = s.motion_analysis_summary;
+  const motionQuality = motion?.quality_indicators
+    ? [
+      motion.quality_indicators.left_lower_body ? `left quality ${motion.quality_indicators.left_lower_body}` : null,
+      motion.quality_indicators.right_lower_body ? `right quality ${motion.quality_indicators.right_lower_body}` : null,
+      motion.quality_indicators.hands ? `hand quality ${motion.quality_indicators.hands}` : null,
+    ].filter(Boolean).join(", ")
+    : null;
   const motionEvidence = motion
     ? `media motion ${[
       motion.left_lower_body_average_activity != null ? `left ${motion.left_lower_body_average_activity}` : null,
@@ -238,9 +256,13 @@ function compactSessionLine(s) {
       motion.left_forefoot_average_activity != null ? `left forefoot/toe-region ${motion.left_forefoot_average_activity}` : null,
       motion.right_forefoot_average_activity != null ? `right forefoot/toe-region ${motion.right_forefoot_average_activity}` : null,
       motion.hand_average_activity != null ? `hands ${motion.hand_average_activity}` : null,
+      motion.asymmetry_summary
+        ? `asymmetry average index ${motion.asymmetry_summary.averageIndex}, peak ${motion.asymmetry_summary.peakIndex}, ${motion.asymmetry_summary.predominantSide === "balanced" ? "no clear side predominance" : `${motion.asymmetry_summary.predominantSide} predominance in ${motion.asymmetry_summary.predominantPct}% of active paired windows`}`
+        : null,
       motion.hand_movement_summary?.reliability === "moderate" && motion.hand_movement_summary.movement_cycles_per_minute_estimate != null
         ? `estimated hand-movement cadence ${motion.hand_movement_summary.movement_cycles_per_minute_estimate} movement cycles/min with ${motion.hand_movement_summary.pause_count} pauses of at least two seconds (observational proxy, not confirmed stroke speed)`
         : null,
+      motionQuality ? `confidence/reliability ${motionQuality}` : null,
       (motion.findings || []).length
         ? briefText(motion.findings.filter((finding) => !finding.startsWith("Repeated hand-movement oscillations support")).join(" "), 140)
         : null,
@@ -555,6 +577,7 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
 
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
+${MOTION_EVIDENCE_PRECEDENCE_RULE}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -856,6 +879,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
 
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
+${MOTION_EVIDENCE_PRECEDENCE_RULE}
 
 SYNTHESIS REQUIREMENTS:
 - Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.
