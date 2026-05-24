@@ -108,6 +108,28 @@ function nearestCadenceSample(summary, timeS) {
   ), timeline[0]);
 }
 
+function lowerBodyPatternCandidates(summary) {
+  const patterns = summary?.lower_body_pattern_summary;
+  if (!patterns) return [];
+  return [
+    ...(patterns.oscillatory_candidates || []),
+    ...(patterns.divergence_candidates || []),
+    ...(patterns.sustained_activity_shift_candidates || []),
+    ...(patterns.burst_candidates || []),
+  ].sort((a, b) => Number(a.time_s) - Number(b.time_s));
+}
+
+function activeLowerBodyPattern(summary, timeS) {
+  if (!Number.isFinite(Number(timeS))) return null;
+  const candidates = lowerBodyPatternCandidates(summary);
+  return candidates
+    .filter((candidate) => (
+      Number(timeS) >= Number(candidate.start_time_s) - 0.5
+      && Number(timeS) <= Number(candidate.start_time_s) + Number(candidate.duration_s || 0) + 0.5
+    ))
+    .sort((a, b) => Math.abs(Number(a.time_s) - Number(timeS)) - Math.abs(Number(b.time_s) - Number(timeS)))[0] || null;
+}
+
 export default function SessionReviewPlayer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("session") || "";
@@ -367,6 +389,11 @@ export default function SessionReviewPlayer() {
     const sideBalance = currentIndex != null
       ? (Math.abs(currentIndex) <= 0.1 ? "Similar now" : `${currentIndex > 0 ? "Left" : "Right"} now`)
       : null;
+    const lowerBodyPatterns = motion?.lower_body_pattern_summary;
+    const currentPattern = activeLowerBodyPattern(motion, reviewTime);
+    const reviewPatterns = lowerBodyPatternCandidates(motion)
+      .filter((candidate) => ["oscillatory_candidate", "left_right_divergence"].includes(candidate.type))
+      .slice(0, 6);
 
     return (
       <div className="h-screen overflow-hidden bg-background p-3">
@@ -524,11 +551,49 @@ export default function SessionReviewPlayer() {
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
                       Playback-time value from the saved motion trace. Session averages: left {motion.left_lower_body_average_activity ?? "-"} / right {motion.right_lower_body_average_activity ?? "-"}. Side comparison is observational and reflects the saved region assignments.
                     </p>
+                    {currentPattern && (
+                      <div className="rounded-lg border border-primary/25 bg-primary/[0.08] px-2.5 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Current Review Candidate</p>
+                        <p className="mt-1 text-xs font-medium text-foreground">{currentPattern.label}</p>
+                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">Visual motion proxy only; review the video before describing this as a specific movement or spasm.</p>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">No saved motion summary yet.</p>
                 )}
               </div>
+
+              {lowerBodyPatterns && (
+                <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Lower-Body Pattern Review</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <FocusMetric label="Movement Bursts" value={lowerBodyPatterns.movement_burst_count} />
+                    <FocusMetric label="Oscillatory / Shudder-Like" value={lowerBodyPatterns.oscillatory_candidate_count} />
+                    <FocusMetric label="Sustained Elevations" value={lowerBodyPatterns.sustained_activity_shift_count} />
+                    <FocusMetric label="Side Divergences" value={lowerBodyPatterns.left_right_divergence_count} />
+                  </div>
+                  {reviewPatterns.length > 0 && (
+                    <div className="space-y-1.5">
+                      {reviewPatterns.map((candidate) => (
+                        <button
+                          key={`${candidate.type}-${candidate.time_s}`}
+                          type="button"
+                          onClick={() => seekVideoTo(candidate.time_s, false, true)}
+                          disabled={!videoSrc}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card/60 px-2.5 py-2 text-left enabled:hover:border-primary/40 disabled:cursor-default"
+                        >
+                          <span className="line-clamp-1 text-[11px] text-foreground">{candidate.label}</span>
+                          <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">{formatTime(candidate.time_s)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    These flags are activity-pattern proxies only. Directional posture changes such as feet moving outward are not measured in this version.
+                  </p>
+                </div>
+              )}
 
               {(rhythm?.reliability === "moderate" || playbackMotion?.hand_activity != null) && (
                 <div className="rounded-xl border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-3 space-y-3">

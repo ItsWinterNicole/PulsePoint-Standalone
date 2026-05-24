@@ -62,6 +62,7 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
   const savedSummary = summary || {};
   const peaks = Array.isArray(savedSummary.review_peaks) ? savedSummary.review_peaks : [];
   const findings = Array.isArray(savedSummary.findings) ? savedSummary.findings : [];
+  const lowerBodyPatterns = savedSummary.lower_body_pattern_summary;
   const timeline = useMemo(() => (
     Array.isArray(savedSummary.derived_timeline)
       ? savedSummary.derived_timeline.map((point) => ({
@@ -396,6 +397,46 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
                 : `${savedSummary.asymmetry_summary.predominantSide === "left" ? "Left" : "Right"} ${savedSummary.asymmetry_summary.predominantPct}%`}
             />
           </div>
+        </div>
+          )}
+
+          {lowerBodyPatterns && (
+        <div className="rounded-lg border border-border bg-card/40 p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Saved Lower-Body Pattern Proxies</p>
+            <span className="text-[10px] text-muted-foreground">Review candidates only</span>
+          </div>
+          <div className={`grid gap-2 ${compact ? "grid-cols-2" : "sm:grid-cols-4"}`}>
+            <Metric label="Movement Bursts" value={lowerBodyPatterns.movement_burst_count} />
+            <Metric label="Oscillatory / Shudder-Like" value={lowerBodyPatterns.oscillatory_candidate_count} />
+            <Metric label="Sustained Elevations" value={lowerBodyPatterns.sustained_activity_shift_count} />
+            <Metric label="Side Divergences" value={lowerBodyPatterns.left_right_divergence_count} />
+          </div>
+          {[...(lowerBodyPatterns.oscillatory_candidates || []), ...(lowerBodyPatterns.divergence_candidates || [])].length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {[...(lowerBodyPatterns.oscillatory_candidates || []), ...(lowerBodyPatterns.divergence_candidates || [])]
+                .sort((a, b) => a.time_s - b.time_s)
+                .slice(0, 8)
+                .map((candidate) => (
+                  <button
+                    key={`${candidate.type}-${candidate.time_s}`}
+                    type="button"
+                    onClick={() => onSeek?.(candidate.time_s)}
+                    disabled={!onSeek}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors enabled:hover:border-primary/40 enabled:hover:bg-primary/[0.08] disabled:cursor-default"
+                  >
+                    <Play className="h-3 w-3 text-primary" />
+                    <span className="font-mono">{formatTime(candidate.time_s)}</span>
+                    <span className="text-muted-foreground">
+                      {candidate.type === "oscillatory_candidate"
+                        ? "oscillatory"
+                        : `${candidate.predominant_side || "side"} divergence`}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          )}
+          <p className="text-[10px] leading-relaxed text-muted-foreground">{lowerBodyPatterns.method_note}</p>
         </div>
           )}
 

@@ -557,6 +557,159 @@ function calculateAsymmetry(samples) {
   };
 }
 
+function segmentDuration(points, stepS) {
+  if (!points.length) return 0;
+  return points[points.length - 1].timeS - points[0].timeS + stepS;
+}
+
+function collectMotionSegments(points, predicate, sampleRate, minimumDurationS, mergeGapS = 0.5) {
+  const stepS = 1 / sampleRate;
+  const rawSegments = [];
+  let current = [];
+  points.forEach((point) => {
+    if (predicate(point)) {
+      current.push(point);
+      return;
+    }
+    if (current.length) rawSegments.push(current);
+    current = [];
+  });
+  if (current.length) rawSegments.push(current);
+
+  const merged = rawSegments.reduce((segments, segment) => {
+    const prior = segments[segments.length - 1];
+    const gapS = prior
+      ? segment[0].timeS - prior[prior.length - 1].timeS - stepS
+      : Infinity;
+    if (prior && gapS <= mergeGapS) {
+      prior.push(...segment);
+    } else {
+      segments.push([...segment]);
+    }
+    return segments;
+  }, []);
+  return merged.filter((segment) => segmentDuration(segment, stepS) >= minimumDurationS);
+}
+
+function compactPatternCandidate(segment, type, label, stepS, extra = {}) {
+  const peak = [...segment].sort((a, b) => b.combined - a.combined)[0];
+  return {
+    type,
+    label,
+    time_s: Math.round(peak.timeS * 10) / 10,
+    start_time_s: Math.round(segment[0].timeS * 10) / 10,
+    duration_s: Math.round(segmentDuration(segment, stepS) * 10) / 10,
+    peak_activity: Math.round(peak.combined),
+    ...extra,
+  };
+}
+
+function orderedTopCandidates(candidates, maximum = 8) {
+  return [...candidates]
+    .sort((a, b) => b.peak_activity - a.peak_activity)
+    .slice(0, maximum)
+    .sort((a, b) => a.time_s - b.time_s);
+}
+
+function calculateLowerBodyPatternSummary(samples, sampleRate) {
+  if (!samples.length || sampleRate < 4) return null;
+  const points = samples
+    .filter((sample) => sample.leftDetected || sample.rightDetected)
+    .map((sample) => {
+      const left = Number(sample.leftScore) || 0;
+      const right = Number(sample.rightScore) || 0;
+      return {
+        timeS: sample.timeS,
+        left,
+        right,
+        combined: Math.max(left, right),
+        divergence: Math.abs(left - right),
+      };
+    });
+  if (points.length < sampleRate * 2) return null;
+
+  const stepS = 1 / sampleRate;
+  const burstSegments = collectMotionSegments(points, (point) => point.combined >= 65, sampleRate, 0.35, 0.35);
+  const baselineActivity = percentile(points.map((point) => point.combined), 0.5) || 0;
+  const sustainedThreshold = Math.max(30, baselineActivity + 20);
+  const sustainedSegments = collectMotionSegments(
+    points,
+    (point) => point.combined >= sustainedThreshold,
+    sampleRate,
+    3,
+    0.5,
+  );
+  const divergenceSegments = collectMotionSegments(
+    points,
+    (point) => point.combined >= 40 && point.divergence >= 35,
+    sampleRate,
+    0.75,
+    0.35,
+  );
+
+  const localPeaks = points.filter((point, index) => (
+    point.combined >= 35
+    && point.combined >= (points[index - 1]?.combined ?? -1)
+    && point.combined > (points[index + 1]?.combined ?? -1)
+  ));
+  const peakGroups = localPeaks.reduce((groups, peak) => {
+    const prior = groups[groups.length - 1];
+    if (prior && peak.timeS - prior[prior.length - 1].timeS <= 1.25) {
+      prior.push(peak);
+    } else {
+      groups.push([peak]);
+    }
+    return groups;
+  }, []);
+  const oscillatoryCandidates = peakGroups
+    .filter((group) => group.length >= 3 && segmentDuration(group, stepS) <= 4)
+    .map((group) => compactPatternCandidate(
+      group,
+      "oscillatory_candidate",
+      "Rapid oscillatory / shudder-like movement candidate",
+      stepS,
+      { repeated_peaks: group.length },
+    ));
+
+  const burstCandidates = orderedTopCandidates(burstSegments.map((segment) => compactPatternCandidate(
+    segment,
+    "movement_burst",
+    "Movement burst candidate",
+    stepS,
+  )));
+  const sustainedCandidates = orderedTopCandidates(sustainedSegments.map((segment) => compactPatternCandidate(
+    segment,
+    "sustained_activity_shift",
+    "Sustained lower-body activity elevation candidate",
+    stepS,
+  )));
+  const divergenceCandidates = orderedTopCandidates(divergenceSegments.map((segment) => {
+    const leftAverage = mean(segment.map((point) => point.left)) || 0;
+    const rightAverage = mean(segment.map((point) => point.right)) || 0;
+    return compactPatternCandidate(
+      segment,
+      "left_right_divergence",
+      "Left / right divergence candidate",
+      stepS,
+      { predominant_side: leftAverage >= rightAverage ? "left" : "right" },
+    );
+  }));
+  const storedOscillatoryCandidates = orderedTopCandidates(oscillatoryCandidates);
+
+  return {
+    method: "normalized_lower_body_region_activity",
+    method_note: "Derived from normalized lower-body activity traces. These are observational review candidates, not confirmed spasms, posture direction, intent, or physiological cause.",
+    movement_burst_count: burstSegments.length,
+    oscillatory_candidate_count: oscillatoryCandidates.length,
+    sustained_activity_shift_count: sustainedSegments.length,
+    left_right_divergence_count: divergenceSegments.length,
+    burst_candidates: burstCandidates,
+    oscillatory_candidates: storedOscillatoryCandidates,
+    sustained_activity_shift_candidates: sustainedCandidates,
+    divergence_candidates: divergenceCandidates,
+  };
+}
+
 function calculateHandRhythmSummary(samples, scoreKey, handCoverage, sampleRate) {
   if (!samples.length || handCoverage < 65 || sampleRate < 6) {
     return {
@@ -855,6 +1008,7 @@ function buildSavedSummary(result) {
       hands: result.hasHands ? qualityFromCoverage(result.handCoverage)?.level : undefined,
     },
     asymmetry_summary: result.hasLegs && result.asymmetry ? result.asymmetry : undefined,
+    lower_body_pattern_summary: result.hasLegs ? result.lowerBodyPatterns : undefined,
     left_lower_body_average_activity: result.hasLegs ? result.leftAverage : undefined,
     right_lower_body_average_activity: result.hasLegs ? result.rightAverage : undefined,
     left_forefoot_average_activity: result.hasForefoot ? result.leftForefootAverage : undefined,
@@ -1391,6 +1545,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         peakActivity: Math.round(Math.max(0, ...detectedSamples.map((sample) => sample.score))),
       };
       nextResult.asymmetry = hasLegs ? calculateAsymmetry(samples) : null;
+      nextResult.lowerBodyPatterns = hasLegs ? calculateLowerBodyPatternSummary(samples, selectedMode.fps) : null;
       nextResult.handRhythm = hasHands
         ? calculateHandRhythmSummary(samples, hasLegs ? "handScore" : "score", nextResult.handCoverage, selectedMode.fps)
         : null;
@@ -1886,6 +2041,55 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               <p className="text-[11px] text-muted-foreground">
                 Calculated only from active samples where both selected lower-body regions were detected. Left and right use one shared comparison scale; index direction reflects the labels assigned to your rectangles.
               </p>
+            </div>
+          )}
+
+          {result.hasLegs && result.lowerBodyPatterns && (
+            <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Lower-Body Pattern Proxies</p>
+                <span className="text-[10px] text-muted-foreground">Video confirmation required</span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Movement Bursts</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.movement_burst_count}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Oscillatory / Shudder-Like</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.oscillatory_candidate_count}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Sustained Elevations</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.sustained_activity_shift_count}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Side Divergences</p>
+                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.left_right_divergence_count}</p>
+                </div>
+              </div>
+              {[...result.lowerBodyPatterns.oscillatory_candidates, ...result.lowerBodyPatterns.divergence_candidates].length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {[...result.lowerBodyPatterns.oscillatory_candidates, ...result.lowerBodyPatterns.divergence_candidates]
+                    .sort((a, b) => a.time_s - b.time_s)
+                    .slice(0, 8)
+                    .map((candidate) => (
+                      <button
+                        key={`${candidate.type}-${candidate.time_s}`}
+                        type="button"
+                        onClick={() => onSeek?.(candidate.time_s)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors hover:border-primary/40"
+                      >
+                        <Play className="h-3 w-3 text-primary" />
+                        <span className="font-mono">{formatTime(candidate.time_s)}</span>
+                        <span className="text-muted-foreground">
+                          {candidate.type === "oscillatory_candidate" ? "oscillatory" : `${candidate.predominant_side} divergence`}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
+              <p className="text-[11px] text-muted-foreground">{result.lowerBodyPatterns.method_note}</p>
             </div>
           )}
 
