@@ -459,6 +459,7 @@ export default function SessionReviewPlayer() {
                     summary={motion}
                     onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
                     playbackTime={videoTime}
+                    phaseMarkers={selectedSession}
                     chartOnly
                     focus
                   />
@@ -783,6 +784,7 @@ export default function SessionReviewPlayer() {
             summary={selectedSession.motion_analysis_summary}
             onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
             playbackTime={videoTime}
+            phaseMarkers={selectedSession}
           />
         )}
 
@@ -963,6 +965,7 @@ export default function SessionReviewPlayer() {
                       summary={selectedSession.motion_analysis_summary}
                       onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
                       playbackTime={videoTime}
+                      phaseMarkers={selectedSession}
                       chartOnly
                     />
                     <TimelineWaypointDetail

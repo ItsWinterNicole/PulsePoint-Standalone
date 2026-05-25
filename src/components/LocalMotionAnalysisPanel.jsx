@@ -1573,6 +1573,14 @@ function ConfidenceBadge({ level }) {
   );
 }
 
+const SUGGESTION_CONFIDENCE_RANK = {
+  weak: 0,
+  low: 1,
+  moderate: 2,
+  high: 3,
+  strong: 3,
+};
+
 function patternSeverity(count) {
   if (count >= 12) {
     return {
@@ -1879,7 +1887,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions }) {
+export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions, onAnalysisStatusChange }) {
   const stopRequestedRef = useRef(false);
   const previewCanvasRef = useRef(null);
   const previewEnabledRef = useRef(false);
@@ -1938,6 +1946,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     motion_resume: true,
     lower_body_semantic_finding: true,
   });
+  const [suggestionSort, setSuggestionSort] = useState("timeline");
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState([]);
   const [acceptedSuggestionIds, setAcceptedSuggestionIds] = useState([]);
   const [acceptingSuggestions, setAcceptingSuggestions] = useState(false);
@@ -2029,11 +2038,19 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         : closest
     ), result.samples[0]);
   }, [result, videoTime]);
-  const visibleMotionSuggestions = motionSuggestions.filter((suggestion) => (
-    visibleSuggestionTypes[suggestion.type]
-    && !dismissedSuggestionIds.includes(suggestion.id)
-    && !acceptedSuggestionIds.includes(suggestion.id)
-  ));
+  const visibleMotionSuggestions = useMemo(() => {
+    const available = motionSuggestions.filter((suggestion) => (
+      visibleSuggestionTypes[suggestion.type]
+      && !dismissedSuggestionIds.includes(suggestion.id)
+      && !acceptedSuggestionIds.includes(suggestion.id)
+    ));
+    if (suggestionSort === "timeline") return available;
+    const direction = suggestionSort === "confidence_desc" ? -1 : 1;
+    return [...available].sort((first, second) => {
+      const ranked = ((SUGGESTION_CONFIDENCE_RANK[first.confidence] ?? 0) - (SUGGESTION_CONFIDENCE_RANK[second.confidence] ?? 0)) * direction;
+      return ranked || first.timeS - second.timeS;
+    });
+  }, [acceptedSuggestionIds, dismissedSuggestionIds, motionSuggestions, suggestionSort, visibleSuggestionTypes]);
   const analysisRange = useMemo(() => {
     const duration = Number(videoDuration) || 0;
     if (!duration) return { start: 0, end: 0 };
@@ -2335,9 +2352,31 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
   const analyze = async () => {
     if (!videoSrc || running) return;
+    const runId = `${Date.now()}`;
+    const startedAt = Date.now();
+    let completed = false;
+    let failed = false;
+    let reportedProgress = 0;
+    const reportProgress = (nextProgress) => {
+      reportedProgress = nextProgress;
+      setProgress(nextProgress);
+      const elapsedMs = Date.now() - startedAt;
+      const etaMs = nextProgress > 0 && nextProgress < 100
+        ? Math.round((elapsedMs / nextProgress) * (100 - nextProgress))
+        : nextProgress >= 100 ? 0 : null;
+      onAnalysisStatusChange?.({
+        runId,
+        status: "running",
+        progress: nextProgress,
+        startedAt,
+        elapsedMs,
+        etaMs,
+        feedLabel: analysisFeedLabel,
+      });
+    };
     stopRequestedRef.current = false;
     setRunning(true);
-    setProgress(0);
+    reportProgress(0);
     setError("");
     setResult(null);
     setSaved(false);
@@ -2578,7 +2617,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         previousRegionSegmentId = regionSegmentId;
         processed += 1;
         if (processed % 5 === 0 || processed === expectedSamples) {
-          setProgress(Math.min(100, Math.round((processed / expectedSamples) * 100)));
+          reportProgress(Math.min(100, Math.round((processed / expectedSamples) * 100)));
           await new Promise((resolve) => window.setTimeout(resolve, 0));
         }
       }
@@ -2650,7 +2689,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         : null;
       nextResult.findings = buildFindings(nextResult);
       setResult(nextResult);
+      completed = !stopRequestedRef.current;
+      if (completed) reportProgress(100);
     } catch (caughtError) {
+      failed = true;
       setError(caughtError?.message || "Motion analysis could not be completed.");
     } finally {
       poseLandmarker?.close?.();
@@ -2662,6 +2704,15 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         probe.src = "";
       }
       setRunning(false);
+      onAnalysisStatusChange?.({
+        runId,
+        status: completed ? "complete" : failed ? "error" : "stopped",
+        progress: completed ? 100 : reportedProgress,
+        startedAt,
+        elapsedMs: Date.now() - startedAt,
+        etaMs: completed ? 0 : null,
+        feedLabel: analysisFeedLabel,
+      });
     }
   };
 
@@ -2904,7 +2955,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             </p>
           ) : (
             <>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {orderedRegionSegments.map((segment) => (
                   <button
                     key={segment.id}
@@ -3754,6 +3805,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                     {label}
                   </label>
                 ))}
+                <div className="ml-auto min-w-[11.5rem]">
+                  <Select value={suggestionSort} onValueChange={setSuggestionSort}>
+                    <SelectTrigger className="h-8 text-[11px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="timeline">Sort: Timeline</SelectItem>
+                      <SelectItem value="confidence_desc">Confidence: high to low</SelectItem>
+                      <SelectItem value="confidence_asc">Confidence: low to high</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               {motionSuggestions.length === 0 ? (
                 <p className="rounded-md border border-border bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
@@ -3937,6 +4000,23 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   <YAxis domain={[0, 100]} stroke="hsl(var(--muted-foreground))" fontSize={10} />
                   <Tooltip content={<MotionTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {[
+                    { key: "pre_climax_offset_s", label: "Pre", color: "#a855f7" },
+                    { key: "climax_offset_s", label: "Climax", color: "#ef4444" },
+                    { key: "recovery_offset_s", label: "Recovery", color: "#3b82f6" },
+                  ].map(({ key, label, color }) => (
+                    Number.isFinite(Number(selectedSession?.[key]))
+                    && Number(selectedSession[key]) >= result.start
+                    && Number(selectedSession[key]) <= result.end ? (
+                      <ReferenceLine
+                        key={key}
+                        x={Number(selectedSession[key])}
+                        stroke={color}
+                        strokeDasharray="4 2"
+                        label={{ value: label, fontSize: 9, fill: color, position: "top" }}
+                      />
+                    ) : null
+                  ))}
                   {videoTime >= result.start && videoTime <= result.end && (
                     <ReferenceLine
                       x={videoTime}

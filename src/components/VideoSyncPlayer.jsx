@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2 } from "lucide-react";
+import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Move } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -99,6 +99,68 @@ function blankVideoFeeds() {
     fileName: "",
     src: null,
   }]));
+}
+
+function DraggableOverlayPanel({
+  children,
+  surfaceRef,
+  enabled,
+  defaultPositionClassName,
+  className = "",
+  title,
+  dragAnywhere = false,
+}) {
+  const panelRef = useRef(null);
+  const [position, setPosition] = useState(null);
+
+  useEffect(() => {
+    if (!enabled) setPosition(null);
+  }, [enabled]);
+
+  const beginDrag = (event) => {
+    if (!enabled || !surfaceRef.current || !panelRef.current) return;
+    event.preventDefault();
+    const surfaceRect = surfaceRef.current.getBoundingClientRect();
+    const panelRect = panelRef.current.getBoundingClientRect();
+    const offsetX = event.clientX - panelRect.left;
+    const offsetY = event.clientY - panelRect.top;
+    const move = (moveEvent) => {
+      const maxX = Math.max(8, surfaceRect.width - panelRect.width - 8);
+      const maxY = Math.max(8, surfaceRect.height - panelRect.height - 8);
+      setPosition({
+        x: Math.max(8, Math.min(maxX, moveEvent.clientX - surfaceRect.left - offsetX)),
+        y: Math.max(8, Math.min(maxY, moveEvent.clientY - surfaceRect.top - offsetY)),
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  };
+
+  return (
+    <div
+      ref={panelRef}
+      className={`absolute ${position ? "" : defaultPositionClassName} ${enabled ? "pointer-events-auto" : "pointer-events-none"} ${className}`}
+      style={position ? { left: position.x, top: position.y } : undefined}
+      onPointerDown={dragAnywhere ? beginDrag : undefined}
+    >
+      {title && enabled && (
+        <button
+          type="button"
+          onPointerDown={beginDrag}
+          className="mb-1 flex w-full touch-none cursor-move items-center justify-between rounded bg-black/55 px-2 py-1 text-[9px] font-semibold uppercase tracking-wider text-white/70"
+          aria-label={`Move ${title}`}
+        >
+          {title}
+          <Move className="h-3 w-3" />
+        </button>
+      )}
+      {children}
+    </div>
+  );
 }
 
 // Nearest HR from sorted chart data
@@ -955,6 +1017,16 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   }, [chartData, xDomain]);
 
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
+  const fullscreenMotionTimeline = useMemo(() => (
+    Array.isArray(savedMotionSummary?.derived_timeline)
+      ? savedMotionSummary.derived_timeline.map((point) => ({
+        t: Number(point.time_s),
+        left: point.left_lower_body_activity,
+        right: point.right_lower_body_activity,
+        hands: point.hand_activity,
+      }))
+      : []
+  ), [savedMotionSummary]);
   const motionEvidence = !isExploration ? getMotionEvidenceSummary(session) : null;
   const visibleEventEntries = useMemo(() => events
     .map((ev, i) => ({ ev, i }))
@@ -1316,7 +1388,13 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                 );
               })}
               {telemetryDisplayMode === "overlay" && closestVisibleEvent && (
-                <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(27rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/60 p-3 text-white shadow-xl backdrop-blur-sm">
+                <DraggableOverlayPanel
+                  surfaceRef={fullscreenSurfaceRef}
+                  enabled={fullscreenActive}
+                  dragAnywhere
+                  defaultPositionClassName="right-3 top-3"
+                  className="z-20 w-[min(27rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/60 p-3 text-white shadow-xl backdrop-blur-sm"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Closest Event Marker</p>
                     <span className="font-mono text-xs font-semibold text-primary">
@@ -1346,11 +1424,17 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                       ? "At current playback position"
                       : `${Math.round(Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS))}s ${Number(closestVisibleEvent.ev.time_s) < playheadS ? "ago" : "ahead"}`}
                   </p>
-                </div>
+                </DraggableOverlayPanel>
               )}
               {telemetryDisplayMode === "overlay" && savedMotionSummary && (
-                <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}>
-                  <div className="pointer-events-auto">
+                <DraggableOverlayPanel
+                  surfaceRef={fullscreenSurfaceRef}
+                  enabled={fullscreenActive}
+                  dragAnywhere
+                  defaultPositionClassName={`right-3 ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}
+                  className="z-10 w-[min(24rem,calc(100%-1.5rem))]"
+                >
+                  <div>
                     <MotionPlaybackReadout
                       summary={savedMotionSummary}
                       playbackTime={playheadS}
@@ -1358,13 +1442,66 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                       overlay
                     />
                   </div>
-                </div>
+                </DraggableOverlayPanel>
               )}
               {telemetryDisplayMode === "overlay" && !savedMotionSummary && currentHR != null && (
                 <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/15 bg-black/65 px-3 py-2 backdrop-blur-sm">
                   <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Heart Rate</p>
                   <p className="mt-1 font-mono text-lg font-bold text-rose-400">{currentHR} bpm</p>
                 </div>
+              )}
+              {telemetryDisplayMode === "overlay" && fullscreenActive && chartData.length > 0 && (
+                <DraggableOverlayPanel
+                  surfaceRef={fullscreenSurfaceRef}
+                  enabled
+                  title="Heart Rate Trend"
+                  defaultPositionClassName="left-3 bottom-[17.25rem]"
+                  className="z-20 w-[min(28rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/70 p-2 shadow-xl backdrop-blur-sm"
+                >
+                  <div className="h-20">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={chartData} margin={{ top: 5, right: 4, bottom: 0, left: -30 }}>
+                        <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]} tickFormatter={fmtMmSs} tick={{ fontSize: 8, fill: "#94a3b8" }} />
+                        <YAxis hide domain={["auto", "auto"]} />
+                        {PHASE_LINES.map(({ key, color }) => session[key] != null
+                          ? <ReferenceLine key={key} x={session[key]} stroke={color} strokeDasharray="3 2" />
+                          : null)}
+                        <ReferenceLine x={playheadS} stroke="#f43f5e" strokeWidth={2} />
+                        <Line type="monotone" dataKey="hr" stroke="#2dd4bf" strokeWidth={2} dot={false} isAnimationActive={false} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </DraggableOverlayPanel>
+              )}
+              {telemetryDisplayMode === "overlay" && fullscreenActive && fullscreenMotionTimeline.length > 0 && (
+                <DraggableOverlayPanel
+                  surfaceRef={fullscreenSurfaceRef}
+                  enabled
+                  title="Feet / Hands Trend"
+                  defaultPositionClassName="left-3 bottom-32"
+                  className="z-20 w-[min(28rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/70 p-2 shadow-xl backdrop-blur-sm"
+                >
+                  <div className="h-20">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={fullscreenMotionTimeline} margin={{ top: 5, right: 4, bottom: 0, left: -30 }}>
+                        <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]} tickFormatter={fmtMmSs} tick={{ fontSize: 8, fill: "#94a3b8" }} />
+                        <YAxis hide domain={[0, 100]} />
+                        {PHASE_LINES.map(({ key, color }) => session[key] != null
+                          ? <ReferenceLine key={key} x={session[key]} stroke={color} strokeDasharray="3 2" />
+                          : null)}
+                        <ReferenceLine x={playheadS} stroke="#f43f5e" strokeWidth={2} />
+                        <Line type="monotone" dataKey="left" stroke="#2dd4bf" strokeWidth={1.7} dot={false} isAnimationActive={false} />
+                        <Line type="monotone" dataKey="right" stroke="#f59e0b" strokeWidth={1.7} dot={false} isAnimationActive={false} />
+                        <Line type="monotone" dataKey="hands" stroke="#a78bfa" strokeWidth={1.7} dot={false} isAnimationActive={false} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-1 flex gap-3 text-[9px] text-white/70">
+                    <span className="text-[#2dd4bf]">Left</span>
+                    <span className="text-[#f59e0b]">Right</span>
+                    <span className="text-[#a78bfa]">Hands</span>
+                  </div>
+                </DraggableOverlayPanel>
               )}
               {fullscreenActive && (
                 <div className="absolute left-3 top-3 z-30 flex items-center gap-2">
@@ -1707,6 +1844,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                   summary={savedMotionSummary}
                   onSeek={videoSrc ? seekToMotionPeak : undefined}
                   playbackTime={playheadS}
+                  phaseMarkers={session}
                   chartOnly
                   focus
                 />

@@ -118,10 +118,33 @@ function addSmoothedSignals(points, windowSize = 4) {
   });
 }
 
+const MOTION_PHASE_LINES = [
+  { key: "pre_climax_offset_s", label: "Pre", color: "#a855f7" },
+  { key: "climax_offset_s", label: "Climax", color: "#ef4444" },
+  { key: "recovery_offset_s", label: "Recovery", color: "#3b82f6" },
+];
+
+function MotionPhaseMarkers({ phaseMarkers, showLabels = true }) {
+  if (!phaseMarkers) return null;
+  return MOTION_PHASE_LINES.map(({ key, label, color }) => (
+    Number.isFinite(Number(phaseMarkers[key])) ? (
+      <ReferenceLine
+        key={key}
+        x={Number(phaseMarkers[key])}
+        stroke={color}
+        strokeWidth={1.5}
+        strokeDasharray="4 2"
+        label={showLabels ? { value: label, fontSize: 8, fill: color, position: "top" } : undefined}
+      />
+    ) : null
+  ));
+}
+
 export default function SavedMotionSummaryCard({
   summary,
   onSeek,
   playbackTime,
+  phaseMarkers,
   compact = false,
   chartOnly = false,
   focus = false,
@@ -284,6 +307,7 @@ export default function SavedMotionSummaryCard({
               <XAxis dataKey="timeS" type="number" domain={[savedSummary.window_start_s, savedSummary.window_end_s]} tickFormatter={formatTime} stroke="hsl(var(--muted-foreground))" fontSize={10} />
               <YAxis domain={[0, 100]} stroke="hsl(var(--muted-foreground))" fontSize={10} />
               <Tooltip content={<MotionTooltip />} />
+              <MotionPhaseMarkers phaseMarkers={phaseMarkers} />
               {Number.isFinite(Number(playbackTime))
                 && playbackTime >= savedSummary.window_start_s
                 && playbackTime <= savedSummary.window_end_s && (
@@ -360,6 +384,7 @@ export default function SavedMotionSummaryCard({
                       <XAxis dataKey="timeS" type="number" domain={[savedSummary.window_start_s, savedSummary.window_end_s]} tickFormatter={formatTime} stroke="hsl(var(--muted-foreground))" fontSize={10} />
                       <YAxis stroke="hsl(var(--muted-foreground))" fontSize={10} />
                       <Tooltip content={<MotionTooltip />} />
+                      <MotionPhaseMarkers phaseMarkers={phaseMarkers} showLabels={false} />
                       {Number.isFinite(Number(playbackTime))
                         && playbackTime >= savedSummary.window_start_s
                         && playbackTime <= savedSummary.window_end_s && (
@@ -532,6 +557,7 @@ export default function SavedMotionSummaryCard({
                 <YAxis domain={[0, 100]} stroke="hsl(var(--muted-foreground))" fontSize={10} />
                 <Tooltip content={<MotionTooltip />} />
                 {!compact && <Legend wrapperStyle={{ fontSize: 11 }} />}
+                <MotionPhaseMarkers phaseMarkers={phaseMarkers} />
                 {Number.isFinite(Number(playbackTime))
                   && playbackTime >= savedSummary.window_start_s
                   && playbackTime <= savedSummary.window_end_s && (

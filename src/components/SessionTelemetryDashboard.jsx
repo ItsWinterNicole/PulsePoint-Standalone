@@ -225,6 +225,7 @@ export default function SessionTelemetryDashboard({
           summary={session.motion_analysis_summary}
           playbackTime={inspectionTime}
           onSeek={onInspectionTimeChange}
+          phaseMarkers={session}
           chartOnly
           interactionLabel="Saved movement and cadence traces aligned to this session; click to move the inspection cursor."
         />

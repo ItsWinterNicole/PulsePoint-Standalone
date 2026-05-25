@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, ListPlus, Maximize2, Minimize2, Play, ShieldCheck, Trash2, Video } from "lucide-react";
+import { Activity, ArrowRight, ListPlus, Maximize2, Minimize2, Play, ShieldCheck, Trash2, Video } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
@@ -8,6 +8,7 @@ import LocalMotionAnalysisPanel from "../components/LocalMotionAnalysisPanel";
 import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
+import { notifyBackgroundJobFinished } from "@/utils/backgroundJobNotifications";
 
 const FEED_ROLES = [
   { value: "composite", label: "Composite / Picture-in-Picture" },
@@ -60,6 +61,13 @@ function labelForSession(session) {
 
 function feedLabel(role) {
   return FEED_ROLES.find((feed) => feed.value === role)?.label || role;
+}
+
+function formatRemainingTime(milliseconds) {
+  if (!Number.isFinite(Number(milliseconds))) return "Estimating time remaining...";
+  const seconds = Math.max(0, Math.ceil(Number(milliseconds) / 1000));
+  if (seconds < 60) return `Approximately ${seconds}s remaining`;
+  return `Approximately ${Math.ceil(seconds / 60)}m remaining`;
 }
 
 function nearestTimelinePoint(points, timeS, toleranceS = 0.3) {
@@ -176,6 +184,9 @@ export default function MotionLab() {
   const [previewFloating, setPreviewFloating] = useState(() => readPreviewPreferences().floating);
   const [floatingPreviewWidth, setFloatingPreviewWidth] = useState(() => readPreviewPreferences().width);
   const [floatingPreviewPosition, setFloatingPreviewPosition] = useState(() => readPreviewPreferences().position);
+  const [analysisStatuses, setAnalysisStatuses] = useState({});
+  const [statusClock, setStatusClock] = useState(Date.now());
+  const completionRunsRef = useRef(new Set());
 
   useEffect(() => {
     try {
@@ -212,6 +223,12 @@ export default function MotionLab() {
   }, [floatingPreviewWidth, previewFloating]);
 
   useEffect(() => {
+    if (!Object.values(analysisStatuses).some((status) => status.status === "running")) return undefined;
+    const timer = window.setInterval(() => setStatusClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [analysisStatuses]);
+
+  useEffect(() => {
     base44.entities.Session.list("-date", 300)
       .then((rows) => {
         setSessions(rows);
@@ -233,6 +250,7 @@ export default function MotionLab() {
       });
       setFeedSummaries({});
       setFeedFinalizedEvents({});
+      setAnalysisStatuses({});
       setQueue([]);
     }
     setSelectedId(id);
@@ -375,6 +393,16 @@ export default function MotionLab() {
     updateFeedWorkspace(feedRole, { videoTime: Number(timeS) || 0 });
   };
 
+  const handleAnalysisStatusChange = useCallback((role, status) => {
+    setAnalysisStatuses((current) => ({ ...current, [role]: status }));
+    if (status.status !== "complete" || completionRunsRef.current.has(status.runId)) return;
+    completionRunsRef.current.add(status.runId);
+    void notifyBackgroundJobFinished(
+      { id: `motion-lab-${selectedId || "session"}-${role}-${status.runId}`, status: "complete" },
+      { route: `/motion-lab${selectedId ? `?session=${encodeURIComponent(selectedId)}` : ""}` },
+    );
+  }, [selectedId]);
+
   const beginFloatingResize = (event) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -420,10 +448,38 @@ export default function MotionLab() {
 
   const evidence = getMotionEvidenceSummary(selectedSession);
   const configuredRoles = FEED_ROLES.filter((role) => role.value === feedRole || feedWorkspaces[role.value]?.videoSrc);
+  const runningAnalyses = Object.entries(analysisStatuses).filter(([, status]) => status.status === "running");
 
   return (
     <div>
       <PageHeader title="Motion Lab" subtitle="Local-only motion detection, configuration, and derived evidence saving" />
+      {runningAnalyses.length > 0 && (
+        <div className="fixed bottom-5 left-1/2 z-[75] w-[min(34rem,calc(100vw-2rem))] -translate-x-1/2 rounded-xl border border-primary/30 bg-card/95 p-3 shadow-2xl backdrop-blur-sm">
+          {runningAnalyses.map(([role, status]) => {
+            const elapsedMs = Math.max(0, statusClock - Number(status.startedAt || statusClock));
+            const etaMs = status.progress > 0 && status.progress < 100
+              ? Math.round((elapsedMs / status.progress) * (100 - status.progress))
+              : status.etaMs;
+            return (
+              <div key={role} className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="inline-flex items-center gap-2 text-xs font-semibold text-foreground">
+                    <Activity className="h-3.5 w-3.5 animate-pulse text-primary" />
+                    Analyzing {feedLabel(role)}
+                  </p>
+                  <span className="font-mono text-xs font-semibold text-primary">{status.progress}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${status.progress}%` }} />
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  {formatRemainingTime(etaMs)}. A completion notification is sent when enabled and PulsePoint is in the background.
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="space-y-4 px-4 pb-8">
         <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-4">
           <div className="flex items-start gap-3">
@@ -619,7 +675,7 @@ export default function MotionLab() {
             )}
 
             {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
-              <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
+              <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} phaseMarkers={selectedSession} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
             )}
 
             {configuredRoles.map((role) => {
@@ -640,6 +696,7 @@ export default function MotionLab() {
                     }}
                     onSaveSummary={(summary, events) => saveSummary(role.value, summary, events)}
                     onAcceptSuggestions={(events) => acceptSuggestions(role.value, events)}
+                    onAnalysisStatusChange={(status) => handleAnalysisStatusChange(role.value, status)}
                   />
                 </div>
               );
