@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Play, Pause, Video, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles } from "lucide-react";
+import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -371,7 +371,11 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [playerHeight, setPlayerHeight] = useState(68);
   const [playerWidth, setPlayerWidth] = useState(66);
+  const [telemetryDisplayMode, setTelemetryDisplayMode] = useState("sidebar");
+  const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
+  const fullscreenSurfaceRef = useRef(null);
+  const [fullscreenActive, setFullscreenActive] = useState(false);
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
@@ -779,6 +783,30 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     Object.values(videoFeedUrls.current).forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setFullscreenActive(document.fullscreenElement === fullscreenSurfaceRef.current);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreenOverlay = useCallback(async () => {
+    const surface = fullscreenSurfaceRef.current;
+    if (!surface) return;
+    try {
+      if (document.fullscreenElement === surface) {
+        await document.exitFullscreen?.();
+        return;
+      }
+      if (document.fullscreenElement) await document.exitFullscreen?.();
+      setTelemetryDisplayMode("overlay");
+      await surface.requestFullscreen?.();
+    } catch (err) {
+      console.warn("Fullscreen playback could not be opened:", err);
+    }
+  }, []);
+
   // Scroll-to-top
   const [showScrollTop, setShowScrollTop] = useState(false);
   useEffect(() => {
@@ -920,7 +948,16 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
       || EVENT_FILTERS.some((filter) => selectedEventFilters.includes(filter.key) && filter.matches(ev))
     )), [events, selectedEventFilters]);
   const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
+  const closestVisibleEvent = useMemo(() => {
+    if (!visibleEventEntries.length) return null;
+    return visibleEventEntries.reduce((closest, entry) => (
+      Math.abs(Number(entry.ev.time_s) - playheadS) < Math.abs(Number(closest.ev.time_s) - playheadS)
+        ? entry
+        : closest
+    ), visibleEventEntries[0]);
+  }, [playheadS, visibleEventEntries]);
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
+  const showSidebar = hasSidebarContent && telemetryDisplayMode === "sidebar";
   const displayedFeeds = videoLayout === "multi"
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
@@ -955,6 +992,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         }}
       >
         <DialogContent
+          portalContainer={fullscreenActive ? fullscreenSurfaceRef.current : undefined}
           overlayClassName="bg-transparent"
           className="w-[calc(100vw-2rem)] max-w-lg rounded-xl border-primary/30 bg-card p-4 sm:left-auto sm:right-6 sm:top-auto sm:bottom-6 sm:translate-x-0 sm:translate-y-0"
         >
@@ -1079,12 +1117,43 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
           <Video className="w-4 h-4" /> Video Sync Player
         </h3>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="text-xs px-3 py-1.5 rounded-lg bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
-        >
-          {videoFeeds.composite.src ? "Change Composite Video" : "Load Composite / PiP Video"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {hasSidebarContent && videoSrc && (
+            <div className="inline-flex rounded-lg border border-border bg-background p-1">
+              <button
+                type="button"
+                onClick={() => setTelemetryDisplayMode("sidebar")}
+                className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${telemetryDisplayMode === "sidebar" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              >
+                Player + Sidebar
+              </button>
+              <button
+                type="button"
+                onClick={() => setTelemetryDisplayMode("overlay")}
+                className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${telemetryDisplayMode === "overlay" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              >
+                Video Overlay
+              </button>
+            </div>
+          )}
+          {videoSrc && (
+            <button
+              type="button"
+              onClick={toggleFullscreenOverlay}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/10 px-2.5 py-1.5 text-[10px] font-semibold text-primary hover:bg-primary/20"
+              title="Open the video with telemetry overlays in fullscreen"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              Fullscreen Overlay
+            </button>
+          )}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="text-xs px-3 py-1.5 rounded-lg bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
+          >
+            {videoFeeds.composite.src ? "Change Composite Video" : "Load Composite / PiP Video"}
+          </button>
+        </div>
         <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, "composite")} />
       </div>
 
@@ -1097,25 +1166,41 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                 Use one composite picture-in-picture recording or load separate angles. Files remain local to this browser review.
               </p>
             </div>
-            {loadedFeeds.length > 1 && (
-              <div className="inline-flex rounded-lg border border-border bg-background p-1">
-                <button
-                  type="button"
-                  onClick={() => setVideoLayout("single")}
-                  className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${videoLayout === "single" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-                >
-                  One View
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVideoLayout("multi")}
-                  className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${videoLayout === "multi" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-                >
-                  Side by Side
-                </button>
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {loadedFeeds.length > 0 && !feedsExpanded && (
+                <span className="text-[10px] text-muted-foreground">{loadedFeeds.length} feed{loadedFeeds.length === 1 ? "" : "s"} loaded</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setFeedsExpanded((current) => !current)}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-primary"
+                aria-expanded={feedsExpanded}
+              >
+                {feedsExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                {feedsExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
           </div>
+          {feedsExpanded && (
+          <>
+          {loadedFeeds.length > 1 && (
+            <div className="inline-flex rounded-lg border border-border bg-background p-1">
+              <button
+                type="button"
+                onClick={() => setVideoLayout("single")}
+                className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${videoLayout === "single" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              >
+                One View
+              </button>
+              <button
+                type="button"
+                onClick={() => setVideoLayout("multi")}
+                className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${videoLayout === "multi" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              >
+                Side by Side
+              </button>
+            </div>
+          )}
           <div className="grid gap-2 lg:grid-cols-2 2xl:grid-cols-4">
             {VIDEO_FEED_SLOTS.map((slot) => {
               const feed = videoFeeds[slot.key];
@@ -1166,18 +1251,21 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
               The master feed controls playback, seeking, event placement, and telemetry alignment. Other angles follow the same local timestamp and remain muted.
             </p>
           )}
+          </>
+          )}
         </div>
         <div ref={layoutRef} className="flex flex-col xl:flex-row gap-4 items-start">
           {/* Video player */}
           <div
             className="w-full min-w-0 space-y-3"
-            style={{ flex: hasSidebarContent ? `0 1 ${playerWidth}%` : "1 1 100%" }}
+            style={{ flex: showSidebar ? `0 1 ${playerWidth}%` : "1 1 100%" }}
           >
         {videoSrc ? (
           <div className="space-y-3">
             <div
-              className={`w-full rounded-lg bg-black overflow-hidden ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
-              style={{ height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
+              ref={fullscreenSurfaceRef}
+              className={`relative w-full bg-black overflow-hidden ${fullscreenActive ? "h-screen rounded-none" : "rounded-lg"} ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
+              style={fullscreenActive ? undefined : { height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
             >
               {displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
@@ -1212,6 +1300,130 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                   </div>
                 );
               })}
+              {telemetryDisplayMode === "overlay" && closestVisibleEvent && (
+                <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(27rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/60 p-3 text-white shadow-xl backdrop-blur-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Closest Event Marker</p>
+                    <span className="font-mono text-xs font-semibold text-primary">
+                      {fmtMmSs(closestVisibleEvent.ev.time_s)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    {normalizeCategoryArray(closestVisibleEvent.ev.category).map((category) => {
+                      const meta = getCategoryMeta(category);
+                      return (
+                        <span
+                          key={category}
+                          className="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold"
+                          style={{ color: meta.color, borderColor: `${meta.color}66`, background: `${meta.color}25` }}
+                        >
+                          {meta.label}
+                        </span>
+                      );
+                    })}
+                    {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge />}
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-white/90">
+                    {closestVisibleEvent.ev.note || "Event note"}
+                  </p>
+                  <p className="mt-1 text-[10px] text-white/60">
+                    {Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS) < 1
+                      ? "At current playback position"
+                      : `${Math.round(Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS))}s ${Number(closestVisibleEvent.ev.time_s) < playheadS ? "ago" : "ahead"}`}
+                  </p>
+                </div>
+              )}
+              {telemetryDisplayMode === "overlay" && savedMotionSummary && (
+                <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}>
+                  <div className="pointer-events-auto">
+                    <MotionPlaybackReadout
+                      summary={savedMotionSummary}
+                      playbackTime={playheadS}
+                      currentHR={currentHR}
+                      overlay
+                    />
+                  </div>
+                </div>
+              )}
+              {telemetryDisplayMode === "overlay" && !savedMotionSummary && currentHR != null && (
+                <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/15 bg-black/65 px-3 py-2 backdrop-blur-sm">
+                  <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Heart Rate</p>
+                  <p className="mt-1 font-mono text-lg font-bold text-rose-400">{currentHR} bpm</p>
+                </div>
+              )}
+              {fullscreenActive && (
+                <div className="absolute left-3 top-3 z-30 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleFullscreenOverlay}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-black/65 px-2.5 py-2 text-[10px] font-semibold text-white backdrop-blur-sm hover:bg-black/80"
+                  >
+                    <Minimize2 className="h-3.5 w-3.5" />
+                    Exit Fullscreen
+                  </button>
+                  <span className="hidden rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-[10px] text-white/70 backdrop-blur-sm sm:inline">
+                    Space play/pause | arrows seek | S add event
+                  </span>
+                </div>
+              )}
+              {fullscreenActive && (
+                <div className="absolute inset-x-3 bottom-3 z-30 rounded-xl border border-white/15 bg-black/70 p-3 text-white shadow-xl backdrop-blur-sm">
+                  {videoDuration > 0 && (
+                    <div className="mb-2 space-y-1">
+                      <div
+                        className="relative h-3 cursor-pointer rounded-full bg-white/15"
+                        onClick={handleTimelineScrub}
+                        title="Click to seek video"
+                      >
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-full bg-primary"
+                          style={{ width: `${((videoRef.current?.currentTime || 0) / videoDuration) * 100}%` }}
+                        />
+                        <div
+                          className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-white shadow"
+                          style={{ left: `${((videoRef.current?.currentTime || 0) / videoDuration) * 100}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between px-0.5 font-mono text-[10px] text-white/70">
+                        <span>{fmtMmSs(videoRef.current?.currentTime || 0)}</span>
+                        <span>{fmtMmSs(videoDuration)}</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={() => stepFrames(-5)} className="rounded-lg bg-white/10 p-2 hover:bg-white/20" title="Back 5 seconds">
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <button type="button" onClick={togglePlay} className="inline-flex min-w-28 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90">
+                      {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      {isPlaying ? "Pause" : "Play"}
+                    </button>
+                    <button type="button" onClick={() => stepFrames(5)} className="rounded-lg bg-white/10 p-2 hover:bg-white/20" title="Forward 5 seconds">
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                    <div className="ml-1 flex items-center gap-1">
+                      {[0.5, 1, 1.5, 2].map((speed) => (
+                        <button
+                          key={speed}
+                          type="button"
+                          onClick={() => setSpeed(speed)}
+                          className={`rounded px-2 py-1 text-[10px] font-semibold ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-white/10 text-white/75 hover:bg-white/20"}`}
+                        >
+                          {speed}x
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={startAddAtPlayhead}
+                      className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/25"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add Event at {fmtMmSs(playheadS)}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex flex-col md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
               <label className="flex items-center gap-3 flex-1 min-w-[220px]">
@@ -1329,7 +1541,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         )}
           </div>
 
-          {hasSidebarContent && (
+          {showSidebar && (
             <div
               onMouseDown={handleWidthDragStart}
               className="hidden xl:flex self-stretch w-3 cursor-ew-resize items-center justify-center group"
@@ -1340,7 +1552,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
           )}
 
           {/* HR Timeline + event context */}
-          {hasSidebarContent && (
+          {showSidebar && (
             <aside
               className="w-full xl:min-w-[320px] xl:max-w-[560px] shrink-0 space-y-4 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
               style={{ flex: `1 1 ${100 - playerWidth}%` }}
