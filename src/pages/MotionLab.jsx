@@ -58,23 +58,119 @@ function labelForSession(session) {
   return `${moment(session.date).format("MMM D, YYYY")}${session.start_time ? ` · ${session.start_time}` : ""}${session.duration_minutes ? ` · ${session.duration_minutes}m` : ""}`;
 }
 
+function feedLabel(role) {
+  return FEED_ROLES.find((feed) => feed.value === role)?.label || role;
+}
+
+function nearestTimelinePoint(points, timeS, toleranceS = 0.3) {
+  if (!Array.isArray(points) || !points.length) return null;
+  const nearest = points.reduce((closest, point) => (
+    Math.abs(Number(point.time_s) - timeS) < Math.abs(Number(closest.time_s) - timeS) ? point : closest
+  ), points[0]);
+  return Math.abs(Number(nearest.time_s) - timeS) <= toleranceS ? nearest : null;
+}
+
+function combineDerivedTimelines(lowerSummary, handSummary) {
+  const lowerTimeline = Array.isArray(lowerSummary?.derived_timeline) ? lowerSummary.derived_timeline : [];
+  const handTimeline = Array.isArray(handSummary?.derived_timeline) ? handSummary.derived_timeline : [];
+  const basis = lowerTimeline.length ? lowerTimeline : handTimeline;
+  if (!basis.length) return [];
+  return basis.map((point) => {
+    const timeS = Number(point.time_s) || 0;
+    const lower = lowerTimeline.length ? nearestTimelinePoint(lowerTimeline, timeS) : null;
+    const hand = handTimeline.length ? nearestTimelinePoint(handTimeline, timeS) : null;
+    return {
+      time_s: point.time_s,
+      activity: lower?.activity ?? hand?.activity,
+      left_lower_body_activity: lower?.left_lower_body_activity,
+      right_lower_body_activity: lower?.right_lower_body_activity,
+      left_forefoot_activity: lower?.left_forefoot_activity,
+      right_forefoot_activity: lower?.right_forefoot_activity,
+      hand_activity: hand?.hand_activity ?? hand?.activity,
+      region_segment_id: lower?.region_segment_id || hand?.region_segment_id,
+      region_segment_label: lower?.region_segment_label || hand?.region_segment_label,
+      region_segment_boundary: lower?.region_segment_boundary || hand?.region_segment_boundary,
+    };
+  });
+}
+
+function combineFeedSummaries(feedSummaries) {
+  const entries = Object.entries(feedSummaries || {}).filter(([, summary]) => summary && typeof summary === "object");
+  if (!entries.length) return null;
+  if (entries.length === 1 && entries[0][0] === "composite") return entries[0][1];
+
+  const summaries = Object.fromEntries(entries);
+  const lower = summaries.lower_body || summaries.composite || summaries.lateral || summaries.main;
+  const hand = summaries.main || summaries.composite || summaries.lateral || summaries.lower_body;
+  const lowerRole = entries.find(([, summary]) => summary === lower)?.[0];
+  const handRole = entries.find(([, summary]) => summary === hand)?.[0];
+  const latest = entries
+    .map(([, summary]) => summary)
+    .sort((first, second) => new Date(second.analyzed_at || 0) - new Date(first.analyzed_at || 0))[0];
+  const findings = entries.flatMap(([role, summary]) => (
+    (Array.isArray(summary.findings) ? summary.findings : []).map((finding) => `${feedLabel(role)}: ${finding}`)
+  ));
+  const reviewPeaks = entries.flatMap(([role, summary]) => (
+    (Array.isArray(summary.review_peaks) ? summary.review_peaks : []).map((peak) => ({ ...peak, feed_role: role }))
+  )).sort((first, second) => Number(first.time_s) - Number(second.time_s));
+
+  return {
+    ...latest,
+    source: "local_mediapipe_multi_feed_review",
+    analyzed_at: new Date().toISOString(),
+    feed_summaries: summaries,
+    analyzed_feeds: entries.map(([role]) => role),
+    feed_summary_note: "Each local video feed was configured and analyzed independently. Combined values align derived signals by session playback time; compare only supported channels from each feed.",
+    lower_body_source_feed: lowerRole,
+    hand_source_feed: handRole,
+    lower_body_tracking_method: lower?.lower_body_tracking_method,
+    left_right_orientation: lower?.left_right_orientation,
+    forefoot_enabled: lower?.forefoot_enabled,
+    roi_configuration: lower?.roi_configuration,
+    region_segments: lower?.region_segments,
+    region_segment_summary: lower?.region_segment_summary,
+    posture_reference_times_s: lower?.posture_reference_times_s,
+    left_lower_body_coverage_pct: lower?.left_lower_body_coverage_pct,
+    right_lower_body_coverage_pct: lower?.right_lower_body_coverage_pct,
+    asymmetry_summary: lower?.asymmetry_summary,
+    lower_body_pattern_summary: lower?.lower_body_pattern_summary,
+    lower_body_posture_summary: lower?.lower_body_posture_summary,
+    left_lower_body_average_activity: lower?.left_lower_body_average_activity,
+    right_lower_body_average_activity: lower?.right_lower_body_average_activity,
+    left_forefoot_average_activity: lower?.left_forefoot_average_activity,
+    right_forefoot_average_activity: lower?.right_forefoot_average_activity,
+    hand_coverage_pct: hand?.hand_coverage_pct,
+    hand_average_activity: hand?.hand_average_activity,
+    hand_movement_summary: hand?.hand_movement_summary,
+    hand_behavior_summary: hand?.hand_behavior_summary,
+    hand_behavior_reference_times_s: hand?.hand_behavior_reference_times_s,
+    hand_cadence_timeline: hand?.hand_cadence_timeline,
+    quality_indicators: {
+      left_lower_body: lower?.quality_indicators?.left_lower_body,
+      right_lower_body: lower?.quality_indicators?.right_lower_body,
+      hands: hand?.quality_indicators?.hands,
+    },
+    findings,
+    review_peaks: reviewPeaks,
+    derived_timeline: combineDerivedTimelines(lower, hand),
+    multi_feed_guardrail: "Signals were derived from separate local camera feeds. Do not interpret differences caused by framing, sync drift, or feed-specific visibility as physiology without direct video confirmation.",
+  };
+}
+
 export default function MotionLab() {
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("session") || "";
   const videoRef = useRef(null);
-  const videoUrlRef = useRef(null);
+  const feedWorkspacesRef = useRef({});
   const fileInputRef = useRef(null);
   const previewRef = useRef(null);
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [selectedSession, setSelectedSession] = useState(null);
-  const [videoSrc, setVideoSrc] = useState("");
-  const [videoName, setVideoName] = useState("");
-  const [videoFile, setVideoFile] = useState(null);
-  const [videoTime, setVideoTime] = useState(0);
-  const [videoDuration, setVideoDuration] = useState(0);
-  const [videoPlaying, setVideoPlaying] = useState(false);
   const [feedRole, setFeedRole] = useState("composite");
+  const [feedWorkspaces, setFeedWorkspaces] = useState({});
+  const [feedSummaries, setFeedSummaries] = useState({});
+  const [feedFinalizedEvents, setFeedFinalizedEvents] = useState({});
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
   const [previewFloating, setPreviewFloating] = useState(() => readPreviewPreferences().floating);
@@ -125,45 +221,91 @@ export default function MotionLab() {
         }
       })
       .finally(() => setLoading(false));
-    return () => {
-      if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
-    };
   }, [requestedSessionId]);
 
   const selectSession = (id) => {
+    if (id !== selectedId) {
+      setFeedWorkspaces((current) => {
+        Object.values(current).forEach((workspace) => {
+          if (workspace.videoSrc) URL.revokeObjectURL(workspace.videoSrc);
+        });
+        return {};
+      });
+      setFeedSummaries({});
+      setFeedFinalizedEvents({});
+      setQueue([]);
+    }
     setSelectedId(id);
     setSelectedSession(sessions.find((session) => session.id === id) || null);
   };
 
-  const loadVideo = useCallback((file) => {
-    if (!file) return;
-    if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
-    const source = URL.createObjectURL(file);
-    videoUrlRef.current = source;
-    setVideoFile(file);
-    setVideoSrc(source);
-    setVideoName(file.name);
-    setVideoTime(0);
-    setVideoDuration(0);
+  useEffect(() => {
+    feedWorkspacesRef.current = feedWorkspaces;
+  }, [feedWorkspaces]);
+
+  useEffect(() => () => {
+    Object.values(feedWorkspacesRef.current).forEach((workspace) => {
+      if (workspace.videoSrc) URL.revokeObjectURL(workspace.videoSrc);
+    });
   }, []);
+
+  const loadVideo = useCallback((file, role = feedRole) => {
+    if (!file) return;
+    const source = URL.createObjectURL(file);
+    setFeedWorkspaces((current) => {
+      if (current[role]?.videoSrc) URL.revokeObjectURL(current[role].videoSrc);
+      return {
+        ...current,
+        [role]: {
+          ...(current[role] || {}),
+          videoFile: file,
+          videoSrc: source,
+          videoName: file.name,
+          videoTime: 0,
+          videoDuration: 0,
+          videoPlaying: false,
+          status: "Configured",
+        },
+      };
+    });
+  }, [feedRole]);
+
+  const activeFeed = feedWorkspaces[feedRole] || {};
+  const videoSrc = activeFeed.videoSrc || "";
+  const videoName = activeFeed.videoName || "";
+  const videoFile = activeFeed.videoFile || null;
+  const videoTime = activeFeed.videoTime || 0;
+  const videoDuration = activeFeed.videoDuration || 0;
+  const videoPlaying = activeFeed.videoPlaying || false;
+
+  const updateFeedWorkspace = (role, patch) => {
+    setFeedWorkspaces((current) => ({
+      ...current,
+      [role]: { ...(current[role] || {}), ...patch },
+    }));
+  };
 
   const addToQueue = () => {
     if (!selectedSession || !videoFile) return;
-    setQueue((existing) => [...existing, {
-      id: `${Date.now()}-${existing.length}`,
-      sessionId: selectedSession.id,
-      sessionLabel: labelForSession(selectedSession),
-      feedRole,
-      videoFile,
-      videoName,
-      status: "Ready",
-    }]);
+    setQueue((existing) => {
+      const nextItem = {
+        id: existing.find((item) => item.sessionId === selectedSession.id && item.feedRole === feedRole)?.id || `${Date.now()}-${existing.length}`,
+        sessionId: selectedSession.id,
+        sessionLabel: labelForSession(selectedSession),
+        feedRole,
+        videoFile,
+        videoName,
+        status: feedSummaries[feedRole] ? "Completed" : "Ready",
+      };
+      const withoutRole = existing.filter((item) => !(item.sessionId === selectedSession.id && item.feedRole === feedRole));
+      return [...withoutRole, nextItem];
+    });
   };
 
   const activateQueueItem = (item) => {
     selectSession(item.sessionId);
     setFeedRole(item.feedRole);
-    loadVideo(item.videoFile);
+    if (!feedWorkspaces[item.feedRole]?.videoSrc && item.videoFile) loadVideo(item.videoFile, item.feedRole);
   };
 
   const updateSessionEverywhere = (nextSession) => {
@@ -171,28 +313,51 @@ export default function MotionLab() {
     setSessions((current) => current.map((session) => session.id === nextSession.id ? { ...session, ...nextSession } : session));
   };
 
-  const saveSummary = async (summary, finalizedMotionEvents = []) => {
+  const tagFeedEvents = (role, events) => (Array.isArray(events) ? events : []).map((event) => ({
+    ...event,
+    motion_evidence: {
+      ...(event.motion_evidence || {}),
+      feed_role: role,
+      feed_label: feedLabel(role),
+    },
+  }));
+
+  const saveSummary = async (role, summary, finalizedMotionEvents = []) => {
     if (!selectedSession?.id) throw new Error("Choose a target session before saving derived motion evidence.");
+    const previouslySavedFeedSummaries = selectedSession.motion_analysis_summary?.feed_summaries || {};
+    const nextSummaries = { ...previouslySavedFeedSummaries, ...feedSummaries, [role]: summary };
+    const nextFinalizedEvents = { ...feedFinalizedEvents, [role]: tagFeedEvents(role, finalizedMotionEvents) };
+    const combinedSummary = combineFeedSummaries(nextSummaries);
     const nonMotionEvents = (selectedSession.event_timeline || []).filter((event) => event.source !== "motion_derived");
-    const eventTimeline = [...nonMotionEvents, ...(Array.isArray(finalizedMotionEvents) ? finalizedMotionEvents : [])]
+    const finalizedRoles = new Set(Object.keys(nextFinalizedEvents));
+    const retainedOtherFeedEvents = (selectedSession.event_timeline || []).filter((event) => (
+      event.source === "motion_derived"
+      && event.motion_evidence?.feed_role
+      && !finalizedRoles.has(event.motion_evidence.feed_role)
+    ));
+    const eventTimeline = [...nonMotionEvents, ...retainedOtherFeedEvents, ...Object.values(nextFinalizedEvents).flat()]
       .sort((a, b) => Number(a.time_s) - Number(b.time_s));
     const updated = await base44.entities.Session.update(selectedSession.id, {
-      motion_analysis_summary: summary,
+      motion_analysis_summary: combinedSummary,
       event_timeline: eventTimeline,
     });
-    updateSessionEverywhere({ ...updated, motion_analysis_summary: summary, event_timeline: eventTimeline });
-    setQueue((current) => current.map((item) => item.sessionId === selectedSession.id && item.videoName === videoName
+    setFeedSummaries(nextSummaries);
+    setFeedFinalizedEvents(nextFinalizedEvents);
+    updateFeedWorkspace(role, { status: "Completed" });
+    updateSessionEverywhere({ ...updated, motion_analysis_summary: combinedSummary, event_timeline: eventTimeline });
+    setQueue((current) => current.map((item) => item.sessionId === selectedSession.id && item.feedRole === role
       ? { ...item, status: "Completed" }
       : item));
   };
 
-  const acceptSuggestions = async (suggestedEvents) => {
+  const acceptSuggestions = async (role, suggestedEvents) => {
     if (!selectedSession?.id) throw new Error("Choose a target session before promoting observations.");
     const existing = selectedSession.event_timeline || [];
-    const additions = (Array.isArray(suggestedEvents) ? suggestedEvents : []).filter((candidate) => (
+    const additions = tagFeedEvents(role, suggestedEvents).filter((candidate) => (
       !existing.some((event) => (
         event.source === "motion_derived"
         && event.motion_evidence?.suggestion_type === candidate.motion_evidence?.suggestion_type
+        && event.motion_evidence?.feed_role === role
         && Math.abs(Number(event.time_s) - Number(candidate.time_s)) <= 0.75
       ))
     ));
@@ -207,7 +372,7 @@ export default function MotionLab() {
   const seek = (timeS) => {
     if (!videoRef.current) return;
     videoRef.current.currentTime = Number(timeS) || 0;
-    setVideoTime(Number(timeS) || 0);
+    updateFeedWorkspace(feedRole, { videoTime: Number(timeS) || 0 });
   };
 
   const beginFloatingResize = (event) => {
@@ -254,6 +419,7 @@ export default function MotionLab() {
   };
 
   const evidence = getMotionEvidenceSummary(selectedSession);
+  const configuredRoles = FEED_ROLES.filter((role) => role.value === feedRole || feedWorkspaces[role.value]?.videoSrc);
 
   return (
     <div>
@@ -289,12 +455,51 @@ export default function MotionLab() {
                   {FEED_ROLES.map((role) => <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Each feed is independent. Select a feed, load its local recording, then configure and finalize its derived analysis separately.
+              </p>
+              <div className="grid gap-1.5">
+                {FEED_ROLES.map((role) => {
+                  const workspace = feedWorkspaces[role.value];
+                  const hasFinal = !!(
+                    feedSummaries[role.value]
+                    || selectedSession?.motion_analysis_summary?.feed_summaries?.[role.value]
+                    || (role.value === "composite" && selectedSession?.motion_analysis_summary && !selectedSession.motion_analysis_summary.feed_summaries)
+                  );
+                  return (
+                    <button
+                      key={role.value}
+                      type="button"
+                      onClick={() => setFeedRole(role.value)}
+                      className={`flex items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-[11px] transition-colors ${
+                        feedRole === role.value ? "border-primary/45 bg-primary/[0.09]" : "border-border bg-muted/10 hover:border-primary/25"
+                      }`}
+                    >
+                      <span className="truncate text-foreground">{role.label}</span>
+                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                        hasFinal
+                          ? "bg-emerald-400/10 text-emerald-300"
+                          : workspace?.videoSrc
+                            ? "bg-primary/10 text-primary"
+                            : "bg-muted text-muted-foreground"
+                      }`}>
+                        {hasFinal ? "Finalized" : workspace?.videoSrc ? "Configured" : "Empty"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
               <button type="button" onClick={() => fileInputRef.current?.click()} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm font-medium hover:border-primary/40 hover:text-primary">
                 <Video className="h-4 w-4" />
-                {videoSrc ? "Change local video" : "Load local video"}
+                {videoSrc ? `Change ${feedLabel(feedRole)} video` : `Load ${feedLabel(feedRole)} video`}
               </button>
               <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => { loadVideo(event.target.files?.[0]); event.target.value = ""; }} />
               {videoName && <p className="truncate text-xs text-muted-foreground">{videoName}</p>}
+              {selectedSession?.motion_analysis_summary?.feed_summaries && (
+                <p className="rounded-md border border-primary/15 bg-primary/[0.04] px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
+                  Saved combined evidence includes {selectedSession.motion_analysis_summary.analyzed_feeds?.map(feedLabel).join(" + ") || "multiple feeds"}. Reload a local recording only when you want to review or reprocess that feed.
+                </p>
+              )}
               <button type="button" disabled={!selectedSession || !videoFile} onClick={addToQueue} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-40">
                 <ListPlus className="h-3.5 w-3.5" /> Stage in processing queue
               </button>
@@ -303,7 +508,7 @@ export default function MotionLab() {
             <div className="rounded-xl border border-border bg-card p-4 space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Processing Queue</p>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Queue items retain local file access only while this page is open. Activate an item and run its configured analysis in the workspace to save the result.
+                Queue items retain local file access only while this page is open. Configure and finalize each feed independently; finalized feeds are combined in the selected session's derived summary.
               </p>
               {queue.length === 0 ? <p className="rounded-lg bg-muted/20 p-3 text-xs text-muted-foreground">No videos staged yet.</p> : queue.map((item) => (
                 <div key={item.id} className="rounded-lg border border-border bg-muted/10 p-2.5 space-y-2">
@@ -379,11 +584,15 @@ export default function MotionLab() {
                   controls
                   playsInline
                   className={`${previewFloating ? "max-h-[42vh]" : "max-h-[60vh]"} w-full rounded-lg bg-black object-contain`}
-                  onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)}
-                  onPlay={() => setVideoPlaying(true)}
-                  onPause={() => setVideoPlaying(false)}
+                  onTimeUpdate={(event) => updateFeedWorkspace(feedRole, { videoTime: event.currentTarget.currentTime })}
+                  onPlay={() => updateFeedWorkspace(feedRole, { videoPlaying: true })}
+                  onPause={() => updateFeedWorkspace(feedRole, { videoPlaying: false })}
                   onLoadedMetadata={(event) => {
-                    setVideoDuration(event.currentTarget.duration || 0);
+                    const savedTime = Number(feedWorkspaces[feedRole]?.videoTime) || 0;
+                    if (savedTime > 0 && savedTime < event.currentTarget.duration) {
+                      event.currentTarget.currentTime = savedTime;
+                    }
+                    updateFeedWorkspace(feedRole, { videoDuration: event.currentTarget.duration || 0 });
                     setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
                       current,
                       floatingPreviewWidth,
@@ -413,16 +622,28 @@ export default function MotionLab() {
               <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
             )}
 
-            <LocalMotionAnalysisPanel
-              videoSrc={videoSrc}
-              videoDuration={videoDuration}
-              videoTime={videoTime}
-              videoPlaying={videoPlaying}
-              selectedSession={selectedSession}
-              onSeek={seek}
-              onSaveSummary={saveSummary}
-              onAcceptSuggestions={acceptSuggestions}
-            />
+            {configuredRoles.map((role) => {
+              const workspace = feedWorkspaces[role.value] || {};
+              const active = role.value === feedRole;
+              return (
+                <div key={`${selectedId || "no-session"}-${role.value}`} className={active ? "" : "hidden"} aria-hidden={!active}>
+                  <LocalMotionAnalysisPanel
+                    videoSrc={workspace.videoSrc || ""}
+                    videoDuration={workspace.videoDuration || 0}
+                    videoTime={workspace.videoTime || 0}
+                    videoPlaying={active ? !!workspace.videoPlaying : false}
+                    selectedSession={selectedSession}
+                    analysisFeedLabel={role.value === "composite" ? null : role.label}
+                    onSeek={(timeS) => {
+                      if (active) seek(timeS);
+                      else updateFeedWorkspace(role.value, { videoTime: Number(timeS) || 0 });
+                    }}
+                    onSaveSummary={(summary, events) => saveSummary(role.value, summary, events)}
+                    onAcceptSuggestions={(events) => acceptSuggestions(role.value, events)}
+                  />
+                </div>
+              );
+            })}
           </section>
         </div>
       </div>

@@ -45,6 +45,7 @@ const POSTURE_REFERENCE_OPTIONS = [
   { key: "dorsiflexed", label: "Toward body", phrase: "toward-body / dorsiflexed appearance proxy" },
   { key: "heel_lift", label: "Heel lift", phrase: "heel-lift appearance proxy" },
 ];
+const HAND_REFERENCE_KEYS = ["stroke_like", "non_stroke"];
 
 const LOWER_BODY_METHODS = {
   regionMotion: {
@@ -116,6 +117,22 @@ function roundedTime(value) {
   return Math.round((Number(value) || 0) * 10) / 10;
 }
 
+function emptyPostureReferenceTimes() {
+  return Object.fromEntries(POSTURE_REFERENCE_OPTIONS.map(({ key }) => [key, null]));
+}
+
+function emptyHandBehaviorReferenceTimes() {
+  return Object.fromEntries(HAND_REFERENCE_KEYS.map((key) => [key, null]));
+}
+
+function copyPostureReferenceTimes(referenceTimes) {
+  return Object.fromEntries(POSTURE_REFERENCE_OPTIONS.map(({ key }) => [key, referenceTimes?.[key] ?? null]));
+}
+
+function copyHandBehaviorReferenceTimes(referenceTimes) {
+  return Object.fromEntries(HAND_REFERENCE_KEYS.map((key) => [key, referenceTimes?.[key] ?? null]));
+}
+
 function normalizeRegionSegments(segments) {
   const ordered = [...(Array.isArray(segments) ? segments : [])]
     .sort((first, second) => Number(first.startTimeS) - Number(second.startTimeS));
@@ -124,6 +141,8 @@ function normalizeRegionSegments(segments) {
     startTimeS: roundedTime(segment.startTimeS),
     endTimeS: index < ordered.length - 1 ? roundedTime(ordered[index + 1].startTimeS) : null,
     rois: copyRois(segment.rois),
+    postureReferenceTimes: copyPostureReferenceTimes(segment.postureReferenceTimes),
+    handBehaviorReferenceTimes: copyHandBehaviorReferenceTimes(segment.handBehaviorReferenceTimes),
   }));
 }
 
@@ -151,6 +170,11 @@ function serializeRegionSegments(segments) {
       roi_layout: segment.roiLayout,
       forefoot_enabled: segment.forefootEnabled,
       posture_matching_enabled: segment.postureMatchingEnabled,
+      hand_behavior_matching_enabled: segment.handBehaviorMatchingEnabled,
+    },
+    calibration_references_s: {
+      foot_postures: copyPostureReferenceTimes(segment.postureReferenceTimes),
+      hand_behavior: copyHandBehaviorReferenceTimes(segment.handBehaviorReferenceTimes),
     },
     anatomical_orientation: segment.leftRightOrientation,
   }));
@@ -1161,6 +1185,108 @@ function buildHandBehaviorSummary(samples, scoreKey, handCoverage, sampleRate, r
   };
 }
 
+function samplesForRegionSegment(samples, segment) {
+  return samples.filter((sample) => sample.regionSegmentId === segment.id);
+}
+
+function segmentHandCoverage(samples) {
+  if (!samples.length) return 0;
+  return Math.round((samples.filter((sample) => sample.handsDetected).length / samples.length) * 100);
+}
+
+function buildPostureAppearanceResult(samples, regionSegments, referenceTimes, sampleRate) {
+  if (!regionSegments.length) return buildPostureAppearanceSummary(samples, referenceTimes, sampleRate);
+
+  const segmentSummaries = regionSegments
+    .filter((segment) => segment.postureMatchingEnabled)
+    .map((segment) => {
+      const segmentSamples = samplesForRegionSegment(samples, segment);
+      const summary = buildPostureAppearanceSummary(
+        segmentSamples,
+        segment.postureReferenceTimes,
+        sampleRate,
+      );
+      return { segment, summary };
+    })
+    .filter(({ summary }) => summary.status !== "insufficient_appearance");
+  const postureCandidates = segmentSummaries.flatMap(({ segment, summary }) => (
+    (summary.posture_candidates || []).map((candidate) => ({
+      ...candidate,
+      region_segment_id: segment.id,
+      region_segment_label: segment.label,
+    }))
+  ));
+  const hasCalibratedSegment = segmentSummaries.some(({ summary }) => summary.status === "calibrated_matching_available");
+
+  return {
+    method: "calibrated_region_image_appearance_by_position_segment",
+    coverage_pct: segmentSummaries.length
+      ? Math.round(mean(segmentSummaries.map(({ summary }) => summary.coverage_pct)) || 0)
+      : 0,
+    status: postureCandidates.length || hasCalibratedSegment
+      ? "calibrated_matching_available"
+      : segmentSummaries.some(({ summary }) => summary.status === "references_needed")
+        ? "references_needed"
+        : "insufficient_appearance",
+    calibrated_references_by_segment: segmentSummaries.map(({ segment, summary }) => ({
+      region_segment_id: segment.id,
+      region_segment_label: segment.label,
+      calibrated_references: summary.calibrated_references || {},
+    })),
+    method_note: "Matches foot-region appearance only against references marked within the same position segment. Images and frame signatures are used transiently during local analysis and are not stored; labels remain visual posture proxies.",
+    posture_candidates: postureCandidates,
+  };
+}
+
+function buildHandBehaviorResult(samples, regionSegments, scoreKey, handCoverage, sampleRate, referenceTimes) {
+  if (!regionSegments.length) {
+    return buildHandBehaviorSummary(samples, scoreKey, handCoverage, sampleRate, referenceTimes);
+  }
+
+  const segmentSummaries = regionSegments
+    .filter((segment) => segment.handBehaviorMatchingEnabled)
+    .map((segment) => {
+      const segmentSamples = samplesForRegionSegment(samples, segment);
+      const summary = buildHandBehaviorSummary(
+        segmentSamples,
+        scoreKey,
+        segmentHandCoverage(segmentSamples),
+        sampleRate,
+        segment.handBehaviorReferenceTimes,
+      );
+      return { segment, summary };
+    });
+  const strokeLikeWindows = segmentSummaries.flatMap(({ segment, summary }) => (
+    (summary.stroke_like_windows || []).map((window) => ({
+      ...window,
+      region_segment_id: segment.id,
+      region_segment_label: segment.label,
+    }))
+  ));
+  const hasCalibratedSegment = segmentSummaries.some(({ summary }) => summary.status === "calibrated_matching_available");
+  const analyzedDurationS = Math.max(1, samples[samples.length - 1].timeS - samples[0].timeS);
+
+  return {
+    status: strokeLikeWindows.length || hasCalibratedSegment
+      ? "calibrated_matching_available"
+      : segmentSummaries.some(({ summary }) => summary.status === "references_needed")
+        ? "references_needed"
+        : "insufficient_tracking",
+    method: "calibrated_directional_hand_motion_by_position_segment",
+    calibrated_references_by_segment: segmentSummaries.map(({ segment, summary }) => ({
+      region_segment_id: segment.id,
+      region_segment_label: segment.label,
+      calibrated_references: summary.calibrated_references || {},
+    })),
+    stroke_like_window_count: strokeLikeWindows.length,
+    stroke_like_time_pct: Math.round((
+      strokeLikeWindows.reduce((total, window) => total + window.duration_s, 0) / analyzedDurationS
+    ) * 100),
+    method_note: "Compares visible hand motion only against examples marked within the same position segment. These are stroke-like motion proxies, not confirmed technique, force, or intent.",
+    stroke_like_windows: strokeLikeWindows,
+  };
+}
+
 function buildHandCadenceTimeline(result) {
   if (!result.hasHands || !result.samples.length || result.sampleRate < 6) return [];
   const scoreKey = result.hasLegs ? "handScore" : "score";
@@ -1492,6 +1618,7 @@ function HandBehaviorCalibration({
   onEnabledChange,
   referenceTimes,
   onReferenceTimesChange,
+  scopeLabel,
   videoSrc,
   videoTime,
   running,
@@ -1511,6 +1638,11 @@ function HandBehaviorCalibration({
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         Use this after the session: scrub the loaded recording to one clear rhythmic up/down hand-motion example and one visible adjustment or other non-stroke hand movement. The next analysis compares later visible hand windows to those examples.
       </p>
+      {scopeLabel && (
+        <p className="rounded-md border border-[#a78bfa]/20 bg-[#a78bfa]/[0.06] px-2.5 py-1.5 text-[11px] text-[#ddd6fe]">
+          These hand examples apply only to <span className="font-semibold">{scopeLabel}</span>.
+        </p>
+      )}
       {enabled && (
         <>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-[#c4b5fd]">
@@ -1555,7 +1687,7 @@ function HandBehaviorCalibration({
             </button>
             <button
               type="button"
-              onClick={() => onReferenceTimesChange({ stroke_like: null, non_stroke: null })}
+              onClick={() => onReferenceTimesChange(emptyHandBehaviorReferenceTimes())}
               disabled={running}
               className="rounded-lg border border-border bg-card px-3 py-2 text-[11px] font-semibold text-foreground shadow-sm transition-colors hover:border-[#a78bfa]/35 hover:bg-[#a78bfa]/[0.06] disabled:cursor-not-allowed disabled:opacity-45"
             >
@@ -1688,7 +1820,7 @@ function buildSavedSummary(result) {
     asymmetry_summary: result.hasLegs && result.asymmetry ? result.asymmetry : undefined,
     lower_body_pattern_summary: result.hasLegs ? result.lowerBodyPatterns : undefined,
     lower_body_posture_summary: result.hasLegs ? result.postureGeometry : undefined,
-    posture_reference_times_s: result.hasLegs && result.postureGeometry ? result.postureReferenceTimes : undefined,
+    posture_reference_times_s: result.hasLegs && result.postureGeometry && !serializedSegments.length ? result.postureReferenceTimes : undefined,
     left_lower_body_average_activity: result.hasLegs ? result.leftAverage : undefined,
     right_lower_body_average_activity: result.hasLegs ? result.rightAverage : undefined,
     left_forefoot_average_activity: result.hasForefoot ? result.leftForefootAverage : undefined,
@@ -1696,7 +1828,7 @@ function buildSavedSummary(result) {
     hand_average_activity: result.hasHands ? result.handAverage : undefined,
     hand_movement_summary: result.hasHands ? result.handRhythm : undefined,
     hand_behavior_summary: result.hasHands ? result.handBehavior : undefined,
-    hand_behavior_reference_times_s: result.hasHands && result.handBehavior ? result.handBehaviorReferenceTimes : undefined,
+    hand_behavior_reference_times_s: result.hasHands && result.handBehavior && !serializedSegments.length ? result.handBehaviorReferenceTimes : undefined,
     hand_cadence_timeline: result.hasHands ? buildHandCadenceTimeline(result) : undefined,
     findings: result.findings,
     derived_timeline: buildDerivedTimeline(result),
@@ -1747,7 +1879,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, onSeek, onSaveSummary, onAcceptSuggestions }) {
+export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions }) {
   const stopRequestedRef = useRef(false);
   const previewCanvasRef = useRef(null);
   const previewEnabledRef = useRef(false);
@@ -1768,19 +1900,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [activeRoi, setActiveRoi] = useState("leftLowerBody");
   const [forefootEnabled, setForefootEnabled] = useState(false);
   const [postureMatchingEnabled, setPostureMatchingEnabled] = useState(true);
-  const [postureReferenceTimes, setPostureReferenceTimes] = useState({
-    neutral: null,
-    outward: null,
-    inward: null,
-    planted: null,
-    dorsiflexed: null,
-    heel_lift: null,
-  });
+  const [postureReferenceTimes, setPostureReferenceTimes] = useState(() => emptyPostureReferenceTimes());
   const [handBehaviorMatchingEnabled, setHandBehaviorMatchingEnabled] = useState(true);
-  const [handBehaviorReferenceTimes, setHandBehaviorReferenceTimes] = useState({
-    stroke_like: null,
-    non_stroke: null,
-  });
+  const [handBehaviorReferenceTimes, setHandBehaviorReferenceTimes] = useState(() => emptyHandBehaviorReferenceTimes());
   const [leftRightOrientation, setLeftRightOrientation] = useState("anatomical_left_on_screen_right");
   const [roiFrameReady, setRoiFrameReady] = useState(false);
   const [roiSetupTime, setRoiSetupTime] = useState(0);
@@ -1843,18 +1965,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setDismissedSuggestionIds([]);
     setAcceptedSuggestionIds([]);
     setExpandedPeakClusters([]);
-    setPostureReferenceTimes({
-      neutral: null,
-      outward: null,
-      inward: null,
-      planted: null,
-      dorsiflexed: null,
-      heel_lift: null,
-    });
-    setHandBehaviorReferenceTimes({
-      stroke_like: null,
-      non_stroke: null,
-    });
+    setPostureReferenceTimes(emptyPostureReferenceTimes());
+    setHandBehaviorReferenceTimes(emptyHandBehaviorReferenceTimes());
   }, [videoSrc]);
 
   useEffect(() => {
@@ -2042,7 +2154,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     if (syncRoiWithMainPlayer) onSeek?.(nextTime);
   };
 
-  const createRegionSegment = (label, startTimeS, source = null) => ({
+  const createRegionSegment = (label, startTimeS, source = null, preserveCalibration = false) => ({
     id: `region-segment-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     label,
     startTimeS: roundedTime(startTimeS),
@@ -2051,6 +2163,13 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     roiLayout: source?.roiLayout || roiLayout,
     forefootEnabled: source?.forefootEnabled ?? forefootEnabled,
     postureMatchingEnabled: source?.postureMatchingEnabled ?? postureMatchingEnabled,
+    postureReferenceTimes: preserveCalibration
+      ? copyPostureReferenceTimes(source?.postureReferenceTimes || postureReferenceTimes)
+      : emptyPostureReferenceTimes(),
+    handBehaviorMatchingEnabled: source?.handBehaviorMatchingEnabled ?? handBehaviorMatchingEnabled,
+    handBehaviorReferenceTimes: preserveCalibration
+      ? copyHandBehaviorReferenceTimes(source?.handBehaviorReferenceTimes || handBehaviorReferenceTimes)
+      : emptyHandBehaviorReferenceTimes(),
     leftRightOrientation: source?.leftRightOrientation || leftRightOrientation,
   });
 
@@ -2061,6 +2180,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setRoiLayout(segment.roiLayout);
     setForefootEnabled(segment.forefootEnabled);
     setPostureMatchingEnabled(segment.postureMatchingEnabled);
+    setPostureReferenceTimes(copyPostureReferenceTimes(segment.postureReferenceTimes));
+    setHandBehaviorMatchingEnabled(segment.handBehaviorMatchingEnabled ?? true);
+    setHandBehaviorReferenceTimes(copyHandBehaviorReferenceTimes(segment.handBehaviorReferenceTimes));
     setLeftRightOrientation(segment.leftRightOrientation);
     if (seekToStart) navigateRoiSetupFrame(segment.startTimeS);
   };
@@ -2069,7 +2191,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const positionTime = roundedTime(roiFrameReady ? roiSetupTime : videoTime);
     const currentSegments = orderedRegionSegments;
     if (!currentSegments.length) {
-      const initial = createRegionSegment("Initial position", 0);
+      const initial = createRegionSegment("Initial position", 0, null, true);
       if (positionTime <= 0) {
         setRegionSegments([initial]);
         loadRegionSegment(initial);
@@ -2123,16 +2245,26 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           roiLayout,
           forefootEnabled,
           postureMatchingEnabled,
+          postureReferenceTimes: copyPostureReferenceTimes(postureReferenceTimes),
+          handBehaviorMatchingEnabled,
+          handBehaviorReferenceTimes: copyHandBehaviorReferenceTimes(handBehaviorReferenceTimes),
           leftRightOrientation,
         }
         : segment
     ))));
-  }, [forefootEnabled, leftRightOrientation, postureMatchingEnabled, roiLayout, rois, selectedRegionSegmentId]);
+  }, [forefootEnabled, handBehaviorMatchingEnabled, handBehaviorReferenceTimes, leftRightOrientation, postureMatchingEnabled, postureReferenceTimes, roiLayout, rois, selectedRegionSegmentId]);
 
   useEffect(() => {
     if (!videoPlaying || !activeRegionSegment || activeRegionSegment.id === selectedRegionSegmentId || running) return;
     loadRegionSegment(activeRegionSegment);
   }, [activeRegionSegment, running, selectedRegionSegmentId, videoPlaying]);
+
+  useEffect(() => {
+    if (!roiFrameReady || running || !orderedRegionSegments.length) return;
+    const frameSegment = regionSegmentAtTime(orderedRegionSegments, roiSetupTime);
+    if (!frameSegment || frameSegment.id === selectedRegionSegmentId) return;
+    loadRegionSegment(frameSegment);
+  }, [orderedRegionSegments, roiFrameReady, roiSetupTime, running, selectedRegionSegmentId]);
 
   useEffect(() => {
     if (!roiFrameReady || !syncRoiWithMainPlayer || videoPlaying || running) return;
@@ -2240,6 +2372,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       lowerBodyMethod: appliedLowerBodyMethod,
       forefootEnabled,
       postureMatchingEnabled,
+      postureReferenceTimes,
+      handBehaviorMatchingEnabled,
+      handBehaviorReferenceTimes,
       leftRightOrientation,
       segment: null,
     };
@@ -2247,7 +2382,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const analyzePostureAppearance = mode !== "hands" && frameConfigurations.some((configuration) => (
       configuration.lowerBodyMethod === "regionMotion" && configuration.postureMatchingEnabled
     ));
-    const analyzeHandBehavior = mode !== "legs" && handBehaviorMatchingEnabled;
+    const analyzeHandBehavior = mode !== "legs" && frameConfigurations.some((configuration) => (
+      configuration.handBehaviorMatchingEnabled ?? handBehaviorMatchingEnabled
+    ));
     try {
       const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
@@ -2496,14 +2633,15 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       nextResult.asymmetry = hasLegs ? calculateAsymmetry(samples) : null;
       nextResult.lowerBodyPatterns = hasLegs ? calculateLowerBodyPatternSummary(samples, selectedMode.fps) : null;
       nextResult.postureGeometry = hasLegs && analyzePostureAppearance
-        ? buildPostureAppearanceSummary(samples, postureReferenceTimes, selectedMode.fps)
+        ? buildPostureAppearanceResult(samples, analysisRegionSegments, postureReferenceTimes, selectedMode.fps)
         : null;
       nextResult.handRhythm = hasHands
         ? calculateHandRhythmSummary(samples, hasLegs ? "handScore" : "score", nextResult.handCoverage, selectedMode.fps)
         : null;
       nextResult.handBehavior = hasHands && analyzeHandBehavior
-        ? buildHandBehaviorSummary(
+        ? buildHandBehaviorResult(
           samples,
+          analysisRegionSegments,
           hasLegs ? "handScore" : "score",
           nextResult.handCoverage,
           selectedMode.fps,
@@ -2571,7 +2709,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               Experimental local movement tracking for review support. Results remain temporary unless you explicitly save a compact summary to a selected session.
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Combined tracking expects both views in one composite video; separate recordings can be analyzed one at a time.
+              {analysisFeedLabel
+                ? `${analysisFeedLabel} is configured independently. Finalize this derived result to combine its supported signals with other finalized feeds for the session.`
+                : "Combined tracking expects both views in one composite video; separate feeds can be configured and finalized independently."}
             </p>
           </div>
         </div>
@@ -2880,6 +3020,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                       Apply current regions to this segment
                     </button>
                   </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Foot posture and hand-motion examples marked below belong only to this position range. New position changes begin with empty reference marks so changed framing is not compared against an older view.
+                  </p>
                 </div>
               )}
               <p className="text-[10px] leading-relaxed text-muted-foreground">
@@ -3013,6 +3156,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
                   Use the region editor below to find and mark visible reference moments in this video, then analyze a window containing those moments. The app compares later images inside your left/right foot rectangles to those marked appearances. Activity tracking still runs separately.
                 </p>
+                {selectedRegionSegment && (
+                  <p className="rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] text-primary">
+                    These foot appearance marks apply only to <span className="font-semibold">{selectedRegionSegment.label}</span>.
+                  </p>
+                )}
                 {postureMatchingEnabled && (
                   <>
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
@@ -3042,14 +3190,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                       ))}
                       <button
                         type="button"
-                        onClick={() => setPostureReferenceTimes({
-                          neutral: null,
-                          outward: null,
-                          inward: null,
-                          planted: null,
-                          dorsiflexed: null,
-                          heel_lift: null,
-                        })}
+                        onClick={() => setPostureReferenceTimes(emptyPostureReferenceTimes())}
                         disabled={running}
                         className="rounded-lg border border-border bg-card px-3 py-2 text-[11px] font-semibold text-foreground shadow-sm transition-colors hover:border-primary/35 hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-45"
                       >
@@ -3069,8 +3210,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 onEnabledChange={setHandBehaviorMatchingEnabled}
                 referenceTimes={handBehaviorReferenceTimes}
                 onReferenceTimesChange={setHandBehaviorReferenceTimes}
+                scopeLabel={selectedRegionSegment?.label}
                 videoSrc={videoSrc}
-                videoTime={videoTime}
+                videoTime={roiFrameReady ? roiSetupTime : videoTime}
                 running={running}
               />
             )}
@@ -3097,8 +3239,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 onEnabledChange={setHandBehaviorMatchingEnabled}
                 referenceTimes={handBehaviorReferenceTimes}
                 onReferenceTimesChange={setHandBehaviorReferenceTimes}
+                scopeLabel={selectedRegionSegment?.label}
                 videoSrc={videoSrc}
-                videoTime={videoTime}
+                videoTime={roiFrameReady ? roiSetupTime : videoTime}
                 running={running}
               />
             )}
