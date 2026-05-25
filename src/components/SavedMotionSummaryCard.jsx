@@ -133,6 +133,7 @@ export default function SavedMotionSummaryCard({
   const findings = Array.isArray(savedSummary.findings) ? savedSummary.findings : [];
   const lowerBodyPatterns = savedSummary.lower_body_pattern_summary;
   const postureSummary = savedSummary.lower_body_posture_summary;
+  const handBehaviorSummary = savedSummary.hand_behavior_summary;
   const timeline = useMemo(() => (
     Array.isArray(savedSummary.derived_timeline)
       ? savedSummary.derived_timeline.map((point) => ({
@@ -676,6 +677,46 @@ export default function SavedMotionSummaryCard({
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             {savedSummary.hand_movement_summary.method_note}
           </p>
+        </div>
+          )}
+
+          {handBehaviorSummary && (
+        <div className="rounded-lg border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[#a78bfa]">Saved Calibrated Hand Behavior Matching</p>
+            <span className="text-[10px] text-muted-foreground">Stroke-like proxy only</span>
+          </div>
+          {handBehaviorSummary.status === "calibrated_matching_available" ? (
+            <>
+              <div className={`grid gap-2 ${compact ? "grid-cols-2" : "sm:grid-cols-2"}`}>
+                <Metric label="Stroke-Like Windows" value={handBehaviorSummary.stroke_like_window_count} />
+                <Metric label="Matched Analyzed Time" value={handBehaviorSummary.stroke_like_time_pct} suffix="%" />
+              </div>
+              {handBehaviorSummary.stroke_like_windows?.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {handBehaviorSummary.stroke_like_windows.slice(0, 12).map((window) => (
+                    <button
+                      key={`${window.start_time_s}-${window.end_time_s}`}
+                      type="button"
+                      onClick={() => onSeek?.(window.start_time_s)}
+                      disabled={!onSeek}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-[#a78bfa]/25 bg-card/60 px-2 py-1 text-[10px] text-foreground enabled:hover:border-[#a78bfa]/50 disabled:cursor-default"
+                    >
+                      <Play className="h-3 w-3 text-[#a78bfa]" />
+                      <span className="font-mono">{formatTime(window.start_time_s)}-{formatTime(window.end_time_s)}</span>
+                      <SavedConfidenceBadge level={window.confidence} />
+                      {window.cadence_proxy != null && <span className="text-muted-foreground">{window.cadence_proxy}/min</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">{handBehaviorSummary.method_note}</p>
+          )}
+          {handBehaviorSummary.status === "calibrated_matching_available" && (
+            <p className="text-[10px] leading-relaxed text-muted-foreground">{handBehaviorSummary.method_note}</p>
+          )}
         </div>
           )}
 

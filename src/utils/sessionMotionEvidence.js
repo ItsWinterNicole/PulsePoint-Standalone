@@ -25,6 +25,7 @@ export function hasSavedMotionTelemetry(session) {
     || rows(motion.review_peaks).length
     || present(motion.asymmetry_summary)
     || present(motion.hand_movement_summary)
+    || present(motion.hand_behavior_summary)
     || present(motion.lower_body_pattern_summary)
     || present(motion.lower_body_posture_summary)
     || present(motion.left_lower_body_average_activity)
@@ -77,6 +78,7 @@ export function getMotionEvidenceSummary(session) {
     derivedTimelinePointCount: rows(motion.derived_timeline).length,
     asymmetrySummary: motion.asymmetry_summary || null,
     handCadenceSummary: motion.hand_movement_summary || null,
+    handBehaviorSummary: motion.hand_behavior_summary || null,
     lowerBodyPatternProxySummary: motion.lower_body_pattern_summary || null,
     footAppearanceCandidateSummary: motion.lower_body_posture_summary || null,
     confidenceSummary: motion.quality_indicators || null,
@@ -113,6 +115,9 @@ export function getMotionEvidenceDigest(session) {
   }
   if (evidence.handCadenceSummary?.movement_cycles_per_minute_estimate != null) {
     lines.push(`Hand-movement cadence proxy: approximately ${evidence.handCadenceSummary.movement_cycles_per_minute_estimate} movement cycles per minute; pauses of at least two seconds: ${evidence.handCadenceSummary.pause_count ?? "unknown"}.`);
+  }
+  if (evidence.handBehaviorSummary?.status === "calibrated_matching_available") {
+    lines.push(`Calibrated hand-behavior comparison: ${evidence.handBehaviorSummary.stroke_like_window_count ?? 0} stroke-like rhythmic motion proxy windows matched recorded-video examples, covering approximately ${evidence.handBehaviorSummary.stroke_like_time_pct ?? 0}% of the analyzed window. This is an observational proxy, not confirmed technique or intent.`);
   }
   if (evidence.lowerBodyPatternProxySummary) {
     const pattern = evidence.lowerBodyPatternProxySummary;

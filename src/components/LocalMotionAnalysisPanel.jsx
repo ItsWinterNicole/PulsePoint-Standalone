@@ -510,6 +510,30 @@ function handMotion(current, previous) {
   return mean(movements);
 }
 
+function handCentroid(hand) {
+  if (!hand?.points?.length) return null;
+  return {
+    x: mean(hand.points.map((point) => point.x)),
+    y: mean(hand.points.map((point) => point.y)),
+  };
+}
+
+function dominantHandVector(current, previous) {
+  if (!current || !previous) return null;
+  return current
+    .map((hand) => {
+      const prior = previous.find((candidate) => candidate.key === hand.key);
+      const from = handCentroid(prior);
+      const to = handCentroid(hand);
+      if (!from || !to) return null;
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      return { key: hand.key, dx, dy, magnitude: Math.hypot(dx, dy) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.magnitude - a.magnitude)[0] || null;
+}
+
 function normalizeSingleSamples(rawSamples) {
   const reference = percentile(rawSamples.map((sample) => sample.motion), 0.95) || 0;
   return rawSamples.map((sample) => ({
@@ -926,6 +950,160 @@ function calculateHandRhythmSummary(samples, scoreKey, handCoverage, sampleRate)
   };
 }
 
+function axisAngleDistance(first, second) {
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return 1;
+  const difference = Math.abs(first - second) % Math.PI;
+  return Math.min(difference, Math.PI - difference) / (Math.PI / 2);
+}
+
+function handWindowFeatures(samples, scoreKey, sampleRate, startTimeS, endTimeS) {
+  const points = samples.filter((sample) => (
+    sample.timeS >= startTimeS
+    && sample.timeS <= endTimeS
+    && sample.handsDetected
+    && Number.isFinite(sample.handDx)
+    && Number.isFinite(sample.handDy)
+  ));
+  if (points.length < Math.max(4, Math.round(sampleRate * 0.75))) return null;
+  const xx = mean(points.map((point) => point.handDx ** 2)) || 0;
+  const yy = mean(points.map((point) => point.handDy ** 2)) || 0;
+  const xy = mean(points.map((point) => point.handDx * point.handDy)) || 0;
+  const axisAngleRad = 0.5 * Math.atan2(2 * xy, xx - yy);
+  const axis = { x: Math.cos(axisAngleRad), y: Math.sin(axisAngleRad) };
+  const projections = points.map((point) => (
+    (point.handDx * axis.x) + (point.handDy * axis.y)
+  ));
+  const perpendicular = points.map((point) => (
+    (-point.handDx * axis.y) + (point.handDy * axis.x)
+  ));
+  const axisTravel = projections.reduce((total, value) => total + Math.abs(value), 0);
+  const crossTravel = perpendicular.reduce((total, value) => total + Math.abs(value), 0);
+  const meaningfulDirections = projections.filter((value) => Math.abs(value) >= 0.001);
+  const reversals = meaningfulDirections.slice(1).filter((value, index) => (
+    Math.sign(value) !== Math.sign(meaningfulDirections[index])
+  )).length;
+  const durationS = Math.max(0.5, endTimeS - startTimeS);
+  const scores = points.map((point) => Number(point[scoreKey]) || 0);
+  return {
+    axis_angle_rad: axisAngleRad,
+    axis_alignment: axisTravel / Math.max(0.0001, axisTravel + crossTravel),
+    reversal_rate_hz: reversals / durationS,
+    mean_activity: mean(scores) || 0,
+    peak_activity: Math.max(...scores),
+    active_pct: Math.round((scores.filter((score) => score >= 22).length / scores.length) * 100),
+    supporting_samples: points.length,
+  };
+}
+
+function handBehaviorDistance(candidate, reference) {
+  if (!candidate || !reference) return Infinity;
+  return (
+    axisAngleDistance(candidate.axis_angle_rad, reference.axis_angle_rad) * 0.28
+    + Math.abs(candidate.axis_alignment - reference.axis_alignment) * 0.22
+    + Math.min(1, Math.abs(candidate.reversal_rate_hz - reference.reversal_rate_hz) / 3) * 0.24
+    + Math.min(1, Math.abs(candidate.mean_activity - reference.mean_activity) / 100) * 0.14
+    + Math.min(1, Math.abs(candidate.active_pct - reference.active_pct) / 100) * 0.12
+  );
+}
+
+function handBehaviorConfidence(matchDistance, separation, supportingWindows) {
+  if (matchDistance <= 0.28 && separation >= 0.18 && supportingWindows >= 2) return "moderate";
+  if (matchDistance <= 0.45 && separation >= 0.08) return "low";
+  return "weak";
+}
+
+function buildHandBehaviorSummary(samples, scoreKey, handCoverage, sampleRate, referenceTimes) {
+  if (!samples.length || handCoverage < 65 || sampleRate < 6) {
+    return {
+      status: "insufficient_tracking",
+      method: "calibrated_directional_hand_motion",
+      method_note: "Hand visibility or sampling rate was insufficient for calibrated hand-behavior comparison.",
+      stroke_like_windows: [],
+    };
+  }
+  const referenceRadiusS = 1.5;
+  const strokeReference = Number.isFinite(referenceTimes.stroke_like)
+    ? handWindowFeatures(samples, scoreKey, sampleRate, referenceTimes.stroke_like - referenceRadiusS, referenceTimes.stroke_like + referenceRadiusS)
+    : null;
+  const nonStrokeReference = Number.isFinite(referenceTimes.non_stroke)
+    ? handWindowFeatures(samples, scoreKey, sampleRate, referenceTimes.non_stroke - referenceRadiusS, referenceTimes.non_stroke + referenceRadiusS)
+    : null;
+  if (!strokeReference || !nonStrokeReference) {
+    return {
+      status: "references_needed",
+      method: "calibrated_directional_hand_motion",
+      calibrated_references: {
+        stroke_like: !!strokeReference,
+        non_stroke: !!nonStrokeReference,
+      },
+      method_note: "Mark one clear rhythmic stroke-like example and one visible non-stroke or adjustment example in the recorded video, then analyze a window containing both.",
+      stroke_like_windows: [],
+    };
+  }
+
+  const classifiedWindows = [];
+  for (let center = samples[0].timeS + 1; center <= samples[samples.length - 1].timeS - 1; center += 1) {
+    const features = handWindowFeatures(samples, scoreKey, sampleRate, center - 1, center + 1);
+    if (!features || features.active_pct < 25) continue;
+    const strokeDistance = handBehaviorDistance(features, strokeReference);
+    const nonStrokeDistance = handBehaviorDistance(features, nonStrokeReference);
+    const separation = nonStrokeDistance - strokeDistance;
+    if (strokeDistance <= 0.52 && separation >= 0.06) {
+      classifiedWindows.push({
+        start_time_s: center - 1,
+        end_time_s: center + 1,
+        match_distance: strokeDistance,
+        separation,
+        features,
+      });
+    }
+  }
+  const merged = classifiedWindows.reduce((segments, window) => {
+    const prior = segments[segments.length - 1];
+    if (prior && window.start_time_s <= prior.end_time_s + 0.25) {
+      prior.end_time_s = window.end_time_s;
+      prior.windows.push(window);
+    } else {
+      segments.push({ start_time_s: window.start_time_s, end_time_s: window.end_time_s, windows: [window] });
+    }
+    return segments;
+  }, []);
+  const strokeLikeWindows = merged
+    .filter((segment) => segment.end_time_s - segment.start_time_s >= 1.5)
+    .map((segment) => {
+      const distance = mean(segment.windows.map((window) => window.match_distance)) || Infinity;
+      const separation = mean(segment.windows.map((window) => window.separation)) || 0;
+      const cadence = calculateHandRhythmSummary(
+        samples.filter((sample) => sample.timeS >= segment.start_time_s && sample.timeS <= segment.end_time_s),
+        scoreKey,
+        handCoverage,
+        sampleRate,
+      );
+      return {
+        start_time_s: Math.round(segment.start_time_s * 10) / 10,
+        end_time_s: Math.round(segment.end_time_s * 10) / 10,
+        duration_s: Math.round((segment.end_time_s - segment.start_time_s) * 10) / 10,
+        confidence: handBehaviorConfidence(distance, separation, segment.windows.length),
+        cadence_proxy: cadence.reliability === "moderate" ? cadence.movement_cycles_per_minute_estimate : null,
+        mean_activity: Math.round(mean(segment.windows.map((window) => window.features.mean_activity)) || 0),
+      };
+    })
+    .filter((segment) => segment.confidence !== "weak")
+    .slice(0, 16);
+  const classifiedDurationS = strokeLikeWindows.reduce((total, segment) => total + segment.duration_s, 0);
+  const analyzedDurationS = Math.max(1, samples[samples.length - 1].timeS - samples[0].timeS);
+  return {
+    status: "calibrated_matching_available",
+    method: "calibrated_directional_hand_motion",
+    calibrated_references: { stroke_like: true, non_stroke: true },
+    calibration_window_s: referenceRadiusS * 2,
+    stroke_like_window_count: strokeLikeWindows.length,
+    stroke_like_time_pct: Math.round((classifiedDurationS / analyzedDurationS) * 100),
+    method_note: "Compares directional, reversing, rhythmic visible hand motion against examples marked from this recording. These are stroke-like motion proxies, not confirmed technique, force, or intent.",
+    stroke_like_windows: strokeLikeWindows,
+  };
+}
+
 function buildHandCadenceTimeline(result) {
   if (!result.hasHands || !result.samples.length || result.sampleRate < 6) return [];
   const scoreKey = result.hasLegs ? "handScore" : "score";
@@ -1250,6 +1428,90 @@ function PatternProxyMetric({ label, count }) {
   );
 }
 
+function HandBehaviorCalibration({
+  enabled,
+  onEnabledChange,
+  referenceTimes,
+  onReferenceTimesChange,
+  videoSrc,
+  videoTime,
+  running,
+}) {
+  return (
+    <div className="space-y-3 rounded-lg border border-[#a78bfa]/25 bg-[#a78bfa]/[0.05] p-3">
+      <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => onEnabledChange(event.target.checked)}
+          disabled={running}
+          className="h-3.5 w-3.5 accent-[#a78bfa]"
+        />
+        Enable calibrated stroke-like hand-motion matching (experimental)
+      </label>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Use this after the session: scrub the loaded recording to one clear rhythmic up/down hand-motion example and one visible adjustment or other non-stroke hand movement. The next analysis compares later visible hand windows to those examples.
+      </p>
+      {enabled && (
+        <>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#c4b5fd]">
+            Click to mark current playback example
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onReferenceTimesChange((current) => ({
+                ...current,
+                stroke_like: Math.round((Number(videoTime) || 0) * 10) / 10,
+              }))}
+              disabled={!videoSrc || running}
+              className={`rounded-lg border px-3 py-2 text-[11px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${
+                referenceTimes.stroke_like != null
+                  ? "border-[#a78bfa]/70 bg-[#a78bfa]/[0.2] text-[#ddd6fe] ring-1 ring-[#a78bfa]/20"
+                  : "border-[#a78bfa]/35 bg-[#a78bfa]/[0.08] text-[#c4b5fd] hover:border-[#a78bfa]/65 hover:bg-[#a78bfa]/[0.15]"
+              }`}
+            >
+              {referenceTimes.stroke_like != null ? "Marked: " : "Mark: "}Rhythmic stroke-like example
+              {referenceTimes.stroke_like != null && (
+                <span className="ml-1.5 font-mono">{formatTime(referenceTimes.stroke_like)}</span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => onReferenceTimesChange((current) => ({
+                ...current,
+                non_stroke: Math.round((Number(videoTime) || 0) * 10) / 10,
+              }))}
+              disabled={!videoSrc || running}
+              className={`rounded-lg border px-3 py-2 text-[11px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${
+                referenceTimes.non_stroke != null
+                  ? "border-[#a78bfa]/70 bg-[#a78bfa]/[0.2] text-[#ddd6fe] ring-1 ring-[#a78bfa]/20"
+                  : "border-[#a78bfa]/35 bg-[#a78bfa]/[0.08] text-[#c4b5fd] hover:border-[#a78bfa]/65 hover:bg-[#a78bfa]/[0.15]"
+              }`}
+            >
+              {referenceTimes.non_stroke != null ? "Marked: " : "Mark: "}Adjustment / non-stroke example
+              {referenceTimes.non_stroke != null && (
+                <span className="ml-1.5 font-mono">{formatTime(referenceTimes.non_stroke)}</span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => onReferenceTimesChange({ stroke_like: null, non_stroke: null })}
+              disabled={running}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-[11px] font-semibold text-foreground shadow-sm transition-colors hover:border-[#a78bfa]/35 hover:bg-[#a78bfa]/[0.06] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              Clear hand examples
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Each mark represents a three-second example window centered at the selected playback time. Both examples are required; results remain stroke-like motion proxies, not confirmed technique.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function clusterMoments(moments, nearbyWindowS = 6) {
   return moments.reduce((clusters, moment) => {
     const previous = clusters[clusters.length - 1];
@@ -1285,6 +1547,9 @@ function buildFindings(result) {
   }
   if (result.handRhythm?.reliability === "moderate" && result.handRhythm.movement_cycles_per_minute_estimate != null) {
     findings.push(`Repeated hand-movement oscillations support a cautious cadence estimate of approximately ${result.handRhythm.movement_cycles_per_minute_estimate} movement cycles per minute, with ${result.handRhythm.pause_count} pauses of at least two seconds; this is not confirmed stroke speed.`);
+  }
+  if (result.handBehavior?.status === "calibrated_matching_available" && result.handBehavior.stroke_like_window_count > 0) {
+    findings.push(`${result.handBehavior.stroke_like_window_count} calibrated stroke-like rhythmic hand-motion window${result.handBehavior.stroke_like_window_count === 1 ? " was" : "s were"} identified from examples marked in this recording; these remain observational proxies, not confirmed technique.`);
   }
   if (result.asymmetry && result.leftCoverage >= 50 && result.rightCoverage >= 50) {
     if (result.asymmetry.predominantSide === "balanced") {
@@ -1355,6 +1620,8 @@ function buildSavedSummary(result) {
     right_forefoot_average_activity: result.hasForefoot ? result.rightForefootAverage : undefined,
     hand_average_activity: result.hasHands ? result.handAverage : undefined,
     hand_movement_summary: result.hasHands ? result.handRhythm : undefined,
+    hand_behavior_summary: result.hasHands ? result.handBehavior : undefined,
+    hand_behavior_reference_times_s: result.hasHands && result.handBehavior ? result.handBehaviorReferenceTimes : undefined,
     hand_cadence_timeline: result.hasHands ? buildHandCadenceTimeline(result) : undefined,
     findings: result.findings,
     derived_timeline: buildDerivedTimeline(result),
@@ -1432,6 +1699,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     dorsiflexed: null,
     heel_lift: null,
   });
+  const [handBehaviorMatchingEnabled, setHandBehaviorMatchingEnabled] = useState(true);
+  const [handBehaviorReferenceTimes, setHandBehaviorReferenceTimes] = useState({
+    stroke_like: null,
+    non_stroke: null,
+  });
   const [leftRightOrientation, setLeftRightOrientation] = useState("anatomical_left_on_screen_right");
   const [roiFrameReady, setRoiFrameReady] = useState(false);
   const [roiSetupTime, setRoiSetupTime] = useState(0);
@@ -1499,6 +1771,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       planted: null,
       dorsiflexed: null,
       heel_lift: null,
+    });
+    setHandBehaviorReferenceTimes({
+      stroke_like: null,
+      non_stroke: null,
     });
   }, [videoSrc]);
 
@@ -1768,6 +2044,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const analysisRois = resolveRois(roiLayout, rois);
     const analyzeForefoot = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && forefootEnabled;
     const analyzePostureAppearance = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && postureMatchingEnabled;
+    const analyzeHandBehavior = mode !== "legs" && handBehaviorMatchingEnabled;
     try {
       const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
@@ -1883,6 +2160,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           ? regionPixelMotion(regionFrames.rightForefoot, previousRegionFrames.rightForefoot)
           : null;
         const handValue = handMotion(hands, previousHands);
+        const handVector = dominantHandVector(hands, previousHands);
         if (mode === "combined" || mode === "legs") {
           rawSamples.push({
             timeS,
@@ -1891,6 +2169,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             leftForefootMotion: leftForefootValue,
             rightForefootMotion: rightForefootValue,
             handMotion: mode === "combined" ? handValue : null,
+            handDx: mode === "combined" ? handVector?.dx : null,
+            handDy: mode === "combined" ? handVector?.dy : null,
             leftAppearance: analyzePostureAppearance ? appearanceSignature(regionFrames.left) : null,
             rightAppearance: analyzePostureAppearance ? appearanceSignature(regionFrames.right) : null,
             leftDetected: appliedLowerBodyMethod === "regionMotion" ? leftValue != null : !!legs?.left,
@@ -1905,6 +2185,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           rawSamples.push({
             timeS,
             motion: handValue,
+            handDx: handVector?.dx,
+            handDy: handVector?.dy,
             handsDetected: !!hands,
             detected: !!hands,
           });
@@ -1944,6 +2226,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         roiLayout,
         rois: analysisRois,
         postureReferenceTimes,
+        handBehaviorReferenceTimes,
         leftCoverage: hasLegs
           ? Math.round((samples.filter((sample) => sample.leftDetected).length / samples.length) * 100)
           : null,
@@ -1971,6 +2254,15 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         : null;
       nextResult.handRhythm = hasHands
         ? calculateHandRhythmSummary(samples, hasLegs ? "handScore" : "score", nextResult.handCoverage, selectedMode.fps)
+        : null;
+      nextResult.handBehavior = hasHands && analyzeHandBehavior
+        ? buildHandBehaviorSummary(
+          samples,
+          hasLegs ? "handScore" : "score",
+          nextResult.handCoverage,
+          selectedMode.fps,
+          handBehaviorReferenceTimes,
+        )
         : null;
       nextResult.findings = buildFindings(nextResult);
       setResult(nextResult);
@@ -2187,7 +2479,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 setActiveRoi("leftLowerBody");
               }}
               disabled={running}
-              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${roiLayout === "pip" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              className={`rounded-md px-3 py-2 font-semibold transition-colors ${roiLayout === "pip" ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted/40"}`}
             >
               Upper-left inset
             </button>
@@ -2195,7 +2487,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               type="button"
               onClick={() => setRoiLayout("full")}
               disabled={running}
-              className={`rounded-md px-3 py-1.5 font-medium transition-colors ${roiLayout === "full" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              className={`rounded-md px-3 py-2 font-semibold transition-colors ${roiLayout === "full" ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted/40"}`}
             >
               Full frame
             </button>
@@ -2204,12 +2496,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
         {roiLayout === "pip" ? (
           <>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Click a region to edit</p>
+              <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setActiveRoi("leftLowerBody")}
                 disabled={running}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "leftLowerBody" ? "border-primary bg-primary/[0.12] text-primary" : "border-border text-muted-foreground"}`}
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${activeRoi === "leftLowerBody" ? "border-primary bg-primary text-primary-foreground ring-1 ring-primary/30" : "border-primary/35 bg-primary/[0.08] text-primary hover:border-primary/65 hover:bg-primary/[0.15]"}`}
               >
                 Edit your left foot ({anatomicalScreenSide(leftRightOrientation, "left")})
               </button>
@@ -2217,7 +2511,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 type="button"
                 onClick={() => setActiveRoi("rightLowerBody")}
                 disabled={running}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "rightLowerBody" ? "border-[#f59e0b] bg-[#f59e0b]/10 text-[#fbbf24]" : "border-border text-muted-foreground"}`}
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${activeRoi === "rightLowerBody" ? "border-[#f59e0b] bg-[#f59e0b]/20 text-[#fde68a] ring-1 ring-[#f59e0b]/25" : "border-[#f59e0b]/35 bg-[#f59e0b]/[0.08] text-[#fbbf24] hover:border-[#f59e0b]/65 hover:bg-[#f59e0b]/[0.15]"}`}
               >
                 Edit your right foot ({anatomicalScreenSide(leftRightOrientation, "right")})
               </button>
@@ -2225,7 +2519,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 type="button"
                 onClick={() => setActiveRoi("hands")}
                 disabled={running}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "hands" ? "border-[#a78bfa] bg-[#a78bfa]/10 text-[#c4b5fd]" : "border-border text-muted-foreground"}`}
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${activeRoi === "hands" ? "border-[#a78bfa] bg-[#a78bfa]/20 text-[#ddd6fe] ring-1 ring-[#a78bfa]/25" : "border-[#a78bfa]/35 bg-[#a78bfa]/[0.08] text-[#c4b5fd] hover:border-[#a78bfa]/65 hover:bg-[#a78bfa]/[0.15]"}`}
               >
                 Edit hands / main view
               </button>
@@ -2242,7 +2536,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   setLeftRightOrientation("anatomical_left_on_screen_right");
                 }}
                 disabled={running}
-                className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-sm transition-colors hover:border-primary/35 hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Reset foot regions
               </button>
@@ -2263,10 +2557,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   ));
                 }}
                 disabled={running}
-                className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground shadow-sm transition-colors hover:border-primary/35 hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Mirror / swap left-right labels
               </button>
+              </div>
             </div>
             {appliedLowerBodyMethod === "regionMotion" && (
               <div className="space-y-2 rounded-lg border border-border bg-card/40 p-3">
@@ -2281,12 +2576,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   Enable optional forefoot / toe-region analysis
                 </label>
                 {forefootEnabled && (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Optional regions to edit</p>
+                    <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => setActiveRoi("leftForefoot")}
                       disabled={running}
-                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "leftForefoot" ? "border-[#2dd4bf] bg-[#2dd4bf]/10 text-[#5eead4]" : "border-border text-muted-foreground"}`}
+                      className={`rounded-lg border px-3 py-2 text-xs font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${activeRoi === "leftForefoot" ? "border-[#2dd4bf] bg-[#2dd4bf]/20 text-[#99f6e4] ring-1 ring-[#2dd4bf]/25" : "border-[#2dd4bf]/35 bg-[#2dd4bf]/[0.08] text-[#5eead4] hover:border-[#2dd4bf]/65 hover:bg-[#2dd4bf]/[0.15]"}`}
                     >
                       Edit left forefoot / toe region
                     </button>
@@ -2294,10 +2591,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                       type="button"
                       onClick={() => setActiveRoi("rightForefoot")}
                       disabled={running}
-                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activeRoi === "rightForefoot" ? "border-[#fb923c] bg-[#fb923c]/10 text-[#fdba74]" : "border-border text-muted-foreground"}`}
+                      className={`rounded-lg border px-3 py-2 text-xs font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${activeRoi === "rightForefoot" ? "border-[#fb923c] bg-[#fb923c]/20 text-[#fed7aa] ring-1 ring-[#fb923c]/25" : "border-[#fb923c]/35 bg-[#fb923c]/[0.08] text-[#fdba74] hover:border-[#fb923c]/65 hover:bg-[#fb923c]/[0.15]"}`}
                     >
                       Edit right forefoot / toe region
                     </button>
+                    </div>
                   </div>
                 )}
                 <p className="text-[11px] text-muted-foreground">
@@ -2322,6 +2620,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 </p>
                 {postureMatchingEnabled && (
                   <>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                      Click to mark the current frame as
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {POSTURE_REFERENCE_OPTIONS.map((option) => (
                         <button
@@ -2332,13 +2633,13 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                             [option.key]: Math.round((Number(roiFrameReady ? roiSetupTime : videoTime) || 0) * 10) / 10,
                           }))}
                           disabled={!videoSrc || running || !roiFrameReady}
-                          className={`rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                          className={`rounded-lg border px-3 py-2 text-[11px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${
                             postureReferenceTimes[option.key] != null
-                              ? "border-primary/40 bg-primary/[0.12] text-primary"
-                              : "border-border text-muted-foreground hover:text-foreground"
+                              ? "border-primary/70 bg-primary/[0.18] text-primary ring-1 ring-primary/20"
+                              : "border-primary/30 bg-primary/[0.06] text-primary hover:border-primary/60 hover:bg-primary/[0.13]"
                           }`}
                         >
-                          {option.label}
+                          {postureReferenceTimes[option.key] != null ? "Marked: " : "Mark: "}{option.label}
                           {postureReferenceTimes[option.key] != null && (
                             <span className="ml-1.5 font-mono">{formatTime(postureReferenceTimes[option.key])}</span>
                           )}
@@ -2355,7 +2656,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                           heel_lift: null,
                         })}
                         disabled={running}
-                        className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                        className="rounded-lg border border-border bg-card px-3 py-2 text-[11px] font-semibold text-foreground shadow-sm transition-colors hover:border-primary/35 hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         Clear references
                       </button>
@@ -2366,6 +2667,17 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   </>
                 )}
               </div>
+            )}
+            {mode !== "legs" && (
+              <HandBehaviorCalibration
+                enabled={handBehaviorMatchingEnabled}
+                onEnabledChange={setHandBehaviorMatchingEnabled}
+                referenceTimes={handBehaviorReferenceTimes}
+                onReferenceTimesChange={setHandBehaviorReferenceTimes}
+                videoSrc={videoSrc}
+                videoTime={videoTime}
+                running={running}
+              />
             )}
             <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
               <p><span className="font-medium text-primary">Your left foot ({anatomicalScreenSide(leftRightOrientation, "left")}):</span> {formatRoiLabel(appliedRois.leftLowerBody)}</p>
@@ -2380,9 +2692,22 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             </div>
           </>
         ) : (
-          <p className="text-[11px] text-muted-foreground">
-            Full-frame mode sends the complete video image to each enabled tracker. Use this for a single-camera view without an inset layout.
-          </p>
+          <>
+            <p className="text-[11px] text-muted-foreground">
+              Full-frame mode sends the complete video image to each enabled tracker. Use this for a single-camera view without an inset layout.
+            </p>
+            {mode !== "legs" && (
+              <HandBehaviorCalibration
+                enabled={handBehaviorMatchingEnabled}
+                onEnabledChange={setHandBehaviorMatchingEnabled}
+                referenceTimes={handBehaviorReferenceTimes}
+                onReferenceTimesChange={setHandBehaviorReferenceTimes}
+                videoSrc={videoSrc}
+                videoTime={videoTime}
+                running={running}
+              />
+            )}
+          </>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
@@ -2390,7 +2715,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             type="button"
             onClick={() => captureRoiSetupFrame(videoTime)}
             disabled={!videoSrc || running || loadingRoiFrame}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
+            className="rounded-lg border border-primary/50 bg-primary/[0.12] px-4 py-2.5 text-xs font-semibold text-primary shadow-sm transition-colors hover:border-primary hover:bg-primary/[0.2] disabled:cursor-not-allowed disabled:opacity-45"
           >
             {loadingRoiFrame ? "Loading frame..." : "Open region editor at player position"}
           </button>
@@ -2741,6 +3066,54 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 </div>
               </div>
               <p className="text-[11px] text-muted-foreground">{result.handRhythm.method_note}</p>
+            </div>
+          )}
+
+          {result.hasHands && result.handBehavior && (
+            <div className="rounded-lg border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#a78bfa]">Calibrated Hand Behavior Matching</p>
+                <span className="text-[10px] text-muted-foreground">Recorded-video examples / observational proxy</span>
+              </div>
+              {result.handBehavior.status === "calibrated_matching_available" ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Stroke-Like Windows</p>
+                      <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.handBehavior.stroke_like_window_count}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Analyzed Time Matching Proxy</p>
+                      <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.handBehavior.stroke_like_time_pct}%</p>
+                    </div>
+                  </div>
+                  {result.handBehavior.stroke_like_windows.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {result.handBehavior.stroke_like_windows.map((window) => (
+                        <button
+                          key={`${window.start_time_s}-${window.end_time_s}`}
+                          type="button"
+                          onClick={() => onSeek?.(window.start_time_s)}
+                          className="inline-flex items-center gap-2 rounded-md border border-[#a78bfa]/25 bg-card/60 px-2.5 py-1.5 text-[11px] text-foreground hover:border-[#a78bfa]/50"
+                        >
+                          <Play className="h-3 w-3 text-[#a78bfa]" />
+                          <span className="font-mono">{formatTime(window.start_time_s)}-{formatTime(window.end_time_s)}</span>
+                          <span>stroke-like rhythm</span>
+                          <ConfidenceBadge level={window.confidence} />
+                          {window.cadence_proxy != null && <span className="text-muted-foreground">{window.cadence_proxy}/min</span>}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No hand-motion windows were distinct enough from the non-stroke example to retain as candidates.</p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">{result.handBehavior.method_note}</p>
+              )}
+              {result.handBehavior.status === "calibrated_matching_available" && (
+                <p className="text-[11px] text-muted-foreground">{result.handBehavior.method_note}</p>
+              )}
             </div>
           )}
 
