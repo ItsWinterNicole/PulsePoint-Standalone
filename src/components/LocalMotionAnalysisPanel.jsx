@@ -112,6 +112,50 @@ function roundedRoi(roi) {
   };
 }
 
+function roundedTime(value) {
+  return Math.round((Number(value) || 0) * 10) / 10;
+}
+
+function normalizeRegionSegments(segments) {
+  const ordered = [...(Array.isArray(segments) ? segments : [])]
+    .sort((first, second) => Number(first.startTimeS) - Number(second.startTimeS));
+  return ordered.map((segment, index) => ({
+    ...segment,
+    startTimeS: roundedTime(segment.startTimeS),
+    endTimeS: index < ordered.length - 1 ? roundedTime(ordered[index + 1].startTimeS) : null,
+    rois: copyRois(segment.rois),
+  }));
+}
+
+function regionSegmentAtTime(segments, timeS) {
+  const time = Number(timeS) || 0;
+  return [...(segments || [])]
+    .reverse()
+    .find((segment) => time >= Number(segment.startTimeS)) || segments?.[0] || null;
+}
+
+function serializeRegionSegments(segments) {
+  return normalizeRegionSegments(segments).map((segment) => ({
+    id: segment.id,
+    label: segment.label,
+    start_time_s: segment.startTimeS,
+    end_time_s: segment.endTimeS,
+    regions: {
+      left_lower_body: roundedRoi(segment.rois.leftLowerBody),
+      right_lower_body: roundedRoi(segment.rois.rightLowerBody),
+      left_forefoot: roundedRoi(segment.rois.leftForefoot),
+      right_forefoot: roundedRoi(segment.rois.rightForefoot),
+      hands: roundedRoi(segment.rois.hands),
+    },
+    settings_overrides: {
+      roi_layout: segment.roiLayout,
+      forefoot_enabled: segment.forefootEnabled,
+      posture_matching_enabled: segment.postureMatchingEnabled,
+    },
+    anatomical_orientation: segment.leftRightOrientation,
+  }));
+}
+
 function resolveRois(layoutMode, configuredRois) {
   if (layoutMode === "full") {
     return {
@@ -677,7 +721,7 @@ function orderedTopCandidates(candidates, maximum = 8) {
 function calculateLowerBodyPatternSummary(samples, sampleRate) {
   if (!samples.length || sampleRate < 4) return null;
   const points = samples
-    .filter((sample) => sample.leftDetected || sample.rightDetected)
+    .filter((sample) => sample.leftDetected || sample.rightDetected || sample.regionBoundary)
     .map((sample) => {
       const left = Number(sample.leftScore) || 0;
       const right = Number(sample.rightScore) || 0;
@@ -687,6 +731,7 @@ function calculateLowerBodyPatternSummary(samples, sampleRate) {
         right,
         combined: Math.max(left, right),
         divergence: Math.abs(left - right),
+        regionBoundary: Boolean(sample.regionBoundary),
       };
     });
   if (points.length < sampleRate * 2) return null;
@@ -715,9 +760,12 @@ function calculateLowerBodyPatternSummary(samples, sampleRate) {
     && point.combined >= (points[index - 1]?.combined ?? -1)
     && point.combined > (points[index + 1]?.combined ?? -1)
   ));
+  const boundaryTimes = points.filter((point) => point.regionBoundary).map((point) => point.timeS);
   const peakGroups = localPeaks.reduce((groups, peak) => {
     const prior = groups[groups.length - 1];
-    if (prior && peak.timeS - prior[prior.length - 1].timeS <= 1.25) {
+    const previousPeakTime = prior?.[prior.length - 1]?.timeS;
+    const crossesRegionBoundary = boundaryTimes.some((timeS) => timeS > previousPeakTime && timeS <= peak.timeS);
+    if (prior && peak.timeS - previousPeakTime <= 1.25 && !crossesRegionBoundary) {
       prior.push(peak);
     } else {
       groups.push([peak]);
@@ -1537,6 +1585,9 @@ function clusterMoments(moments, nearbyWindowS = 6) {
 
 function buildFindings(result) {
   const findings = [];
+  if (result.regionSegments?.length > 1) {
+    findings.push(`${result.regionSegments.length} position-specific tracking region sets were used in this analysis. Apparent signal changes near position-change boundaries may reflect framing or region changes and require direct video confirmation.`);
+  }
   if (result.hasLegs && result.lowerBodyMethod === "regionMotion") {
     findings.push(result.hasForefoot
       ? "Foot signals were measured from movement within the assigned left and right regions, with optional forefoot / toe-region activity included for visual comparison."
@@ -1589,10 +1640,15 @@ function buildDerivedTimeline(result, maximumPoints = 900) {
       left_forefoot_activity: result.hasForefoot ? sample.leftForefootScore : undefined,
       right_forefoot_activity: result.hasForefoot ? sample.rightForefootScore : undefined,
       hand_activity: result.hasHands ? (result.hasLegs ? sample.handScore : sample.score) : undefined,
+      region_segment_id: sample.regionSegmentId || undefined,
+      region_segment_label: sample.regionSegmentLabel || undefined,
+      region_segment_boundary: sample.regionBoundary || undefined,
     }));
 }
 
 function buildSavedSummary(result) {
+  const serializedSegments = serializeRegionSegments(result.regionSegments);
+  const analyzedSegmentIds = [...new Set(result.samples.map((sample) => sample.regionSegmentId).filter(Boolean))];
   return {
     source: "local_mediapipe_video_review",
     status: "reviewed_derived_signal",
@@ -1609,6 +1665,14 @@ function buildSavedSummary(result) {
       right_forefoot: result.hasForefoot ? roundedRoi(result.rois.rightForefoot) : undefined,
       hands: roundedRoi(result.rois.hands),
     },
+    region_segments: serializedSegments.length ? serializedSegments : undefined,
+    region_segment_summary: serializedSegments.length ? {
+      segment_count: serializedSegments.length,
+      analyzed_segment_count: analyzedSegmentIds.length,
+      analyzed_segment_ids: analyzedSegmentIds,
+      boundary_times_s: serializedSegments.slice(1).map((segment) => segment.start_time_s),
+      interpretation_note: "Tracking regions changed at marked position boundaries. Signal changes near those boundaries may reflect framing or region-of-interest changes and should be verified against video before physiological interpretation.",
+    } : undefined,
     window_start_s: Math.round(result.start),
     window_end_s: Math.round(result.end),
     sample_rate_fps: result.sampleRate,
@@ -1646,7 +1710,7 @@ function buildSavedSummary(result) {
       hand_activity: moment.handScore,
     })),
     interpretation_guardrail: "Media-derived movement signals are observational and require correlation with session notes and telemetry before physiological interpretation.",
-    normalization_guardrail: "Activity scores are normalized within this analyzed video window and are not absolute force measurements or directly comparable magnitudes across recordings. Region-motion scores should be checked against camera movement, framing changes, and visible recording artifacts.",
+    normalization_guardrail: "Activity scores are normalized within this analyzed video window and are not absolute force measurements or directly comparable magnitudes across recordings. Region-motion scores should be checked against camera movement, framing changes, marked position-change boundaries, and visible recording artifacts.",
   };
 }
 
@@ -1699,6 +1763,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [roiLayout, setRoiLayout] = useState("pip");
   const [lowerBodyMethod, setLowerBodyMethod] = useState("regionMotion");
   const [rois, setRois] = useState(() => copyRois(PIP_ROI_PRESET));
+  const [regionSegments, setRegionSegments] = useState([]);
+  const [selectedRegionSegmentId, setSelectedRegionSegmentId] = useState(null);
   const [activeRoi, setActiveRoi] = useState("leftLowerBody");
   const [forefootEnabled, setForefootEnabled] = useState(false);
   const [postureMatchingEnabled, setPostureMatchingEnabled] = useState(true);
@@ -1769,6 +1835,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setRoiSetupTime(0);
     setRoiFrameRevision(0);
     setLoadingRoiFrame(false);
+    setRegionSegments([]);
+    setSelectedRegionSegmentId(null);
     roiFrameCanvasRef.current = null;
     roiFrameRequestRef.current += 1;
     previewReadyRef.current = false;
@@ -1820,6 +1888,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   }, [activeRoi, forefootEnabled]);
 
   const selectedMode = MODES[mode];
+  const orderedRegionSegments = useMemo(() => normalizeRegionSegments(regionSegments), [regionSegments]);
+  const activeRegionSegment = useMemo(
+    () => regionSegmentAtTime(orderedRegionSegments, videoTime),
+    [orderedRegionSegments, videoTime],
+  );
+  const selectedRegionSegment = orderedRegionSegments.find((segment) => segment.id === selectedRegionSegmentId) || activeRegionSegment;
   const appliedRois = useMemo(() => resolveRois(roiLayout, rois), [roiLayout, rois]);
   const appliedLowerBodyMethod = roiLayout === "pip" ? lowerBodyMethod : "landmarks";
   const handTransitionSuggestions = useMemo(
@@ -1968,6 +2042,98 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     if (syncRoiWithMainPlayer) onSeek?.(nextTime);
   };
 
+  const createRegionSegment = (label, startTimeS, source = null) => ({
+    id: `region-segment-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    label,
+    startTimeS: roundedTime(startTimeS),
+    endTimeS: null,
+    rois: copyRois(source?.rois || rois),
+    roiLayout: source?.roiLayout || roiLayout,
+    forefootEnabled: source?.forefootEnabled ?? forefootEnabled,
+    postureMatchingEnabled: source?.postureMatchingEnabled ?? postureMatchingEnabled,
+    leftRightOrientation: source?.leftRightOrientation || leftRightOrientation,
+  });
+
+  const loadRegionSegment = (segment, seekToStart = false) => {
+    if (!segment) return;
+    setSelectedRegionSegmentId(segment.id);
+    setRois(copyRois(segment.rois));
+    setRoiLayout(segment.roiLayout);
+    setForefootEnabled(segment.forefootEnabled);
+    setPostureMatchingEnabled(segment.postureMatchingEnabled);
+    setLeftRightOrientation(segment.leftRightOrientation);
+    if (seekToStart) navigateRoiSetupFrame(segment.startTimeS);
+  };
+
+  const addPositionChange = (copyPrevious = false) => {
+    const positionTime = roundedTime(roiFrameReady ? roiSetupTime : videoTime);
+    const currentSegments = orderedRegionSegments;
+    if (!currentSegments.length) {
+      const initial = createRegionSegment("Initial position", 0);
+      if (positionTime <= 0) {
+        setRegionSegments([initial]);
+        loadRegionSegment(initial);
+        return;
+      }
+      const next = createRegionSegment(`Position change ${formatTime(positionTime)}`, positionTime, initial);
+      setRegionSegments(normalizeRegionSegments([initial, next]));
+      loadRegionSegment(next, true);
+      return;
+    }
+    const matching = currentSegments.find((segment) => Math.abs(segment.startTimeS - positionTime) < 0.1);
+    if (matching) {
+      loadRegionSegment(matching, true);
+      return;
+    }
+    const source = copyPrevious
+      ? regionSegmentAtTime(currentSegments, Math.max(0, positionTime - 0.1))
+      : (selectedRegionSegment || regionSegmentAtTime(currentSegments, positionTime));
+    const next = createRegionSegment(`Position change ${formatTime(positionTime)}`, positionTime, source);
+    setRegionSegments(normalizeRegionSegments([...currentSegments, next]));
+    loadRegionSegment(next, true);
+  };
+
+  const updateSelectedRegionSegment = (updates) => {
+    if (!selectedRegionSegmentId) return;
+    setRegionSegments((current) => normalizeRegionSegments(current.map((segment) => (
+      segment.id === selectedRegionSegmentId ? { ...segment, ...updates } : segment
+    ))));
+  };
+
+  const deleteSelectedRegionSegment = () => {
+    if (!selectedRegionSegment) return;
+    const remaining = orderedRegionSegments.filter((segment) => segment.id !== selectedRegionSegment.id);
+    if (!remaining.length) {
+      setRegionSegments([]);
+      setSelectedRegionSegmentId(null);
+      return;
+    }
+    setRegionSegments(normalizeRegionSegments(remaining));
+    const next = regionSegmentAtTime(remaining, videoTime) || remaining[0];
+    loadRegionSegment(next, true);
+  };
+
+  useEffect(() => {
+    if (!selectedRegionSegmentId) return;
+    setRegionSegments((current) => normalizeRegionSegments(current.map((segment) => (
+      segment.id === selectedRegionSegmentId
+        ? {
+          ...segment,
+          rois: copyRois(rois),
+          roiLayout,
+          forefootEnabled,
+          postureMatchingEnabled,
+          leftRightOrientation,
+        }
+        : segment
+    ))));
+  }, [forefootEnabled, leftRightOrientation, postureMatchingEnabled, roiLayout, rois, selectedRegionSegmentId]);
+
+  useEffect(() => {
+    if (!videoPlaying || !activeRegionSegment || activeRegionSegment.id === selectedRegionSegmentId || running) return;
+    loadRegionSegment(activeRegionSegment);
+  }, [activeRegionSegment, running, selectedRegionSegmentId, videoPlaying]);
+
   useEffect(() => {
     if (!roiFrameReady || !syncRoiWithMainPlayer || videoPlaying || running) return;
     if (Math.abs(Number(videoTime) - Number(roiSetupTime)) < 0.05) return;
@@ -2063,13 +2229,29 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const leftForefootMotionCanvas = document.createElement("canvas");
     const rightForefootMotionCanvas = document.createElement("canvas");
     const analysisRois = resolveRois(roiLayout, rois);
-    const analyzeForefoot = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && forefootEnabled;
-    const analyzePostureAppearance = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && postureMatchingEnabled;
+    const analysisRegionSegments = orderedRegionSegments.map((segment) => ({
+      ...segment,
+      appliedRois: resolveRois(segment.roiLayout, segment.rois),
+      lowerBodyMethod: segment.roiLayout === "pip" ? lowerBodyMethod : "landmarks",
+    }));
+    const defaultFrameConfiguration = {
+      appliedRois: analysisRois,
+      roiLayout,
+      lowerBodyMethod: appliedLowerBodyMethod,
+      forefootEnabled,
+      postureMatchingEnabled,
+      leftRightOrientation,
+      segment: null,
+    };
+    const frameConfigurations = analysisRegionSegments.length ? analysisRegionSegments : [defaultFrameConfiguration];
+    const analyzePostureAppearance = mode !== "hands" && frameConfigurations.some((configuration) => (
+      configuration.lowerBodyMethod === "regionMotion" && configuration.postureMatchingEnabled
+    ));
     const analyzeHandBehavior = mode !== "legs" && handBehaviorMatchingEnabled;
     try {
       const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
-      if ((mode === "legs" || mode === "combined") && appliedLowerBodyMethod === "landmarks") {
+      if ((mode === "legs" || mode === "combined") && frameConfigurations.some((configuration) => configuration.lowerBodyMethod === "landmarks")) {
         const poseOptions = {
           baseOptions: { modelAssetPath: POSE_MODEL_URL },
           runningMode: "VIDEO",
@@ -2078,10 +2260,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           minPosePresenceConfidence: 0.45,
           minTrackingConfidence: 0.45,
         };
-        if (roiLayout === "pip") {
+        if (frameConfigurations.some((configuration) => configuration.lowerBodyMethod === "landmarks" && configuration.roiLayout === "pip")) {
           leftPoseLandmarker = await PoseLandmarker.createFromOptions(vision, poseOptions);
           rightPoseLandmarker = await PoseLandmarker.createFromOptions(vision, poseOptions);
-        } else {
+        }
+        if (frameConfigurations.some((configuration) => configuration.lowerBodyMethod === "landmarks" && configuration.roiLayout === "full")) {
           poseLandmarker = await PoseLandmarker.createFromOptions(vision, poseOptions);
         }
       }
@@ -2119,28 +2302,59 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         leftForefoot: null,
         rightForefoot: null,
       };
+      let previousRegionSegmentId = null;
       let processed = 0;
 
       for (let timeS = start; timeS <= end + 0.001; timeS += step) {
         if (stopRequestedRef.current) break;
         await seekVideo(probe, Math.min(timeS, end));
         const timestamp = Math.round(timeS * 1000);
-        const poseSource = poseLandmarker ? drawVideoCrop(probe, analysisRois.leftLowerBody, poseCropCanvas) : null;
-        const leftPoseSource = leftPoseLandmarker ? drawVideoCrop(probe, analysisRois.leftLowerBody, leftPoseCropCanvas) : null;
-        const rightPoseSource = rightPoseLandmarker ? drawVideoCrop(probe, analysisRois.rightLowerBody, rightPoseCropCanvas) : null;
-        const handSource = drawVideoCrop(probe, analysisRois.hands, handCropCanvas);
-        const poseResult = poseLandmarker ? poseLandmarker.detectForVideo(poseSource, timestamp) : null;
-        const leftPoseResult = leftPoseLandmarker ? leftPoseLandmarker.detectForVideo(leftPoseSource, timestamp) : null;
-        const rightPoseResult = rightPoseLandmarker ? rightPoseLandmarker.detectForVideo(rightPoseSource, timestamp) : null;
+        const segment = analysisRegionSegments.length ? regionSegmentAtTime(analysisRegionSegments, timeS) : null;
+        const frameConfiguration = segment || defaultFrameConfiguration;
+        const frameRois = frameConfiguration.appliedRois;
+        const frameLowerBodyMethod = frameConfiguration.lowerBodyMethod;
+        const frameForefootEnabled = mode !== "hands"
+          && frameLowerBodyMethod === "regionMotion"
+          && frameConfiguration.forefootEnabled;
+        const framePostureMatchingEnabled = mode !== "hands"
+          && frameLowerBodyMethod === "regionMotion"
+          && frameConfiguration.postureMatchingEnabled;
+        const regionSegmentId = segment?.id || null;
+        const regionBoundary = analysisRegionSegments.length > 0
+          && previousRegionSegmentId !== null
+          && regionSegmentId !== previousRegionSegmentId;
+        if (regionBoundary) {
+          previousLegs = { left: null, right: null };
+          previousHands = null;
+          previousRegionFrames = {
+            left: null,
+            right: null,
+            leftForefoot: null,
+            rightForefoot: null,
+          };
+        }
+        const poseSource = poseLandmarker && frameLowerBodyMethod === "landmarks" && frameConfiguration.roiLayout === "full"
+          ? drawVideoCrop(probe, frameRois.leftLowerBody, poseCropCanvas)
+          : null;
+        const leftPoseSource = leftPoseLandmarker && frameLowerBodyMethod === "landmarks" && frameConfiguration.roiLayout === "pip"
+          ? drawVideoCrop(probe, frameRois.leftLowerBody, leftPoseCropCanvas)
+          : null;
+        const rightPoseSource = rightPoseLandmarker && frameLowerBodyMethod === "landmarks" && frameConfiguration.roiLayout === "pip"
+          ? drawVideoCrop(probe, frameRois.rightLowerBody, rightPoseCropCanvas)
+          : null;
+        const handSource = drawVideoCrop(probe, frameRois.hands, handCropCanvas);
+        const poseResult = poseSource ? poseLandmarker.detectForVideo(poseSource, timestamp) : null;
+        const leftPoseResult = leftPoseSource ? leftPoseLandmarker.detectForVideo(leftPoseSource, timestamp) : null;
+        const rightPoseResult = rightPoseSource ? rightPoseLandmarker.detectForVideo(rightPoseSource, timestamp) : null;
         const handResult = handLandmarker ? handLandmarker.detectForVideo(handSource, timestamp) : null;
-        const legs = appliedLowerBodyMethod === "landmarks"
-          ? (roiLayout === "pip"
+        const legs = frameLowerBodyMethod === "landmarks"
+          ? (frameConfiguration.roiLayout === "pip"
             ? { left: extractRegionLeg(leftPoseResult)?.points || null, right: extractRegionLeg(rightPoseResult)?.points || null }
             : extractLegSides(poseResult))
           : null;
-        const legPreview = appliedLowerBodyMethod === "regionMotion"
-          ? { regionMotion: true, forefootEnabled: analyzeForefoot }
-          : (roiLayout === "pip"
+        const legPreview = frameLowerBodyMethod === "regionMotion"
+          ? { regionMotion: true, forefootEnabled: frameForefootEnabled }
+          : (frameConfiguration.roiLayout === "pip"
             ? { left: extractRegionLeg(leftPoseResult), right: extractRegionLeg(rightPoseResult) }
             : { fullResult: poseResult });
         const hands = extractHands(handResult);
@@ -2152,32 +2366,32 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             handResult,
             previewLegsRef.current && mode !== "hands",
             previewHandsRef.current && mode !== "legs",
-            analysisRois,
-            leftRightOrientation,
+            frameRois,
+            frameConfiguration.leftRightOrientation,
           );
           if (frameDrawn && !previewReadyRef.current) {
             previewReadyRef.current = true;
             setPreviewReady(true);
           }
         }
-        const regionFrames = appliedLowerBodyMethod === "regionMotion"
+        const regionFrames = frameLowerBodyMethod === "regionMotion"
           ? {
-            left: readRoiGrayscale(probe, analysisRois.leftLowerBody, leftMotionCanvas),
-            right: readRoiGrayscale(probe, analysisRois.rightLowerBody, rightMotionCanvas),
-            leftForefoot: analyzeForefoot ? readRoiGrayscale(probe, analysisRois.leftForefoot, leftForefootMotionCanvas) : null,
-            rightForefoot: analyzeForefoot ? readRoiGrayscale(probe, analysisRois.rightForefoot, rightForefootMotionCanvas) : null,
+            left: readRoiGrayscale(probe, frameRois.leftLowerBody, leftMotionCanvas),
+            right: readRoiGrayscale(probe, frameRois.rightLowerBody, rightMotionCanvas),
+            leftForefoot: frameForefootEnabled ? readRoiGrayscale(probe, frameRois.leftForefoot, leftForefootMotionCanvas) : null,
+            rightForefoot: frameForefootEnabled ? readRoiGrayscale(probe, frameRois.rightForefoot, rightForefootMotionCanvas) : null,
           }
           : null;
-        const leftValue = appliedLowerBodyMethod === "regionMotion"
+        const leftValue = frameLowerBodyMethod === "regionMotion"
           ? regionPixelMotion(regionFrames.left, previousRegionFrames.left)
           : sideMotion(legs?.left, previousLegs.left);
-        const rightValue = appliedLowerBodyMethod === "regionMotion"
+        const rightValue = frameLowerBodyMethod === "regionMotion"
           ? regionPixelMotion(regionFrames.right, previousRegionFrames.right)
           : sideMotion(legs?.right, previousLegs.right);
-        const leftForefootValue = analyzeForefoot
+        const leftForefootValue = frameForefootEnabled
           ? regionPixelMotion(regionFrames.leftForefoot, previousRegionFrames.leftForefoot)
           : null;
-        const rightForefootValue = analyzeForefoot
+        const rightForefootValue = frameForefootEnabled
           ? regionPixelMotion(regionFrames.rightForefoot, previousRegionFrames.rightForefoot)
           : null;
         const handValue = handMotion(hands, previousHands);
@@ -2192,15 +2406,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             handMotion: mode === "combined" ? handValue : null,
             handDx: mode === "combined" ? handVector?.dx : null,
             handDy: mode === "combined" ? handVector?.dy : null,
-            leftAppearance: analyzePostureAppearance ? appearanceSignature(regionFrames.left) : null,
-            rightAppearance: analyzePostureAppearance ? appearanceSignature(regionFrames.right) : null,
-            leftDetected: appliedLowerBodyMethod === "regionMotion" ? leftValue != null : !!legs?.left,
-            rightDetected: appliedLowerBodyMethod === "regionMotion" ? rightValue != null : !!legs?.right,
-            legsDetected: appliedLowerBodyMethod === "regionMotion" ? leftValue != null || rightValue != null : !!legs?.left || !!legs?.right,
+            leftAppearance: framePostureMatchingEnabled ? appearanceSignature(regionFrames.left) : null,
+            rightAppearance: framePostureMatchingEnabled ? appearanceSignature(regionFrames.right) : null,
+            leftDetected: frameLowerBodyMethod === "regionMotion" ? leftValue != null : !!legs?.left,
+            rightDetected: frameLowerBodyMethod === "regionMotion" ? rightValue != null : !!legs?.right,
+            legsDetected: frameLowerBodyMethod === "regionMotion" ? leftValue != null || rightValue != null : !!legs?.left || !!legs?.right,
             handsDetected: !!hands,
-            detected: appliedLowerBodyMethod === "regionMotion"
+            detected: frameLowerBodyMethod === "regionMotion"
               ? leftValue != null || rightValue != null || (mode === "combined" && !!hands)
               : !!legs?.left || !!legs?.right || (mode === "combined" && !!hands),
+            regionSegmentId,
+            regionSegmentLabel: segment?.label || null,
+            regionBoundary,
           });
         } else {
           rawSamples.push({
@@ -2210,6 +2427,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             handDy: handVector?.dy,
             handsDetected: !!hands,
             detected: !!hands,
+            regionSegmentId,
+            regionSegmentLabel: segment?.label || null,
+            regionBoundary,
           });
         }
         previousLegs = {
@@ -2218,6 +2438,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         };
         previousHands = hands || previousHands;
         if (regionFrames) previousRegionFrames = regionFrames;
+        previousRegionSegmentId = regionSegmentId;
         processed += 1;
         if (processed % 5 === 0 || processed === expectedSamples) {
           setProgress(Math.min(100, Math.round((processed / expectedSamples) * 100)));
@@ -2228,7 +2449,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       if (!rawSamples.length) return;
       const hasLegs = mode !== "hands";
       const hasHands = mode !== "legs";
-      const hasForefoot = hasLegs && analyzeForefoot;
+      const hasForefoot = hasLegs && rawSamples.some((sample) => (
+        sample.leftForefootMotion != null || sample.rightForefootMotion != null
+      ));
+      const lowerBodyMethods = [...new Set(frameConfigurations.map((configuration) => configuration.lowerBodyMethod))];
       const samples = hasLegs ? normalizeTrackedSamples(rawSamples, hasHands) : normalizeSingleSamples(rawSamples);
       const detectedSamples = samples.filter((sample) => sample.detected);
       const coverage = Math.round((detectedSamples.length / samples.length) * 100);
@@ -2241,11 +2465,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         hasLegs,
         hasHands,
         hasForefoot,
-        lowerBodyMethod: appliedLowerBodyMethod,
+        lowerBodyMethod: lowerBodyMethods.length === 1 ? lowerBodyMethods[0] : "mixed_segmented",
         leftRightOrientation,
         sampleRate: selectedMode.fps,
         roiLayout,
         rois: analysisRois,
+        regionSegments: analysisRegionSegments,
         postureReferenceTimes,
         handBehaviorReferenceTimes,
         leftCoverage: hasLegs
@@ -2513,6 +2738,155 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               Full frame
             </button>
           </div>
+        </div>
+
+        <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Region Segments / Position Changes</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Optional. Mark a change when framing or body position shifts; later analysis will use the matching rectangles for each point in the video.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => addPositionChange(false)}
+              disabled={!videoSrc || running}
+              className="rounded-lg border border-primary/45 bg-primary/[0.12] px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/[0.2] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              Add Position Change at Current Time
+            </button>
+          </div>
+
+          {orderedRegionSegments.length === 0 ? (
+            <p className="rounded-md border border-border bg-card/50 px-3 py-2 text-[11px] text-muted-foreground">
+              No position changes marked. The existing single set of analysis regions will be used for the entire selected analysis window.
+            </p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-2">
+                {orderedRegionSegments.map((segment) => (
+                  <button
+                    key={segment.id}
+                    type="button"
+                    onClick={() => loadRegionSegment(segment, true)}
+                    disabled={running}
+                    className={`rounded-lg border px-3 py-2 text-left text-[11px] transition-colors disabled:opacity-45 ${
+                      selectedRegionSegment?.id === segment.id
+                        ? "border-primary/55 bg-primary/[0.14] text-foreground"
+                        : "border-border bg-card/50 text-muted-foreground hover:border-primary/35"
+                    }`}
+                  >
+                    <span className="block font-semibold">{segment.label}</span>
+                    <span className="font-mono">{formatTime(segment.startTimeS)}{segment.endTimeS != null ? ` - ${formatTime(segment.endTimeS)}` : " onward"}</span>
+                    {activeRegionSegment?.id === segment.id && (
+                      <span className="ml-2 rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-primary">Active</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {selectedRegionSegment && (
+                <div className="space-y-2 rounded-lg border border-border bg-card/45 p-3">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto]">
+                    <label className="space-y-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Selected segment name</span>
+                      <input
+                        type="text"
+                        value={selectedRegionSegment.label}
+                        onChange={(event) => updateSelectedRegionSegment({ label: event.target.value || "Position change" })}
+                        disabled={running}
+                        className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground outline-none focus:border-primary/50 disabled:opacity-45"
+                      />
+                    </label>
+                    <div className="flex items-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => loadRegionSegment(selectedRegionSegment, true)}
+                        disabled={running}
+                        className="h-9 rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground hover:border-primary/35 disabled:opacity-45"
+                      >
+                        Jump to start
+                      </button>
+                      <button
+                        type="button"
+                        onClick={deleteSelectedRegionSegment}
+                        disabled={running}
+                        className="h-9 rounded-md border border-border bg-card px-3 text-xs font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive disabled:opacity-45"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {orderedRegionSegments[0]?.id !== selectedRegionSegment.id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextStart = roundedTime(roiFrameReady ? roiSetupTime : videoTime);
+                          updateSelectedRegionSegment({ startTimeS: nextStart });
+                        }}
+                        disabled={running}
+                        className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-primary/35 disabled:opacity-45"
+                      >
+                        Set start to current time
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => addPositionChange(true)}
+                      disabled={running || !videoSrc}
+                      className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-primary/35 disabled:opacity-45"
+                    >
+                      Duplicate previous at current time
+                    </button>
+                    {orderedRegionSegments.findIndex((segment) => segment.id === selectedRegionSegment.id) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const index = orderedRegionSegments.findIndex((segment) => segment.id === selectedRegionSegment.id);
+                          const previous = orderedRegionSegments[index - 1];
+                          const updated = {
+                            ...selectedRegionSegment,
+                            rois: copyRois(previous.rois),
+                            roiLayout: previous.roiLayout,
+                            forefootEnabled: previous.forefootEnabled,
+                            postureMatchingEnabled: previous.postureMatchingEnabled,
+                            leftRightOrientation: previous.leftRightOrientation,
+                          };
+                          setRegionSegments((current) => normalizeRegionSegments(current.map((segment) => (
+                            segment.id === updated.id ? updated : segment
+                          ))));
+                          loadRegionSegment(updated);
+                        }}
+                        disabled={running}
+                        className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-primary/35 disabled:opacity-45"
+                      >
+                        Copy regions from previous segment
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => updateSelectedRegionSegment({
+                        rois: copyRois(rois),
+                        roiLayout,
+                        forefootEnabled,
+                        postureMatchingEnabled,
+                        leftRightOrientation,
+                      })}
+                      disabled={running}
+                      className="rounded-md border border-primary/30 bg-primary/[0.08] px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/[0.14] disabled:opacity-45"
+                    >
+                      Apply current regions to this segment
+                    </button>
+                  </div>
+                </div>
+              )}
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                Analysis resets movement comparison at each position boundary so a rectangle change is not scored as a body-motion spike. Review values near boundaries against the video before interpretation.
+              </p>
+            </>
+          )}
         </div>
 
         {roiLayout === "pip" ? (
@@ -3247,13 +3621,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                   No remaining visible draft suggestions. Dismissed drafts are not saved.
                 </p>
               ) : (
-                <div className="space-y-2">
-                  {visibleMotionSuggestions.map((suggestion) => {
+                <div className="overflow-hidden rounded-lg border border-border">
+                  {visibleMotionSuggestions.map((suggestion, index) => {
                     const isPause = suggestion.type === "motion_pause";
                     const isLowerBody = suggestion.type === "lower_body_semantic_finding";
                     const pauseSeconds = suggestion.pauseDurationS?.toFixed(1).replace(/\.0$/, "");
                     return (
-                      <div key={suggestion.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2">
+                      <div
+                        key={suggestion.id}
+                        className={`flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 transition-colors last:border-b-0 hover:bg-primary/[0.11] hover:ring-1 hover:ring-inset hover:ring-primary/30 ${
+                          index % 2 === 0 ? "bg-card/60" : "bg-muted/[0.16]"
+                        }`}
+                      >
                         <button type="button" onClick={() => onSeek?.(suggestion.timeS)} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
                           <Play className="h-3 w-3" />
                           {formatTime(suggestion.timeS)}

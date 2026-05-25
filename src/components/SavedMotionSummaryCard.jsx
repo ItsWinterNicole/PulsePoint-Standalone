@@ -427,6 +427,29 @@ export default function SavedMotionSummaryCard({
             : "full-frame tracking"}.
             </p>
           )}
+          {Array.isArray(savedSummary.region_segments) && savedSummary.region_segments.length > 0 && (
+            <div className="rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2 text-[11px] leading-relaxed text-amber-100">
+              <p className="font-semibold">
+                {savedSummary.region_segments.length} position-specific tracking region set{savedSummary.region_segments.length === 1 ? "" : "s"} saved.
+              </p>
+              <p className="mt-1 text-amber-100/80">
+                Values near marked position-change boundaries may reflect framing or rectangle changes. Confirm apparent shifts against the video before interpreting them as body movement.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {savedSummary.region_segments.map((segment) => (
+                  <button
+                    key={segment.id}
+                    type="button"
+                    onClick={() => onSeek?.(segment.start_time_s)}
+                    disabled={!onSeek}
+                    className="rounded-md border border-amber-400/20 bg-card/50 px-2 py-1 font-mono text-[10px] text-amber-100 enabled:hover:border-amber-400/45 disabled:cursor-default"
+                  >
+                    {formatTime(segment.start_time_s)} {segment.label || "Position change"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {savedSummary.left_right_orientation && (
             <p className="text-[11px] text-muted-foreground">
               Side assignment: anatomical left was mapped to {savedSummary.left_right_orientation === "anatomical_left_on_screen_right" ? "screen right" : "screen left"}.

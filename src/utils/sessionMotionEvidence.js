@@ -61,6 +61,7 @@ export function hasSavedMotionTelemetry(session) {
     || present(motion.hand_behavior_summary)
     || present(motion.lower_body_pattern_summary)
     || present(motion.lower_body_posture_summary)
+    || rows(motion.region_segments).length
     || present(motion.left_lower_body_average_activity)
     || present(motion.right_lower_body_average_activity)
     || present(motion.hand_average_activity)
@@ -87,6 +88,12 @@ export function getMotionEvidenceFreshnessKey(session) {
       handBehavior: motion.hand_behavior_summary || null,
       lowerBody: motion.lower_body_pattern_summary || null,
       posture: motion.lower_body_posture_summary || null,
+      regionSegments: motion.region_segment_summary || rows(motion.region_segments).map((segment) => ({
+        id: segment.id,
+        start_time_s: segment.start_time_s,
+        end_time_s: segment.end_time_s,
+        label: segment.label,
+      })),
       quality: motion.quality_indicators || null,
     }),
     timeline.length,
@@ -133,6 +140,9 @@ export function getMotionEvidenceSummary(session) {
     handBehaviorSummary: motion.hand_behavior_summary || null,
     lowerBodyPatternProxySummary: motion.lower_body_pattern_summary || null,
     footAppearanceCandidateSummary: motion.lower_body_posture_summary || null,
+    regionSegments: rows(motion.region_segments),
+    regionSegmentSummary: motion.region_segment_summary || null,
+    regionSegmentCount: rows(motion.region_segments).length,
     confidenceSummary: motion.quality_indicators || null,
     leftLowerBodyAverage: motion.left_lower_body_average_activity ?? null,
     rightLowerBodyAverage: motion.right_lower_body_average_activity ?? null,
@@ -160,6 +170,9 @@ export function getMotionEvidenceDigest(session) {
 
   if (evidence.leftLowerBodyAverage != null || evidence.rightLowerBodyAverage != null) {
     lines.push(`Lower-body average activity: left ${evidence.leftLowerBodyAverage ?? "unknown"}, right ${evidence.rightLowerBodyAverage ?? "unknown"}.`);
+  }
+  if (evidence.regionSegmentCount > 1) {
+    lines.push(`Position-change tracking regions: ${evidence.regionSegmentCount} region segments were used. Values near segment boundaries may reflect ROI or framing changes and are not directly interpretable as physiological transitions without video confirmation.`);
   }
   if (evidence.asymmetrySummary) {
     const asymmetry = evidence.asymmetrySummary;
