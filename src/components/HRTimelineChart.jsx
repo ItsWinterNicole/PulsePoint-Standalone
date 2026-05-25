@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from "recharts";
 import { Button } from "@/components/ui/button";
-import { ZoomIn, ZoomOut, Layers, MapPin } from "lucide-react";
+import { ChevronDown, Layers, MapPin, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { useChartZoom } from "@/hooks/useChartZoom";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 
@@ -59,34 +59,40 @@ function ManualTimeInput({ color, label, currentOffset, maxOffset, onSet }) {
   };
 
   return (
-    <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-2 flex-1 min-w-0">
-      <span className="text-xs font-semibold w-20 shrink-0" style={{ color }}>{label}</span>
-      {currentOffset != null && (
-        <span className="text-xs font-mono text-foreground font-semibold w-12 shrink-0">
-          {Math.floor(Math.round(currentOffset)/60)}:{String(Math.round(currentOffset)%60).padStart(2,"0")}
+    <div className="rounded-lg bg-muted px-3 py-2 sm:flex sm:min-w-0 sm:flex-1 sm:items-center sm:gap-2">
+      <div className="flex items-center justify-between gap-2 sm:w-36 sm:justify-start">
+        <span className="text-xs font-semibold sm:w-20 sm:shrink-0" style={{ color }}>{label}</span>
+        <span className="text-xs font-mono text-foreground font-semibold sm:w-12 sm:shrink-0">
+          {currentOffset != null
+            ? `${Math.floor(Math.round(currentOffset) / 60)}:${String(Math.round(currentOffset) % 60).padStart(2, "0")}`
+            : "--:--"}
         </span>
-      )}
-      {currentOffset == null && <span className="w-12 shrink-0" />}
-      <input
-        type="number" min={0}
-        placeholder="m"
-        value={min}
-        onChange={(e) => setMin(e.target.value)}
-        className="w-14 text-xs bg-background border border-border rounded px-2 py-1 font-mono text-center"
-      />
-      <span className="text-xs text-muted-foreground">:</span>
-      <input
-        type="number" min={0} max={59}
-        placeholder="s"
-        value={sec}
-        onChange={(e) => setSec(e.target.value)}
-        className="w-14 text-xs bg-background border border-border rounded px-2 py-1 font-mono text-center"
-      />
-      <button
-        onClick={handleSet}
-        className="text-xs px-3 py-1 rounded font-semibold text-white shrink-0"
-        style={{ background: color }}
-      >Set</button>
+      </div>
+      <div className="mt-2 flex items-center gap-1.5 sm:mt-0 sm:flex-1">
+        <input
+          type="number" min={0}
+          placeholder="min"
+          aria-label={`${label} minutes`}
+          value={min}
+          onChange={(e) => setMin(e.target.value)}
+          className="min-w-0 flex-1 text-xs bg-background border border-border rounded px-2 py-1 font-mono text-center sm:w-14 sm:flex-none"
+        />
+        <span className="text-xs text-muted-foreground">:</span>
+        <input
+          type="number" min={0} max={59}
+          placeholder="sec"
+          aria-label={`${label} seconds`}
+          value={sec}
+          onChange={(e) => setSec(e.target.value)}
+          className="min-w-0 flex-1 text-xs bg-background border border-border rounded px-2 py-1 font-mono text-center sm:w-14 sm:flex-none"
+        />
+        <button
+          type="button"
+          onClick={handleSet}
+          className="ml-auto text-xs px-3 py-1 rounded font-semibold text-white shrink-0"
+          style={{ background: color }}
+        >Set</button>
+      </div>
     </div>
   );
 }
@@ -132,6 +138,7 @@ export default function HRTimelineChart({
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
   const toggleLine = (key) => setVisibleLines((v) => ({ ...v, [key]: !v[key] }));
   const [markingPhase, setMarkingPhase] = useState(null); // null | 'pre_climax' | 'climax' | 'recovery'
+  const [showPhaseMarkerTools, setShowPhaseMarkerTools] = useState(false);
   const [hoveredEventIdx, setHoveredEventIdx] = useState(null);
   const [localMarkers, setLocalMarkers] = useState({
     pre_climax: savedMarkers.pre_climax_offset_s ?? null,
@@ -645,59 +652,79 @@ export default function HRTimelineChart({
 
       {/* Phase marker controls — only shown when onMarkersChange is provided (form context) */}
       {onMarkersChange && !noClimax && (
-        <div className="mt-3 space-y-2">
-          <div className="flex flex-wrap gap-1.5 items-center">
-            {MARKING_PHASES.map((phase) => (
-              <button
-                key={phase}
-                onClick={() => setMarkingPhase(markingPhase === phase ? null : phase)}
-                className="text-[10px] px-2.5 py-1 rounded-lg font-semibold border transition-colors"
-                style={{
-                  background: markingPhase === phase ? PHASE_COLORS[phase] : "transparent",
-                  borderColor: PHASE_COLORS[phase],
-                  color: markingPhase === phase ? "#fff" : PHASE_COLORS[phase],
-                }}
-              >
-                {markingPhase === phase ? `Click chart → ${PHASE_LABELS[phase]}` : `Set ${PHASE_LABELS[phase]}`}
-              </button>
-            ))}
-            <button
-              onClick={autoDetectMarkers}
-              className="text-[10px] px-2.5 py-1 rounded-lg font-semibold border border-border text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
-            >
-              Auto-Detect
-            </button>
-            {(localMarkers.pre_climax != null || localMarkers.climax != null || localMarkers.recovery != null) && (
-              <button
-                onClick={clearMarkers}
-                className="text-[10px] px-2.5 py-1 rounded-lg font-semibold border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {MARKING_PHASES.map((phase) => (
-              <ManualTimeInput
-                key={phase}
-                color={PHASE_COLORS[phase]}
-                label={PHASE_LABELS[phase]}
-                currentOffset={localMarkers[phase]}
-                maxOffset={maxOffsetS}
-                onSet={(totalS) => {
-                  const updated = { ...localMarkers, [phase]: totalS };
-                  setLocalMarkers(updated);
-                  const extra = calcHRMetrics(updated);
-                  onMarkersChange({
-                    pre_climax_offset_s: updated.pre_climax,
-                    climax_offset_s: updated.climax,
-                    recovery_offset_s: updated.recovery,
-                    ...extra,
-                  });
-                }}
-              />
-            ))}
-          </div>
+        <div className="mt-3 rounded-lg border border-border bg-muted/10">
+          <button
+            type="button"
+            onClick={() => setShowPhaseMarkerTools((open) => !open)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left"
+            aria-expanded={showPhaseMarkerTools}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Phase marker tools</span>
+            <span className="ml-auto hidden text-[10px] text-muted-foreground sm:inline">
+              {localMarkers.climax != null ? `Climax ${fmtSec(localMarkers.climax)}` : "Set or auto-detect markers"}
+            </span>
+            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showPhaseMarkerTools ? "rotate-180" : ""}`} />
+          </button>
+          {showPhaseMarkerTools && (
+            <div className="space-y-2 border-t border-border px-3 pb-3 pt-2">
+              <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center">
+                {MARKING_PHASES.map((phase) => (
+                  <button
+                    type="button"
+                    key={phase}
+                    onClick={() => setMarkingPhase(markingPhase === phase ? null : phase)}
+                    className="min-h-8 rounded-lg border px-2 py-1 text-[10px] font-semibold transition-colors"
+                    style={{
+                      background: markingPhase === phase ? PHASE_COLORS[phase] : "transparent",
+                      borderColor: PHASE_COLORS[phase],
+                      color: markingPhase === phase ? "#fff" : PHASE_COLORS[phase],
+                    }}
+                  >
+                    {markingPhase === phase ? `Click chart - ${PHASE_LABELS[phase]}` : `Set ${PHASE_LABELS[phase]}`}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={autoDetectMarkers}
+                  className="min-h-8 rounded-lg border border-border px-2 py-1 text-[10px] font-semibold text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+                >
+                  Auto-Detect
+                </button>
+                {(localMarkers.pre_climax != null || localMarkers.climax != null || localMarkers.recovery != null) && (
+                  <button
+                    type="button"
+                    onClick={clearMarkers}
+                    className="col-span-2 min-h-8 rounded-lg border border-destructive/50 px-2 py-1 text-[10px] font-semibold text-destructive transition-colors hover:bg-destructive/10 sm:col-span-1"
+                  >
+                    Clear Markers
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {MARKING_PHASES.map((phase) => (
+                  <ManualTimeInput
+                    key={phase}
+                    color={PHASE_COLORS[phase]}
+                    label={PHASE_LABELS[phase]}
+                    currentOffset={localMarkers[phase]}
+                    maxOffset={maxOffsetS}
+                    onSet={(totalS) => {
+                      const updated = { ...localMarkers, [phase]: totalS };
+                      setLocalMarkers(updated);
+                      const extra = calcHRMetrics(updated);
+                      onMarkersChange({
+                        pre_climax_offset_s: updated.pre_climax,
+                        climax_offset_s: updated.climax,
+                        recovery_offset_s: updated.recovery,
+                        ...extra,
+                      });
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

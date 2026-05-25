@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Clapperboard, Crosshair, HeartPulse, Pause, Play } from "lucide-react";
+import { Clapperboard, Crosshair, HeartPulse, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import HRTimelineChart from "./HRTimelineChart";
 import EMGTimelineChart from "./EMGTimelineChart";
@@ -42,8 +42,16 @@ export default function SessionTelemetryDashboard({
 }) {
   const [inspectorPlaying, setInspectorPlaying] = useState(false);
   const [inspectorSpeed, setInspectorSpeed] = useState(1);
+  const [inspectorDockOpen, setInspectorDockOpen] = useState(false);
   const inspectionTimeRef = useRef(Number(inspectionTime) || 0);
   const events = session.event_timeline || [];
+  const orderedEvents = useMemo(
+    () => events
+      .map((event, index) => ({ event, index, timeS: Number(event.time_s) }))
+      .filter((entry) => Number.isFinite(entry.timeS))
+      .sort((a, b) => a.timeS - b.timeS),
+    [events],
+  );
   const hrPoint = useMemo(() => nearest(timelineRows, inspectionTime, "time_offset_s"), [inspectionTime, timelineRows]);
   const motionPoint = useMemo(
     () => nearest(session.motion_analysis_summary?.derived_timeline || [], inspectionTime, "time_s"),
@@ -67,6 +75,24 @@ export default function SessionTelemetryDashboard({
     ...(session.motion_analysis_summary?.derived_timeline || []).map((row) => Number(row.time_s) || 0),
     ...emgRows.map((row) => Number(row.time_s) || 0),
   );
+  const previousEvent = [...orderedEvents].reverse().find((entry) => entry.timeS < Number(inspectionTime || 0) - 0.25) || null;
+  const nextEvent = orderedEvents.find((entry) => entry.timeS > Number(inspectionTime || 0) + 0.25) || null;
+
+  const toggleInspectorPlayback = () => {
+    if (inspectionTimeRef.current >= durationS) {
+      inspectionTimeRef.current = 0;
+      onInspectionTimeChange?.(0);
+    }
+    setInspectorDockOpen(true);
+    setInspectorPlaying((playing) => !playing);
+  };
+
+  const jumpToEvent = (entry) => {
+    if (!entry) return;
+    inspectionTimeRef.current = entry.timeS;
+    onInspectionTimeChange?.(entry.timeS);
+    onSelectEventIndex?.(entry.index);
+  };
 
   useEffect(() => {
     inspectionTimeRef.current = Number(inspectionTime) || 0;
@@ -112,10 +138,7 @@ export default function SessionTelemetryDashboard({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              if (inspectionTimeRef.current >= durationS) onInspectionTimeChange?.(0);
-              setInspectorPlaying((playing) => !playing);
-            }}
+            onClick={toggleInspectorPlayback}
             disabled={durationS <= 0}
             className="inline-flex items-center gap-1.5 rounded-md border border-rose-400/30 bg-rose-400/[0.08] px-3 py-1.5 text-xs font-semibold text-rose-300 disabled:opacity-45"
           >
@@ -222,6 +245,74 @@ export default function SessionTelemetryDashboard({
             inspectionTime={inspectionTime}
             onInspectionTimeChange={onInspectionTimeChange}
           />
+        </div>
+      )}
+
+      {inspectorDockOpen && (
+        <div className="fixed bottom-20 left-1/2 z-40 w-[min(calc(100vw-2rem),30rem)] -translate-x-1/2 rounded-xl border border-rose-400/25 bg-card/95 p-3 shadow-2xl backdrop-blur md:left-auto md:right-6 md:translate-x-0">
+          <div className="mb-2 flex items-center gap-2">
+            <Crosshair className="h-3.5 w-3.5 text-rose-400" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Inspector Playback</span>
+            <span className="ml-auto font-mono text-sm font-bold text-rose-400">{formatTime(inspectionTime)}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setInspectorPlaying(false);
+                setInspectorDockOpen(false);
+              }}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Close inspector playback controls"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleInspectorPlayback}
+              disabled={durationS <= 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-400/30 bg-rose-400/[0.08] px-3 py-1.5 text-xs font-semibold text-rose-300 disabled:opacity-45"
+            >
+              {inspectorPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              {inspectorPlaying ? "Pause" : "Play"}
+            </button>
+            <button
+              type="button"
+              onClick={() => jumpToEvent(previousEvent)}
+              disabled={!previousEvent}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground disabled:opacity-40"
+              title={previousEvent ? `Jump to ${formatTime(previousEvent.timeS)}` : "No earlier event marker"}
+            >
+              <SkipBack className="h-3.5 w-3.5" />
+              Last event
+            </button>
+            <button
+              type="button"
+              onClick={() => jumpToEvent(nextEvent)}
+              disabled={!nextEvent}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground disabled:opacity-40"
+              title={nextEvent ? `Jump to ${formatTime(nextEvent.timeS)}` : "No later event marker"}
+            >
+              Next event
+              <SkipForward className="h-3.5 w-3.5" />
+            </button>
+            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Speed</span>
+            {[0.5, 1, 2, 4].map((speed) => (
+              <button
+                key={`floating-${speed}`}
+                type="button"
+                onClick={() => setInspectorSpeed(speed)}
+                className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${inspectorSpeed === speed ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+              >
+                {speed}x
+              </button>
+            ))}
+          </div>
+          {nearestEvent && (
+            <p className="mt-2 truncate text-[10px] text-muted-foreground">
+              Nearest event: <span className="font-mono text-primary">{formatTime(nearestEvent.time_s)}</span> {nearestEvent.note || "Untitled event"}
+            </p>
+          )}
         </div>
       )}
     </section>

@@ -263,6 +263,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
   const [completedRender, setCompletedRender] = useState(null);
   const [lastDownloadRecord, setLastDownloadRecord] = useState(null);
+  const [savedServerExport, setSavedServerExport] = useState(null);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
   const [copied, setCopied] = useState(false);
 
@@ -717,6 +718,21 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setLastDownloadRecord(record);
   };
 
+  const triggerSavedExportDownload = (exportRecord) => {
+    const a = document.createElement("a");
+    a.href = exportRecord.file_url;
+    a.download = exportRecord.filename || `${getDownloadDisplayTitle().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportRecord.format || runtimeRef.current.format)}`;
+    a.click();
+    saveDownloadRecord({
+      downloaded_at: new Date().toISOString(),
+      source_generated_at: exportRecord.source_generated_at || sourceGeneratedAt || null,
+      title: exportRecord.title || getDownloadDisplayTitle(),
+      filename: a.download,
+      format: exportRecord.format || runtimeRef.current.format,
+    });
+    setRequestStatus({ type: "ok", msg: "Downloaded existing narration export without re-rendering audio" });
+  };
+
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
     const filename = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
@@ -725,7 +741,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     a.download = filename;
     a.click();
 
-    await base44.entities.AudioExport.create({
+    const createdExport = await base44.entities.AudioExport.create({
       title: displayTitle,
       file_url: rendered.file_url,
       duration_seconds: Math.round(rendered.duration_seconds || 0),
@@ -734,6 +750,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       model: runtime.model,
       format: rendered.format || exportFormat,
       size: rendered.size,
+      filename,
+      tts_session_key: sessionId || null,
+      analysis_title: title || null,
+      source_generated_at: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
+      exported_at: new Date().toISOString(),
     });
 
     saveDownloadRecord({
@@ -743,6 +764,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       filename,
       format: rendered.format || exportFormat,
     });
+    setSavedServerExport(createdExport);
     clearSavedExportJob();
     setCompletedRender(null);
     setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded` });
@@ -846,6 +868,36 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     };
   }, [sessionId, title]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const findExistingSavedExport = async () => {
+      setSavedServerExport(null);
+      const displayTitle = getDownloadDisplayTitle();
+      try {
+        const matchingTitle = await base44.entities.AudioExport.filter({ title: displayTitle }, "-created_date", 30);
+        if (cancelled) return;
+        const exact = sourceGeneratedAt
+          ? matchingTitle.find((entry) => entry.file_url && entry.source_generated_at === sourceGeneratedAt)
+          : matchingTitle.find((entry) => entry.file_url);
+        const sourceTime = sourceGeneratedAt ? new Date(sourceGeneratedAt).getTime() : null;
+        const compatibleLegacy = sourceGeneratedAt && Number.isFinite(sourceTime)
+          ? matchingTitle.find((entry) => (
+            entry.file_url &&
+            !entry.source_generated_at &&
+            new Date(entry.created_date).getTime() >= sourceTime
+          ))
+          : null;
+        setSavedServerExport(exact || compatibleLegacy || null);
+      } catch {
+        if (!cancelled) setSavedServerExport(null);
+      }
+    };
+    findExistingSavedExport();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionDate, sessionId, sourceGeneratedAt, title]);
+
   const downloadedForOlderOutput = Boolean(
     sourceGeneratedAt &&
     lastDownloadRecord &&
@@ -858,6 +910,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   );
 
   const downloadAudio = async () => {
+    if (savedServerExport?.file_url) {
+      if (completedRenderForOlderOutput) {
+        setCompletedRender(null);
+        clearSavedExportJob();
+      }
+      triggerSavedExportDownload(savedServerExport);
+      return;
+    }
+
     if (completedRender?.file_url && !completedRenderForOlderOutput) {
       try {
         setDownloading(true);
@@ -1016,7 +1077,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             </>
           ) : (
             <>
-              <Download className="w-3.5 h-3.5" /> {completedRenderForOlderOutput ? "Download Updated" : completedRender?.file_url ? "Download Ready" : "Download"}
+              <Download className="w-3.5 h-3.5" /> {completedRenderForOlderOutput ? "Download Updated" : savedServerExport?.file_url ? "Download Existing" : completedRender?.file_url ? "Download Ready" : "Download"}
             </>
           )}
         </button>
@@ -1059,6 +1120,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             : sourceGeneratedAt && lastDownloadRecord.source_generated_at === sourceGeneratedAt
               ? " Matches this AI output."
               : ""}
+        </div>
+      )}
+
+      {savedServerExport?.file_url && (
+        <div className="text-[10px] px-2 py-1 rounded-md mb-1 bg-primary/10 text-primary">
+          Narration already exported {formatDownloadTimestamp(savedServerExport.exported_at || savedServerExport.created_date) || "previously"}.
+          {" "}Download reuses the saved audio file without rendering again.
         </div>
       )}
 

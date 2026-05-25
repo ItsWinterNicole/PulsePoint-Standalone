@@ -29,6 +29,26 @@
     "notes": {
       "type": "string",
       "description": "Optional user notes about this export"
+    },
+    "filename": {
+      "type": "string",
+      "description": "Meaningful downloaded filename for the saved narration export"
+    },
+    "tts_session_key": {
+      "type": "string",
+      "description": "Stable source panel or session identity for matching saved narration exports"
+    },
+    "analysis_title": {
+      "type": "string",
+      "description": "AI output title associated with the narration export"
+    },
+    "source_generated_at": {
+      "type": "string",
+      "description": "AI output generation timestamp associated with this narration export"
+    },
+    "exported_at": {
+      "type": "string",
+      "description": "Timestamp when the narration export record was saved"
     }
   },
   "required": [
