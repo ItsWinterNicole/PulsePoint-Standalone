@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -34,6 +34,7 @@ export default function AIChat({
   onSaveMessages,
   onSaveNotes,
 }) {
+  const [copiedIndex, setCopiedIndex] = useState(null);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState(savedMessages || []);
   const [input, setInput] = useState("");
@@ -250,6 +251,16 @@ No affirmations or pleasantries. 2–3 sentences.`;
   const hasUserReplied = messages.some((m) => m.role === "user");
   const hasMessages = messages.length > 0;
 
+  const copyAssistantMessage = async (text, index) => {
+    try {
+      await navigator.clipboard.writeText(String(text || "").trim());
+      setCopiedIndex(index);
+      window.setTimeout(() => setCopiedIndex(null), 1800);
+    } catch {
+      setCopiedIndex(null);
+    }
+  };
+
   return (
     <div className="border border-border rounded-xl overflow-hidden">
       {/* Header */}
@@ -325,7 +336,7 @@ No affirmations or pleasantries. 2–3 sentences.`;
                     <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-1" />
                   )}
                   <div
-                    className={`rounded-xl px-3 py-2 text-sm leading-relaxed max-w-[85%] ${
+                    className={`group relative rounded-xl px-3 py-2 text-sm leading-relaxed max-w-[85%] ${
                       msg.role === "user"
                         ? "bg-primary text-primary-foreground rounded-tr-sm"
                         : "bg-muted/70 text-foreground rounded-tl-sm cursor-pointer"
@@ -334,6 +345,19 @@ No affirmations or pleasantries. 2–3 sentences.`;
                     title={msg.role === "assistant" ? (speakingIdx === i ? "Tap to stop" : "Tap to hear") : undefined}
                   >
                     {msg.text}
+                    {msg.role === "assistant" && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          copyAssistantMessage(msg.text, i);
+                        }}
+                        className="ml-2 inline-flex align-middle rounded p-0.5 text-muted-foreground hover:text-foreground"
+                        title="Copy response"
+                      >
+                        {copiedIndex === i ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                    )}
                     {msg.role === "assistant" && speakingIdx === i && (
                       <span className="ml-2 inline-flex items-center gap-0.5">
                         <span className="w-1 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />

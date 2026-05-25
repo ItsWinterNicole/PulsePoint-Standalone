@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Play, Pause, Square, Download, Settings } from "lucide-react";
+import { Play, Pause, Square, Download, Settings, Copy, Check } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   cleanTextForSpeech,
@@ -248,6 +248,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
   const [completedRender, setCompletedRender] = useState(null);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
+  const [copied, setCopied] = useState(false);
 
   const stateRef = useRef("idle");
   const currentParaRef = useRef(-1);
@@ -266,6 +267,25 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const wordRefs = useRef(new Map()); // map of word element refs for auto-scroll
   const updateIntervalRef = useRef(null); // track update interval to clear it
   const renderProgressTimerRef = useRef(null);
+  const copyContentRef = useRef(null);
+
+  const copyOutput = async () => {
+    const renderedText = copyContentRef.current?.innerText || "";
+    const cleanText = [title, renderedText]
+      .filter(Boolean)
+      .join("\n\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (!cleanText) return;
+    try {
+      await navigator.clipboard.writeText(cleanText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setRequestStatus({ type: "error", msg: "Could not copy analysis to clipboard" });
+    }
+  };
 
   useEffect(() => {
     const runtime = getTTSRuntime(ttsSettings);
@@ -905,9 +925,21 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         )}
 
         <button
+          type="button"
+          onClick={copyOutput}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground active:opacity-70 transition-colors text-xs font-medium select-none ml-auto"
+          style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
+          title="Copy formatted analysis text"
+        >
+          {copied
+            ? <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</>
+            : <><Copy className="w-3.5 h-3.5" /> Copy</>}
+        </button>
+
+        <button
           onClick={downloadAudio}
           disabled={downloading}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 active:opacity-70 transition-colors text-xs font-medium select-none ml-auto"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 active:opacity-70 transition-colors text-xs font-medium select-none"
           style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
           title="Download full section audio"
         >
@@ -960,6 +992,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       )}
 
       {/* Paragraphs */}
+      <div ref={copyContentRef} className="space-y-1">
       {paragraphs.map((text, paraIdx) => {
         const displayText = fmtSecondsInText(text);
         const isPlaying = currentPara === paraIdx && state === "playing";
@@ -1019,6 +1052,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           </p>
         );
       })}
+      </div>
     </div>
 
     {/* Floating play/pause button (bottom right) */}
