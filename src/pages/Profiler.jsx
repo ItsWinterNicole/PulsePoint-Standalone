@@ -33,9 +33,27 @@ function fmtAvg(value, digits = 1) {
   return value == null ? "—" : Number(value).toFixed(digits).replace(/\.0$/, "");
 }
 
+const SESSION_DATE_TIME_ZONE = "America/New_York";
+
+function sessionDateKey(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  const localCalendarMatch = text.match(/^(\d{4}-\d{2}-\d{2})(?:$|T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/);
+  if (localCalendarMatch) return localCalendarMatch[1];
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text.slice(0, 10) || null;
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: SESSION_DATE_TIME_ZONE,
+  }).format(parsed);
+}
+
 function fmtNarrativeDate(value) {
-  if (!value) return "unknown date";
-  const raw = String(value).slice(0, 10);
+  const raw = sessionDateKey(value);
+  if (!raw) return "unknown date";
   const [year, month, day] = raw.split("-").map(Number);
   if (!year || !month || !day) return String(value);
   return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-US", {
@@ -51,6 +69,14 @@ function naturalizeSpokenDates(value) {
     fmtNarrativeDate(`${year}-${month}-${day}`) || match
   ));
 }
+
+const SESSION_DATE_GROUNDING_RULE = `
+SESSION DATE GROUNDING RULE:
+- A date attached to a session below is the recorded date that session occurred, normalized to the America/New_York local calendar date.
+- When referencing a specific session, use that recorded session date only.
+- Never replace a session occurrence date with the date an entry was created, updated, analyzed, regenerated, or exported.
+- If a date is mentioned in prose, speak it naturally, such as "May 14, 2026", rather than reading an ISO date.
+`;
 
 const MOTION_EVIDENCE_PRECEDENCE_RULE = `
 MOVEMENT EVIDENCE PRECEDENCE RULE (apply only when saved media-derived motion evidence exists):
@@ -74,7 +100,7 @@ function buildProfileEvidenceDigest(sessions) {
   const topRated = [...sessions]
     .sort((a, b) => ((b.satisfaction || 0) + (b.intensity || 0)) - ((a.satisfaction || 0) + (a.intensity || 0)))
     .slice(0, 5)
-    .map((s) => `${s.date?.slice(0, 10)} S${s.satisfaction ?? "?"}/I${s.intensity ?? "?"}, ${[...(s.methods || []), ...(s.custom_methods || [])].filter(Boolean).slice(0, 4).join("+") || "no method"}, maxHR ${s.max_hr || "?"}`)
+    .map((s) => `${sessionDateKey(s.date) || "unknown"} S${s.satisfaction ?? "?"}/I${s.intensity ?? "?"}, ${[...(s.methods || []), ...(s.custom_methods || [])].filter(Boolean).slice(0, 4).join("+") || "no method"}, maxHR ${s.max_hr || "?"}`)
     .join(" | ");
 
   const methodMap = new Map();
@@ -293,7 +319,7 @@ function compactSessionLine(s) {
     ].filter(Boolean).join(", ")}`
     : null;
   return [
-    `${s.date?.slice(0, 10) || "unknown"}: ${s.duration_minutes || "?"}m`,
+    `${sessionDateKey(s.date) || "unknown"}: ${s.duration_minutes || "?"}m`,
     `methods ${methods}`,
     `ratings I${s.intensity ?? "?"}/S${s.satisfaction ?? "?"}/build${s.build_quality ?? "?"}`,
     `HR ${hr || "none"}`,
@@ -310,7 +336,7 @@ function compactSessionLine(s) {
 
 function compactAnatomicalSessionLine(s) {
   return compactSessionLine(s).replace(
-    String(s.date?.slice(0, 10) || "unknown"),
+    String(sessionDateKey(s.date) || "unknown"),
     fmtNarrativeDate(s.date),
   );
 }
@@ -592,7 +618,7 @@ Arousal notes: ${userProfile.arousal_notes || "none"}
 SESSION JOURNALS (${Math.min(normalizedJournals.length, 8)} recent entries — subjective post-session reflections):
 ${normalizedJournals.slice(0, 8).map((j) => {
   const ai = j.ai_journal;
-  const date = j.session_date ? new Date(j.session_date).toISOString().slice(0, 10) : "unknown date";
+  const date = fmtNarrativeDate(j.session_date);
   if (!ai && !j.voice_transcript) return null;
   return `[Session ${date}]:
 ${ai?.emotional_reflection ? `  Emotional: ${briefText(ai.emotional_reflection, 220)}` : ""}
@@ -611,6 +637,7 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
 
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
+${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
@@ -948,6 +975,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoa
 
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
+${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
@@ -1146,7 +1174,7 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
       const events = detectNearClimaxEvents(rows, session.climax_offset_s, session.pre_climax_offset_s, session.event_timeline || []);
       if (events.length > 0) {
         sessionEvents.push({
-          date: session.date?.slice(0, 10),
+          date: sessionDateKey(session.date),
           session_duration_s: Math.round(Math.max(...rows.map((r) => Number(r.time_offset_s)))),
           climax_offset_s: session.climax_offset_s,
           methods: session.methods,
@@ -1174,6 +1202,7 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
       prompt: `You are a physiological research assistant analyzing near-climax events detected in heart rate data from sexual response sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${SESSION_DATE_GROUNDING_RULE}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -1184,7 +1213,7 @@ CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 A "near-climax event" is defined as: an erratic yet somewhat sustained climb in heart rate (eight or more beats per minute rise within forty-five seconds), followed by a notable drop — similar in shape to the climax cascade (ever-increasing HR with an apex and fall) but not as sustained. These events occur outside of the actual climax window.
 
 Detected event data across ${sessionEvents.length} sessions (out of ${sessions.length} total):
-${sessionEvents.slice(0, 12).map((s) => `${s.date}: ${s.event_count} events, ${fmtSec(s.total_time_in_events_s)} total, avg rise ${s.avg_rise_bpm} bpm, max peak ${s.max_peak_hr} bpm, methods ${(s.methods || []).join(", ") || "none"}, climax ${fmtSec(s.climax_offset_s)}. Events: ${s.near_climax_events.map((e) => `${fmtSec(e.start_offset_s)}-${fmtSec(e.end_offset_s)}, peak ${e.peak_hr}, rise ${e.rise_bpm}, confidence ${e.confidence}`).join(" | ")}`).join("\n")}
+${sessionEvents.slice(0, 12).map((s) => `${fmtNarrativeDate(s.date)}: ${s.event_count} events, ${fmtSec(s.total_time_in_events_s)} total, avg rise ${s.avg_rise_bpm} bpm, max peak ${s.max_peak_hr} bpm, methods ${(s.methods || []).join(", ") || "none"}, climax ${fmtSec(s.climax_offset_s)}. Events: ${s.near_climax_events.map((e) => `${fmtSec(e.start_offset_s)}-${fmtSec(e.end_offset_s)}, peak ${e.peak_hr}, rise ${e.rise_bpm}, confidence ${e.confidence}`).join(" | ")}`).join("\n")}
 
 Provide a rich, interpretive narrative analysis. Focus on:
 1. What these events physiologically represent for you — are they arousal plateaus, stimulation intensity peaks, parasympathetic interruptions, explicitly logged arousal control, or something else?
