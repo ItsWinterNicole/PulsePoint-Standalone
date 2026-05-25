@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { Clapperboard, Crosshair, HeartPulse } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Clapperboard, Crosshair, HeartPulse, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import HRTimelineChart from "./HRTimelineChart";
 import EMGTimelineChart from "./EMGTimelineChart";
@@ -40,6 +40,9 @@ export default function SessionTelemetryDashboard({
   onMarkersChange,
   onOpenReview,
 }) {
+  const [inspectorPlaying, setInspectorPlaying] = useState(false);
+  const [inspectorSpeed, setInspectorSpeed] = useState(1);
+  const inspectionTimeRef = useRef(Number(inspectionTime) || 0);
   const events = session.event_timeline || [];
   const hrPoint = useMemo(() => nearest(timelineRows, inspectionTime, "time_offset_s"), [inspectionTime, timelineRows]);
   const motionPoint = useMemo(
@@ -58,9 +61,27 @@ export default function SessionTelemetryDashboard({
     ? (Number(motionPoint?.left_lower_body_activity || 0) - Number(motionPoint?.right_lower_body_activity || 0)) / balanceTotal
     : null;
   const balanceText = balance == null || Math.abs(balance) <= 0.1 ? "Similar" : `${balance > 0 ? "Left" : "Right"} higher`;
-  const durationS = timelineRows.length
-    ? Math.max(...timelineRows.map((row) => Number(row.time_offset_s) || 0))
-    : Number(session.duration_minutes || 0) * 60;
+  const durationS = Math.max(
+    Number(session.duration_minutes || 0) * 60,
+    ...timelineRows.map((row) => Number(row.time_offset_s) || 0),
+    ...(session.motion_analysis_summary?.derived_timeline || []).map((row) => Number(row.time_s) || 0),
+    ...emgRows.map((row) => Number(row.time_s) || 0),
+  );
+
+  useEffect(() => {
+    inspectionTimeRef.current = Number(inspectionTime) || 0;
+  }, [inspectionTime]);
+
+  useEffect(() => {
+    if (!inspectorPlaying || durationS <= 0 || !onInspectionTimeChange) return undefined;
+    const timer = window.setInterval(() => {
+      const next = Math.min(durationS, inspectionTimeRef.current + (0.1 * inspectorSpeed));
+      inspectionTimeRef.current = next;
+      onInspectionTimeChange(next);
+      if (next >= durationS) setInspectorPlaying(false);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [durationS, inspectorPlaying, inspectorSpeed, onInspectionTimeChange]);
 
   return (
     <section id="session-telemetry" className="scroll-mt-24 rounded-2xl border border-primary/20 bg-card p-4 space-y-4">
@@ -87,6 +108,32 @@ export default function SessionTelemetryDashboard({
           <Crosshair className="h-4 w-4 text-rose-400" />
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Inspector</p>
           <span className="ml-auto font-mono text-lg font-bold text-rose-400">{formatTime(inspectionTime)}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (inspectionTimeRef.current >= durationS) onInspectionTimeChange?.(0);
+              setInspectorPlaying((playing) => !playing);
+            }}
+            disabled={durationS <= 0}
+            className="inline-flex items-center gap-1.5 rounded-md border border-rose-400/30 bg-rose-400/[0.08] px-3 py-1.5 text-xs font-semibold text-rose-300 disabled:opacity-45"
+          >
+            {inspectorPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+            {inspectorPlaying ? "Pause" : "Play"} inspector
+          </button>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Speed</span>
+          {[0.5, 1, 2, 4].map((speed) => (
+            <button
+              key={speed}
+              type="button"
+              onClick={() => setInspectorSpeed(speed)}
+              className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${inspectorSpeed === speed ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+            >
+              {speed}x
+            </button>
+          ))}
+          <span className="text-[10px] text-muted-foreground">Advances the evidence cursor only.</span>
         </div>
         {durationS > 0 && (
           <input

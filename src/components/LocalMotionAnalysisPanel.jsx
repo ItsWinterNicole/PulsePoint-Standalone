@@ -12,6 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import SideBalanceGauge from "./SideBalanceGauge";
 
 const TASKS_VISION_VERSION = "0.10.35";
 const WASM_ROOT = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/wasm`;
@@ -1547,6 +1548,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     [handTransitionSuggestions, lowerBodySemanticSuggestions],
   );
   const reviewPeakClusters = useMemo(() => clusterMoments(result?.moments || []), [result?.moments]);
+  const currentMotionPoint = useMemo(() => {
+    if (!result?.samples?.length || !Number.isFinite(Number(videoTime))) return null;
+    return result.samples.reduce((closest, sample) => (
+      Math.abs(Number(sample.timeS) - Number(videoTime)) < Math.abs(Number(closest.timeS) - Number(videoTime))
+        ? sample
+        : closest
+    ), result.samples[0]);
+  }, [result, videoTime]);
   const visibleMotionSuggestions = motionSuggestions.filter((suggestion) => (
     visibleSuggestionTypes[suggestion.type]
     && !dismissedSuggestionIds.includes(suggestion.id)
@@ -3046,6 +3055,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 </LineChart>
               </ResponsiveContainer>
             </div>
+            {result.hasLegs && (
+              <div className="mt-3">
+                <SideBalanceGauge left={currentMotionPoint?.leftScore} right={currentMotionPoint?.rightScore} />
+              </div>
+            )}
           </div>
 
           {result.moments.length > 0 ? (

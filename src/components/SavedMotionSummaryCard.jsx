@@ -11,6 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import SideBalanceGauge from "./SideBalanceGauge";
 
 function formatTime(value) {
   const total = Math.max(0, Math.round(Number(value) || 0));
@@ -124,6 +125,7 @@ export default function SavedMotionSummaryCard({
   compact = false,
   chartOnly = false,
   focus = false,
+  showBalanceGauge = true,
   interactionLabel = "Feet/leg and hand signals aligned to playback; click the timeline to seek the loaded video.",
 }) {
   const savedSummary = summary || {};
@@ -301,6 +303,9 @@ export default function SavedMotionSummaryCard({
             </LineChart>
           </ResponsiveContainer>
         </div>
+        {showBalanceGauge && hasLeft && hasRight && (
+          <SideBalanceGauge left={playbackPoint?.leftScore} right={playbackPoint?.rightScore} />
+        )}
         {(hasLeft || hasRight || hasHands) && (
           <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
             {hasLeft && <Metric label="Left Now" value={playbackPoint?.leftScore ?? "--"} />}
@@ -517,6 +522,9 @@ export default function SavedMotionSummaryCard({
               </LineChart>
             </ResponsiveContainer>
           </div>
+          {showBalanceGauge && hasLeft && hasRight && (
+            <SideBalanceGauge left={playbackPoint?.leftScore} right={playbackPoint?.rightScore} />
+          )}
           <p className="text-[10px] text-muted-foreground">
             Click the saved trace to seek a loaded local video.
           </p>

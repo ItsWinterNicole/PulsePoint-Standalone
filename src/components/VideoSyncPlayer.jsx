@@ -85,6 +85,20 @@ const EVENT_FILTERS = [
   { key: "sensation", label: "Sensation", matches: (ev) => normalizeCategoryArray(ev.category).includes("sensation") || (ev.annotation_tags || []).includes("sensation_report") },
   { key: "context", label: "Context", matches: (ev) => (ev.annotation_tags || []).some((tag) => ["position_or_comfort", "equipment_or_setup", "other_context"].includes(tag)) },
 ];
+const VIDEO_FEED_SLOTS = [
+  { key: "composite", label: "Composite / Picture-in-Picture", description: "Current single-video workflow with all views already combined." },
+  { key: "main", label: "Main Focus Camera", description: "Primary close view used for the main review angle." },
+  { key: "lower_body", label: "Feet / Lower Body Camera", description: "Separate feet, legs, and pelvis view." },
+  { key: "lateral", label: "Lateral Angle", description: "Optional side-angle context view." },
+];
+
+function blankVideoFeeds() {
+  return Object.fromEntries(VIDEO_FEED_SLOTS.map((feed) => [feed.key, {
+    label: feed.label,
+    fileName: "",
+    src: null,
+  }]));
+}
 
 // Nearest HR from sorted chart data
 function nearestHR(chartData, time_s) {
@@ -343,7 +357,13 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const defaultCategory = isExploration ? "instrumentation" : "stimulation";
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
+  const videoFeedRefs = useRef({});
+  const videoFeedUrls = useRef({});
+  const pendingMasterTimeRef = useRef(null);
   const [videoSrc, setVideoSrc] = useState(null);
+  const [videoFeeds, setVideoFeeds] = useState(blankVideoFeeds);
+  const [activeFeedKey, setActiveFeedKey] = useState("composite");
+  const [videoLayout, setVideoLayout] = useState("single");
   const [videoOffset, setVideoOffset] = useState(0);
   const [playheadS, setPlayheadS] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -356,9 +376,20 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
   const [selectedEventFilters, setSelectedEventFilters] = useState([]);
+  const loadedFeeds = useMemo(
+    () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.src),
+    [videoFeeds],
+  );
 
   // Local mutable events list
   const [events, setEvents] = useState(session.event_timeline || []);
+
+  useEffect(() => {
+    setEvents(session.event_timeline || []);
+    setSelectedEventFilters([]);
+    setActiveEventIdx(null);
+    setEditingIdx(null);
+  }, [session.id, session.event_timeline]);
 
   // Edit state: idx of event being edited, or null
   const [editingIdx, setEditingIdx] = useState(null);
@@ -620,12 +651,81 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     return [lo, hi];
   }, [playheadS, zoomWindow, maxT]);
 
-  // Load local video file
-  const handleFileLoad = (e) => {
+  const setSynchronizedVideoTime = useCallback((timeS) => {
+    const safeTime = Math.max(0, Number(timeS) || 0);
+    if (videoRef.current) videoRef.current.currentTime = safeTime;
+    loadedFeeds.forEach((feed) => {
+      if (feed.key !== activeFeedKey && videoFeedRefs.current[feed.key]?.readyState > 0) {
+        videoFeedRefs.current[feed.key].currentTime = safeTime;
+      }
+    });
+  }, [activeFeedKey, loadedFeeds]);
+
+  const syncSecondaryVideos = useCallback((primaryTime, playing = false) => {
+    loadedFeeds.forEach((feed) => {
+      if (feed.key === activeFeedKey) return;
+      const video = videoFeedRefs.current[feed.key];
+      if (!video || video.readyState === 0) return;
+      if (Math.abs(video.currentTime - primaryTime) > 0.2) video.currentTime = primaryTime;
+      video.playbackRate = playbackSpeed;
+      if (playing && video.paused) video.play().catch(() => {});
+      if (!playing && !video.paused) video.pause();
+    });
+  }, [activeFeedKey, loadedFeeds, playbackSpeed]);
+
+  const selectMasterFeed = useCallback((key) => {
+    const feed = videoFeeds[key];
+    if (!feed?.src || key === activeFeedKey) return;
+    pendingMasterTimeRef.current = Math.max(0, playheadS - videoOffset);
+    videoRef.current?.pause();
+    setActiveFeedKey(key);
+    setVideoSrc(feed.src);
+  }, [activeFeedKey, playheadS, videoFeeds, videoOffset]);
+
+  // Load browser-local video feeds. Files remain in memory only for this review.
+  const handleFileLoad = (e, feedKey = "composite") => {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    setVideoSrc(url);
+    const previousUrl = videoFeedUrls.current[feedKey];
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    videoFeedUrls.current[feedKey] = url;
+    setVideoFeeds((current) => ({
+      ...current,
+      [feedKey]: { ...current[feedKey], src: url, fileName: file.name },
+    }));
+    if (!videoSrc || feedKey === activeFeedKey) {
+      setActiveFeedKey(feedKey);
+      setVideoSrc(url);
+    }
+    e.target.value = "";
+  };
+
+  const renameFeed = (feedKey, label) => {
+    setVideoFeeds((current) => ({
+      ...current,
+      [feedKey]: { ...current[feedKey], label },
+    }));
+  };
+
+  const removeFeed = (feedKey) => {
+    const removedUrl = videoFeedUrls.current[feedKey];
+    const remaining = loadedFeeds.filter((feed) => feed.key !== feedKey);
+    setVideoFeeds((current) => ({
+      ...current,
+      [feedKey]: { ...current[feedKey], src: null, fileName: "" },
+    }));
+    delete videoFeedRefs.current[feedKey];
+    delete videoFeedUrls.current[feedKey];
+    if (feedKey === activeFeedKey) {
+      const next = remaining[0];
+      pendingMasterTimeRef.current = Math.max(0, playheadS - videoOffset);
+      setActiveFeedKey(next?.key || "composite");
+      setVideoSrc(next?.src || null);
+      setVideoDuration(0);
+    }
+    if (removedUrl) URL.revokeObjectURL(removedUrl);
+    if (remaining.length <= 1) setVideoLayout("single");
   };
 
   // Sync video → playhead
@@ -634,19 +734,50 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     if (!v) return;
     const sessionTime = v.currentTime + videoOffset;
     setPlayheadS(sessionTime);
-  }, [videoOffset]);
+    syncSecondaryVideos(v.currentTime, !v.paused);
+  }, [syncSecondaryVideos, videoOffset]);
 
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+    const handlePlay = () => {
+      setIsPlaying(true);
+      syncSecondaryVideos(v.currentTime, true);
+    };
+    const handlePause = () => {
+      setIsPlaying(false);
+      syncSecondaryVideos(v.currentTime, false);
+    };
+    const handleLoadedMetadata = () => {
+      const desiredTime = pendingMasterTimeRef.current;
+      if (Number.isFinite(desiredTime)) {
+        v.currentTime = Math.min(desiredTime, v.duration || desiredTime);
+        pendingMasterTimeRef.current = null;
+      }
+      setVideoDuration(v.duration);
+      v.playbackRate = playbackSpeed;
+      syncSecondaryVideos(v.currentTime, false);
+    };
     v.addEventListener("timeupdate", handleTimeUpdate);
-    v.addEventListener("play", () => setIsPlaying(true));
-    v.addEventListener("pause", () => setIsPlaying(false));
-    v.addEventListener("loadedmetadata", () => setVideoDuration(v.duration));
+    v.addEventListener("play", handlePlay);
+    v.addEventListener("pause", handlePause);
+    v.addEventListener("loadedmetadata", handleLoadedMetadata);
     return () => {
       v.removeEventListener("timeupdate", handleTimeUpdate);
+      v.removeEventListener("play", handlePlay);
+      v.removeEventListener("pause", handlePause);
+      v.removeEventListener("loadedmetadata", handleLoadedMetadata);
     };
-  }, [handleTimeUpdate, videoSrc]);
+  }, [handleTimeUpdate, playbackSpeed, syncSecondaryVideos, videoSrc]);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    syncSecondaryVideos(videoRef.current.currentTime, !videoRef.current.paused);
+  }, [syncSecondaryVideos, videoLayout]);
+
+  useEffect(() => () => {
+    Object.values(videoFeedUrls.current).forEach((url) => URL.revokeObjectURL(url));
+  }, []);
 
   // Scroll-to-top
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -674,7 +805,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         e.preventDefault();
         const direction = e.code === "ArrowLeft" ? -1 : 1;
         const jumpS = e.shiftKey ? 30 : 5;
-        videoRef.current.currentTime = Math.max(0, Math.min(videoDuration || Infinity, videoRef.current.currentTime + (direction * jumpS)));
+        setSynchronizedVideoTime(Math.max(0, Math.min(videoDuration || Infinity, videoRef.current.currentTime + (direction * jumpS))));
       }
 
       // S: pause video + open event form at current playhead (if not already open)
@@ -693,7 +824,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingNew, playheadS, lastUsedCat, videoDuration]);
+  }, [addingNew, playheadS, lastUsedCat, setSynchronizedVideoTime, videoDuration]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
@@ -701,27 +832,21 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     const sessionT = Number(data.activeLabel);
     setPlayheadS(sessionT);
     const videoT = Math.max(0, sessionT - videoOffset);
-    if (videoRef.current) {
-      videoRef.current.currentTime = videoT;
-    }
-  }, [videoOffset]);
+    setSynchronizedVideoTime(videoT);
+  }, [setSynchronizedVideoTime, videoOffset]);
 
   // Click event note → seek to it
   const seekToEvent = (ev, idx) => {
     setActiveEventIdx(idx);
     setPlayheadS(ev.time_s);
     const videoT = Math.max(0, ev.time_s - videoOffset);
-    if (videoRef.current) {
-      videoRef.current.currentTime = videoT;
-    }
+    setSynchronizedVideoTime(videoT);
   };
 
   const seekToMotionPeak = (timeS) => {
     setPlayheadS(timeS);
     const videoT = Math.max(0, timeS - videoOffset);
-    if (videoRef.current) {
-      videoRef.current.currentTime = videoT;
-    }
+    setSynchronizedVideoTime(videoT);
   };
 
   const togglePlay = () => {
@@ -733,12 +858,17 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const stepFrames = (seconds) => {
     const v = videoRef.current;
     if (!v) return;
-    v.currentTime = Math.max(0, v.currentTime + seconds);
+    setSynchronizedVideoTime(Math.max(0, v.currentTime + seconds));
   };
 
   const setSpeed = (speed) => {
     setPlaybackSpeed(speed);
     if (videoRef.current) videoRef.current.playbackRate = speed;
+    loadedFeeds.forEach((feed) => {
+      if (feed.key !== activeFeedKey && videoFeedRefs.current[feed.key]) {
+        videoFeedRefs.current[feed.key].playbackRate = speed;
+      }
+    });
   };
 
   const handleWidthDragStart = useCallback((e) => {
@@ -770,7 +900,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     if (!v || !videoDuration) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    v.currentTime = frac * videoDuration;
+    setSynchronizedVideoTime(frac * videoDuration);
   };
 
   const currentHR = useMemo(() => nearestHR(chartData, playheadS), [chartData, playheadS]);
@@ -782,6 +912,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   }, [chartData, xDomain]);
 
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
+  const hasPromotedMotionEvents = events.some((event) => event.source === "motion_derived");
   const visibleEventEntries = useMemo(() => events
     .map((ev, i) => ({ ev, i }))
     .filter(({ ev }) => (
@@ -790,6 +921,9 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     )), [events, selectedEventFilters]);
   const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
+  const displayedFeeds = videoLayout === "multi"
+    ? loadedFeeds
+    : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -949,12 +1083,90 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
           onClick={() => fileInputRef.current?.click()}
           className="text-xs px-3 py-1.5 rounded-lg bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
         >
-          {videoSrc ? "Change Video" : "Load Local Video"}
+          {videoFeeds.composite.src ? "Change Composite Video" : "Load Composite / PiP Video"}
         </button>
-        <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleFileLoad} />
+        <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, "composite")} />
       </div>
 
       <div className="p-4 space-y-4">
+        <div className="rounded-lg border border-border bg-muted/15 p-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Local Video Feeds</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Use one composite picture-in-picture recording or load separate angles. Files remain local to this browser review.
+              </p>
+            </div>
+            {loadedFeeds.length > 1 && (
+              <div className="inline-flex rounded-lg border border-border bg-background p-1">
+                <button
+                  type="button"
+                  onClick={() => setVideoLayout("single")}
+                  className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${videoLayout === "single" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+                >
+                  One View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVideoLayout("multi")}
+                  className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${videoLayout === "multi" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+                >
+                  Side by Side
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="grid gap-2 lg:grid-cols-2 2xl:grid-cols-4">
+            {VIDEO_FEED_SLOTS.map((slot) => {
+              const feed = videoFeeds[slot.key];
+              const isMaster = feed.src && activeFeedKey === slot.key;
+              return (
+                <div key={slot.key} className={`rounded-lg border p-2.5 ${isMaster ? "border-primary/40 bg-primary/[0.06]" : "border-border bg-card/50"}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-foreground">{feed.label || slot.label}</p>
+                    {isMaster && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">Master</span>}
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">{slot.description}</p>
+                  {feed.src ? (
+                    <>
+                      <input
+                        value={feed.label}
+                        onChange={(event) => renameFeed(slot.key, event.target.value)}
+                        className="mt-2 h-7 w-full rounded border border-border bg-background px-2 text-[11px] text-foreground"
+                        aria-label={`Rename ${slot.label}`}
+                      />
+                      <p className="mt-1 truncate text-[10px] text-muted-foreground">{feed.fileName}</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {!isMaster && (
+                          <button type="button" onClick={() => selectMasterFeed(slot.key)} className="rounded-md border border-primary/25 px-2 py-1 text-[10px] font-medium text-primary">
+                            Use as master
+                          </button>
+                        )}
+                        <label className="cursor-pointer rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                          Replace
+                          <input type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, slot.key)} />
+                        </label>
+                        <button type="button" onClick={() => removeFeed(slot.key)} className="rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-destructive">
+                          Remove
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <label className="mt-3 flex cursor-pointer items-center justify-center rounded-md border border-dashed border-border px-2 py-2 text-[10px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary">
+                      Load local video
+                      <input type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, slot.key)} />
+                    </label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {loadedFeeds.length > 1 && (
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              The master feed controls playback, seeking, event placement, and telemetry alignment. Other angles follow the same local timestamp and remain muted.
+            </p>
+          )}
+        </div>
         <div ref={layoutRef} className="flex flex-col xl:flex-row gap-4 items-start">
           {/* Video player */}
           <div
@@ -964,16 +1176,42 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         {videoSrc ? (
           <div className="space-y-3">
             <div
-              className="w-full rounded-lg bg-black overflow-hidden"
+              className={`w-full rounded-lg bg-black overflow-hidden ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
               style={{ height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
             >
-              <video
-                ref={videoRef}
-                src={videoSrc}
-                className="w-full h-full object-contain cursor-pointer"
-                playsInline
-                onClick={() => videoRef.current && (videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause())}
-              />
+              {displayedFeeds.map((feed) => {
+                const isMaster = feed.key === activeFeedKey;
+                return (
+                  <div key={feed.key} className="relative flex min-h-0 min-w-0 items-center justify-center bg-black">
+                    <video
+                      ref={isMaster
+                        ? videoRef
+                        : (element) => { videoFeedRefs.current[feed.key] = element; }}
+                      src={feed.src}
+                      muted={!isMaster}
+                      className="h-full w-full object-contain cursor-pointer"
+                      playsInline
+                      onClick={() => {
+                        if (isMaster) togglePlay();
+                        else selectMasterFeed(feed.key);
+                      }}
+                    />
+                    <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded bg-black/65 px-2 py-1 text-[10px] font-medium text-white">
+                      {feed.label}
+                      {isMaster && <span className="text-primary">Master</span>}
+                    </div>
+                    {!isMaster && (
+                      <button
+                        type="button"
+                        onClick={() => selectMasterFeed(feed.key)}
+                        className="absolute bottom-2 right-2 rounded bg-black/70 px-2 py-1 text-[10px] font-medium text-white hover:bg-primary"
+                      >
+                        Make master
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <div className="flex flex-col md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
               <label className="flex items-center gap-3 flex-1 min-w-[220px]">
@@ -1085,8 +1323,8 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
             className="w-full h-32 rounded-xl border-2 border-dashed border-border flex flex-col items-center justify-center gap-2 text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors"
           >
             <Video className="w-8 h-8" />
-            <span className="text-sm font-medium">Load local video file</span>
-            <span className="text-xs">Syncs playhead with HR and events</span>
+            <span className="text-sm font-medium">Load composite / picture-in-picture video</span>
+            <span className="text-xs">Or use the feed slots above for separate synchronized angles</span>
           </button>
         )}
           </div>
@@ -1228,6 +1466,11 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
 
             {savedMotionSummary && (
               <>
+                {!hasPromotedMotionEvents && (
+                  <div className="rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2 text-[11px] leading-relaxed text-amber-200">
+                    Motion telemetry is saved for this session, but no reviewed motion candidates have been promoted to timeline events. The Movement and Context filters show promoted event notes only.
+                  </div>
+                )}
                 <MotionPlaybackReadout
                   summary={savedMotionSummary}
                   playbackTime={playheadS}

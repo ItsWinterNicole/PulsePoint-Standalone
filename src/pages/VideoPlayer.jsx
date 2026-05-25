@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RefreshCw } from "lucide-react";
 import moment from "moment";
 
 export default function VideoPlayer() {
@@ -48,6 +49,11 @@ export default function VideoPlayer() {
     setTimelineRows(rows);
     setLoadingSession(false);
   };
+
+  const refreshSelectedRecord = async () => {
+    if (!selectedId) return;
+    await handleSelectRecord(selectedId);
+  };
   const records = recordType === "body_exploration" ? explorations : sessions;
 
   return (
@@ -59,9 +65,22 @@ export default function VideoPlayer() {
         <div className="bg-card rounded-xl border border-border p-4 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Select Record</p>
-            <div className="inline-flex rounded-lg border border-border bg-background p-1">
-              <button type="button" onClick={() => handleRecordTypeChange("session")} className={`rounded-md px-3 py-1 text-xs font-medium ${recordType === "session" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Sessions</button>
-              <button type="button" onClick={() => handleRecordTypeChange("body_exploration")} className={`rounded-md px-3 py-1 text-xs font-medium ${recordType === "body_exploration" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Body Exploration</button>
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedId && (
+                <button
+                  type="button"
+                  onClick={refreshSelectedRecord}
+                  disabled={loadingSession}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loadingSession ? "animate-spin" : ""}`} />
+                  Refresh selected
+                </button>
+              )}
+              <div className="inline-flex rounded-lg border border-border bg-background p-1">
+                <button type="button" onClick={() => handleRecordTypeChange("session")} className={`rounded-md px-3 py-1 text-xs font-medium ${recordType === "session" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Sessions</button>
+                <button type="button" onClick={() => handleRecordTypeChange("body_exploration")} className={`rounded-md px-3 py-1 text-xs font-medium ${recordType === "body_exploration" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Body Exploration</button>
+              </div>
             </div>
           </div>
           {loading ? (

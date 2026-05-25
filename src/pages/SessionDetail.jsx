@@ -1008,7 +1008,7 @@ export default function SessionDetail() {
               />
               {s.motion_analysis_summary && (
                 <div className="space-y-2 border-t border-border pt-3">
-                  <SavedMotionSummaryCard summary={s.motion_analysis_summary} compact />
+                  <SavedMotionSummaryCard summary={s.motion_analysis_summary} compact showBalanceGauge={false} />
                   <Button
                     type="button"
                     variant="outline"
