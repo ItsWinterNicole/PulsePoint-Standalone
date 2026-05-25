@@ -72,6 +72,7 @@ MOTION INTERPRETATION RULES:
 
 EVIDENCE PRECEDENCE HIERARCHY FOR MOVEMENT:
 - Saved motion telemetry has precedence for visible lower-body movement timing, left/right comparison, asymmetry, cadence proxy, and motion peaks.
+- User-verified motion-derived events have been visually reviewed and may be treated as stronger observational evidence than unverified motion-derived events. Verification does not establish intent, force, neurological mechanism, or physiological cause.
 - For stimulation pause/resume timing and pause duration, explicit manually entered timeline events tagged stimulation_paused or stimulation_resumed take priority over motion-derived hand pause/resume candidates. Hand tracking can miss or misclassify activity, so use motion-derived pauses only as secondary corroboration when manual pause/resume events exist.
 - If there are no explicit manually entered stimulation pause/resume events, describe motion-derived pauses only as observed hand-activity gap candidates, not confirmed stimulation pauses.
 - Manual notes remain valuable when they add context motion cannot infer, such as repositioning, method changes, breathing changes, subjective sensation, or interruption.

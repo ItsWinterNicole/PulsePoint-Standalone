@@ -21,6 +21,28 @@ export function getManualStimulationPauseResumeEvents(session) {
   ));
 }
 
+export function getMotionPauseResumeEvents(session) {
+  return getMotionDerivedEvents(session).filter((event) => (
+    eventCategories(event).some((category) => ["motion_pause", "motion_resume"].includes(category))
+    || /\b(hand activity pause|hand activity resumed|hand inactivity|resumption candidate)\b/i.test(String(event?.note || ""))
+  ));
+}
+
+export function hasMotionPauseResumeEvidence(session) {
+  return getMotionPauseResumeEvents(session).length > 0
+    || Number(session?.motion_analysis_summary?.hand_movement_summary?.pause_count || 0) > 0;
+}
+
+export function hasMixedPauseResumeEvidence(session) {
+  return getManualStimulationPauseResumeEvents(session).length > 0
+    && hasMotionPauseResumeEvidence(session);
+}
+
+export function isVerifiedMotionEvent(event) {
+  return event?.source === "motion_derived"
+    && ["reviewed_verified", "reviewed_adjusted"].includes(event?.verification_status);
+}
+
 export function hasPromotedMotionEvents(session) {
   return getMotionDerivedEvents(session).length > 0;
 }
@@ -68,9 +90,9 @@ export function getMotionEvidenceFreshnessKey(session) {
       quality: motion.quality_indicators || null,
     }),
     timeline.length,
-    timeline.map((event) => `${event.source || "legacy"}:${event.time_s || 0}:${event.note || ""}`).join("|"),
+    timeline.map((event) => `${event.source || "legacy"}:${event.time_s || 0}:${event.verification_status || ""}:${event.verified_at || ""}:${event.note || ""}`).join("|"),
     promoted.length,
-    promoted.map((event) => `${event.time_s || 0}:${event.note || ""}`).join("|"),
+    promoted.map((event) => `${event.time_s || 0}:${event.verification_status || ""}:${event.verified_at || ""}:${event.note || ""}`).join("|"),
   ].join("::");
 }
 
@@ -78,6 +100,8 @@ export function getMotionEvidenceSummary(session) {
   const motion = session?.motion_analysis_summary || {};
   const promotedEvents = getMotionDerivedEvents(session);
   const manualStimulationPauseResumeEvents = getManualStimulationPauseResumeEvents(session);
+  const motionPauseResumeEvents = getMotionPauseResumeEvents(session);
+  const verifiedPromotedEvents = promotedEvents.filter(isVerifiedMotionEvent);
   const hasSavedTelemetry = hasSavedMotionTelemetry(session);
   const hasPromotedEvents = promotedEvents.length > 0;
   const sourceTypes = [
@@ -93,8 +117,13 @@ export function getMotionEvidenceSummary(session) {
     analyzedAt: motion.analyzed_at || null,
     promotedEventCount: promotedEvents.length,
     promotedEvents,
+    verifiedPromotedEventCount: verifiedPromotedEvents.length,
+    verifiedPromotedEvents,
     manualStimulationPauseResumeCount: manualStimulationPauseResumeEvents.length,
     manualStimulationPauseResumeEvents,
+    motionPauseResumeCount: motionPauseResumeEvents.length,
+    motionPauseResumeEvents,
+    hasMixedPauseResumeEvidence: manualStimulationPauseResumeEvents.length > 0 && hasMotionPauseResumeEvidence(session),
     savedFindingCount: rows(motion.findings).length,
     reviewPeakCount: rows(motion.review_peaks).length,
     hasDerivedTimeline: rows(motion.derived_timeline).length > 0,
@@ -155,8 +184,16 @@ export function getMotionEvidenceDigest(session) {
     evidence.findings.slice(0, 4).forEach((finding) => lines.push(`Saved finding: ${finding}`));
   }
   if (evidence.hasPromotedEvents) {
+    if (evidence.verifiedPromotedEventCount) {
+      lines.push("User-verified motion-derived events have been visually reviewed and may be treated as stronger observational evidence than unverified motion-derived events. They remain observational evidence only and do not prove intent, force, neurological mechanism, or physiological cause.");
+    }
     evidence.promotedEvents.slice(0, 8).forEach((event) => {
-      lines.push(`Promoted motion-derived event at ${event.time_s}s: ${event.note || "observational motion finding"}`);
+      const reviewStatus = event.verification_status === "reviewed_verified"
+        ? "user-verified"
+        : event.verification_status === "reviewed_adjusted"
+          ? "user-reviewed and adjusted"
+          : "unverified";
+      lines.push(`Promoted motion-derived event (${reviewStatus}) at ${event.time_s}s: ${event.note || "observational motion finding"}`);
     });
   }
   lines.push("Motion evidence is observational only; do not infer intent, arousal phase, force, neurological mechanism, or physiological cause from motion alone.");

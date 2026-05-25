@@ -15,6 +15,44 @@ const FEED_ROLES = [
   { value: "main", label: "Main Focus Camera" },
   { value: "lateral", label: "Lateral Angle" },
 ];
+const MOTION_LAB_PREVIEW_PREFERENCES_KEY = "pulsepoint.motionLab.previewPreferences.v1";
+const DEFAULT_FLOATING_PREVIEW_WIDTH = 608;
+const DEFAULT_FLOATING_PREVIEW_POSITION = { x: 16, y: 64 };
+
+function clampFloatingPreviewWidth(value) {
+  const viewportMax = typeof window === "undefined" ? DEFAULT_FLOATING_PREVIEW_WIDTH : Math.max(320, window.innerWidth - 32);
+  const parsed = Number(value);
+  return Math.min(viewportMax, Math.max(320, Number.isFinite(parsed) ? parsed : DEFAULT_FLOATING_PREVIEW_WIDTH));
+}
+
+function clampFloatingPreviewPosition(position, width = DEFAULT_FLOATING_PREVIEW_WIDTH, height = 220) {
+  if (typeof window === "undefined") return DEFAULT_FLOATING_PREVIEW_POSITION;
+  const x = Number(position?.x);
+  const y = Number(position?.y);
+  const maxX = Math.max(8, window.innerWidth - clampFloatingPreviewWidth(width) - 8);
+  const maxY = Math.max(8, window.innerHeight - Math.max(100, Number(height) || 220) - 8);
+  return {
+    x: Math.min(maxX, Math.max(8, Number.isFinite(x) ? x : DEFAULT_FLOATING_PREVIEW_POSITION.x)),
+    y: Math.min(maxY, Math.max(8, Number.isFinite(y) ? y : DEFAULT_FLOATING_PREVIEW_POSITION.y)),
+  };
+}
+
+function readPreviewPreferences() {
+  if (typeof window === "undefined") {
+    return { floating: false, width: DEFAULT_FLOATING_PREVIEW_WIDTH, position: DEFAULT_FLOATING_PREVIEW_POSITION };
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(MOTION_LAB_PREVIEW_PREFERENCES_KEY) || "{}");
+    const width = clampFloatingPreviewWidth(parsed.width);
+    return {
+      floating: parsed.floating === true,
+      width,
+      position: clampFloatingPreviewPosition(parsed.position, width),
+    };
+  } catch {
+    return { floating: false, width: DEFAULT_FLOATING_PREVIEW_WIDTH, position: DEFAULT_FLOATING_PREVIEW_POSITION };
+  }
+}
 
 function labelForSession(session) {
   return `${moment(session.date).format("MMM D, YYYY")}${session.start_time ? ` · ${session.start_time}` : ""}${session.duration_minutes ? ` · ${session.duration_minutes}m` : ""}`;
@@ -26,6 +64,7 @@ export default function MotionLab() {
   const videoRef = useRef(null);
   const videoUrlRef = useRef(null);
   const fileInputRef = useRef(null);
+  const previewRef = useRef(null);
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [selectedSession, setSelectedSession] = useState(null);
@@ -38,7 +77,43 @@ export default function MotionLab() {
   const [feedRole, setFeedRole] = useState("composite");
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [previewFloating, setPreviewFloating] = useState(false);
+  const [previewFloating, setPreviewFloating] = useState(() => readPreviewPreferences().floating);
+  const [floatingPreviewWidth, setFloatingPreviewWidth] = useState(() => readPreviewPreferences().width);
+  const [floatingPreviewPosition, setFloatingPreviewPosition] = useState(() => readPreviewPreferences().position);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MOTION_LAB_PREVIEW_PREFERENCES_KEY, JSON.stringify({
+        floating: previewFloating,
+        width: clampFloatingPreviewWidth(floatingPreviewWidth),
+        position: floatingPreviewPosition,
+      }));
+    } catch {
+      // UI preferences are optional; storage restrictions should not block analysis.
+    }
+  }, [floatingPreviewPosition, floatingPreviewWidth, previewFloating]);
+
+  useEffect(() => {
+    const clampAfterResize = () => {
+      setFloatingPreviewWidth((current) => clampFloatingPreviewWidth(current));
+      setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
+        current,
+        floatingPreviewWidth,
+        previewRef.current?.getBoundingClientRect().height,
+      ));
+    };
+    window.addEventListener("resize", clampAfterResize);
+    return () => window.removeEventListener("resize", clampAfterResize);
+  }, [floatingPreviewWidth]);
+
+  useEffect(() => {
+    if (!previewFloating) return;
+    setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
+      current,
+      floatingPreviewWidth,
+      previewRef.current?.getBoundingClientRect().height,
+    ));
+  }, [floatingPreviewWidth, previewFloating]);
 
   useEffect(() => {
     base44.entities.Session.list("-date", 300)
@@ -135,6 +210,49 @@ export default function MotionLab() {
     setVideoTime(Number(timeS) || 0);
   };
 
+  const beginFloatingResize = (event) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = floatingPreviewWidth;
+    const onPointerMove = (moveEvent) => {
+      const nextWidth = clampFloatingPreviewWidth(startWidth + moveEvent.clientX - startX);
+      setFloatingPreviewWidth(nextWidth);
+      setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
+        current,
+        nextWidth,
+        previewRef.current?.getBoundingClientRect().height,
+      ));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
+  const beginFloatingDrag = (event) => {
+    if (!previewFloating) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startPosition = floatingPreviewPosition;
+    const onPointerMove = (moveEvent) => {
+      setFloatingPreviewPosition(clampFloatingPreviewPosition({
+        x: startPosition.x + moveEvent.clientX - startX,
+        y: startPosition.y + moveEvent.clientY - startY,
+      }, floatingPreviewWidth, previewRef.current?.getBoundingClientRect().height));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
   const evidence = getMotionEvidenceSummary(selectedSession);
 
   return (
@@ -212,13 +330,28 @@ export default function MotionLab() {
 
           <section className="space-y-4">
             {videoSrc ? (
-              <div className={`rounded-xl border border-border bg-card p-4 space-y-3 ${
+              <div
+                ref={previewRef}
+                className={`rounded-xl border border-border bg-card p-4 space-y-3 ${
                 previewFloating
-                  ? "fixed bottom-4 right-4 z-50 min-h-[12rem] min-w-[18rem] max-h-[calc(100vh-5rem)] max-w-[calc(100vw-2rem)] w-[min(38rem,calc(100vw-2rem))] resize overflow-auto border-primary/35 shadow-2xl"
+                  ? "fixed z-[60] min-w-[20rem] max-w-[calc(100vw-2rem)] border-primary/35 shadow-2xl"
                   : ""
-              }`}>
+                }`}
+                style={previewFloating ? {
+                  width: `min(${floatingPreviewWidth}px, calc(100vw - 2rem))`,
+                  left: `${floatingPreviewPosition.x}px`,
+                  top: `${floatingPreviewPosition.y}px`,
+                } : undefined}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Processing Preview</p>
+                  <div
+                    onPointerDown={beginFloatingDrag}
+                    className={`${previewFloating ? "touch-none cursor-move select-none rounded-md border border-transparent px-1.5 py-1 hover:border-primary/20 hover:bg-primary/[0.05]" : ""}`}
+                    title={previewFloating ? "Drag to move preview" : undefined}
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Processing Preview</p>
+                    {previewFloating && <p className="text-[9px] text-muted-foreground">Drag to move</p>}
+                  </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
@@ -237,7 +370,7 @@ export default function MotionLab() {
                 </div>
                 {previewFloating && (
                   <p className="text-[10px] text-muted-foreground">
-                    Drag the lower-right corner to resize. Video seeking remains available in the player controls.
+                    Drag the header to move; drag the resize grip below to resize. Video seeking remains available in the player controls.
                   </p>
                 )}
                 <video
@@ -249,8 +382,26 @@ export default function MotionLab() {
                   onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)}
                   onPlay={() => setVideoPlaying(true)}
                   onPause={() => setVideoPlaying(false)}
-                  onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
+                  onLoadedMetadata={(event) => {
+                    setVideoDuration(event.currentTarget.duration || 0);
+                    setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
+                      current,
+                      floatingPreviewWidth,
+                      previewRef.current?.getBoundingClientRect().height,
+                    ));
+                  }}
                 />
+                {previewFloating && (
+                  <button
+                    type="button"
+                    onPointerDown={beginFloatingResize}
+                    className="ml-auto flex h-5 w-20 touch-none cursor-ew-resize items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-[9px] font-semibold uppercase tracking-wider text-primary hover:bg-primary/20"
+                    aria-label="Drag to resize floating preview"
+                    title="Drag horizontally to resize preview"
+                  >
+                    Resize
+                  </button>
+                )}
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-border bg-card p-12 text-center text-sm text-muted-foreground">

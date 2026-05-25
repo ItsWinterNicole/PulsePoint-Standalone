@@ -155,7 +155,21 @@ function AnnotationTagPill({ value }) {
   );
 }
 
-function MotionDerivedBadge() {
+function MotionDerivedBadge({ event }) {
+  if (event?.verification_status === "reviewed_verified") {
+    return (
+      <span className="inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0 text-[8px] font-medium text-emerald-300">
+        Verified
+      </span>
+    );
+  }
+  if (event?.verification_status === "reviewed_adjusted") {
+    return (
+      <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0 text-[8px] font-medium text-amber-300">
+        Reviewed / adjusted
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0 text-[8px] font-medium text-primary">
       Motion-derived
@@ -1322,7 +1336,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                         </span>
                       );
                     })}
-                    {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge />}
+                    {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge event={closestVisibleEvent.ev} />}
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-white/90">
                     {closestVisibleEvent.ev.note || "Event note"}
@@ -1740,7 +1754,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                                 </span>
                               );
                             })}
-                            {ev.source === "motion_derived" && <MotionDerivedBadge />}
+                            {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
                           </div>
                           {annotationTags.length > 0 && (
                             <div className="mb-0.5 flex flex-wrap gap-0.5">
@@ -1799,7 +1813,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                               </span>
                             );
                           })}
-                          {ev.source === "motion_derived" && <MotionDerivedBadge />}
+                          {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
                         </div>
                         {annotationTags.length > 0 && (
                           <div className="flex flex-wrap gap-0.5">
@@ -1903,7 +1917,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                           </span>
                         );
                       })}
-                      {ev.source === "motion_derived" && <MotionDerivedBadge />}
+                      {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
                     </div>
                     {annotationTags.length > 0 && (
                       <div className="mb-0.5 flex flex-wrap gap-0.5">

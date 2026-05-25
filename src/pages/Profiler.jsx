@@ -56,6 +56,7 @@ const MOTION_EVIDENCE_PRECEDENCE_RULE = `
 MOVEMENT EVIDENCE PRECEDENCE RULE (apply only when saved media-derived motion evidence exists):
 - For visible movement interpretation, prioritize saved MediaPipe-derived motion telemetry over vague or conflicting movement-only notes.
 - Media-derived evidence may support observational synthesis of lower-body movement timing, left/right activity comparison, asymmetry, forefoot or toe-region activity proxies, hand-movement cadence proxy, provisional hand-activity gap/resumption candidates, movement clustering, and confidence or reliability limitations.
+- User-verified motion-derived events have been visually reviewed and may be treated as stronger observational evidence than unverified motion-derived events. They remain observational evidence only and do not establish intent, force, neurological mechanism, or physiological cause.
 - For stimulation pause/resume timing and pause duration, explicit manually entered timeline events tagged stimulation_paused or stimulation_resumed take priority. Treat motion-derived hand pause/resume candidates as secondary corroboration because hand visibility and tracking may be imperfect.
 - If manual stimulation pause/resume entries are absent, describe motion pause/resume evidence only as observed hand-activity gap or resumption candidates, not confirmed stimulation timing.
 - Manual notes remain valuable when they contribute context that motion telemetry cannot know, including repositioning, method or grip change, breathing changes, interruption, subjective sensation, threshold behavior explicitly noted by the person, or environmental context.
@@ -254,7 +255,7 @@ function compactSessionLine(s) {
   ].filter(Boolean).join("/");
   const events = (s.event_timeline || [])
     .slice(0, 4)
-    .map((e) => `${fmtSec(e.time_s)}${e.source === "motion_derived" ? " [motion-derived observation]" : ""} ${briefText(e.note, 70)}`)
+    .map((e) => `${fmtSec(e.time_s)}${e.source === "motion_derived" ? ` [motion-derived observation${e.verification_status === "reviewed_verified" ? ", user-verified" : e.verification_status === "reviewed_adjusted" ? ", user-reviewed and adjusted" : ", unverified"}]` : ""} ${briefText(e.note, 70)}`)
     .join(" | ");
   const manualPauseResumeEvents = getManualStimulationPauseResumeEvents(s)
     .map((event) => `${fmtSec(event.time_s)} ${(Array.isArray(event.category) ? event.category : [event.category]).includes("stimulation_paused") ? "stimulation paused" : "stimulation resumed"}`)

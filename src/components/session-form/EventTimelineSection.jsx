@@ -63,7 +63,21 @@ function CategoryPill({ value, small }) {
   );
 }
 
-function MotionDerivedBadge() {
+function MotionDerivedBadge({ event }) {
+  if (event?.verification_status === "reviewed_verified") {
+    return (
+      <span className="inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0 text-[9px] font-medium text-emerald-300">
+        Verified
+      </span>
+    );
+  }
+  if (event?.verification_status === "reviewed_adjusted") {
+    return (
+      <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0 text-[9px] font-medium text-amber-300">
+        Reviewed / adjusted
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0 text-[9px] font-medium text-primary">
       Motion-derived
@@ -155,7 +169,7 @@ function EventRow({ ev, idx, onRemove, onUpdate, categories }) {
         <div className="flex flex-wrap gap-1 mb-0.5">
           {cats.map((c) => <CategoryPill key={c} value={c} small />)}
           {cats.length === 0 && <CategoryPill value="other" small />}
-          {ev.source === "motion_derived" && <MotionDerivedBadge />}
+          {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
         </div>
         <p className="text-sm text-foreground leading-snug whitespace-pre-wrap">{ev.note}</p>
       </div>

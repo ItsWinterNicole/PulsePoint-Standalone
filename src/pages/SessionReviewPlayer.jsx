@@ -30,7 +30,21 @@ function getCategoryMeta(value) {
     || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
 
-function MotionDerivedBadge() {
+function MotionDerivedBadge({ event }) {
+  if (event?.verification_status === "reviewed_verified") {
+    return (
+      <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300">
+        Verified
+      </span>
+    );
+  }
+  if (event?.verification_status === "reviewed_adjusted") {
+    return (
+      <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300">
+        Reviewed / adjusted
+      </span>
+    );
+  }
   return (
     <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">
       Motion-derived
@@ -477,7 +491,7 @@ export default function SessionReviewPlayer() {
                             </span>
                           );
                         })}
-                        {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge />}
+                        {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge event={currentReviewEvent.event} />}
                       </div>
                       <p className="truncate text-sm text-foreground">{currentReviewEvent.event.note || "Event note"}</p>
                     </div>
@@ -647,7 +661,7 @@ export default function SessionReviewPlayer() {
                     <button key={`${event.time_s}-${index}`} type="button" onClick={() => handleSelectEventIndex(index)} className="block w-full rounded-lg border border-border bg-muted/15 px-2.5 py-2 text-left hover:border-primary/40">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-[11px] font-semibold text-primary">{formatTime(event.time_s)}</span>
-                        {event.source === "motion_derived" && <MotionDerivedBadge />}
+                        {event.source === "motion_derived" && <MotionDerivedBadge event={event} />}
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-foreground">{event.note}</p>
                     </button>
@@ -835,7 +849,7 @@ export default function SessionReviewPlayer() {
                               </span>
                             );
                           })}
-                          {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge />}
+                          {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge event={currentReviewEvent.event} />}
                         </div>
                         <p className="text-sm leading-relaxed text-foreground">
                           {currentReviewEvent.event.note || "Event note"}
@@ -991,7 +1005,7 @@ export default function SessionReviewPlayer() {
                                         </span>
                                       );
                                     })}
-                                    {event.source === "motion_derived" && <MotionDerivedBadge />}
+                                    {event.source === "motion_derived" && <MotionDerivedBadge event={event} />}
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
                                     <span>{formatTime(event.time_s)}</span>

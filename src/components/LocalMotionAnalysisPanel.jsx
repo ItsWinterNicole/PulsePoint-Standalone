@@ -148,6 +148,15 @@ function findRoiResizeCorner(point, roi) {
   ))?.[0] || null;
 }
 
+function pointInsideRoi(point, roi) {
+  return Boolean(roi) && (
+    point.x >= roi.x
+    && point.x <= roi.x + roi.width
+    && point.y >= roi.y
+    && point.y <= roi.y + roi.height
+  );
+}
+
 function resizeRoiFromCorner(roi, corner, point) {
   let left = roi.x;
   let top = roi.y;
@@ -1334,6 +1343,7 @@ function motionSuggestionEvent(suggestion) {
       category: ["movement_observed"],
       annotation_tags: ["lower_body", "motion_derived"],
       source: "motion_derived",
+      verification_status: "unverified",
       motion_evidence: {
         candidate_id: suggestion.pairId,
         suggestion_type: suggestion.type,
@@ -1356,6 +1366,7 @@ function motionSuggestionEvent(suggestion) {
     category: [isPause ? "motion_pause" : "motion_resume"],
     annotation_tags: ["other_context"],
     source: "motion_derived",
+    verification_status: "unverified",
     motion_evidence: {
       candidate_id: suggestion.pairId,
       suggestion_type: suggestion.type,
@@ -1970,11 +1981,21 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     if (!start) return;
     const selectedRoi = rois[activeRoi];
     const resizeCorner = selectedRoi ? findRoiResizeCorner(start, selectedRoi) : null;
-    const movingKey = !resizeCorner && selectedRoi
-      && start.x >= selectedRoi.x && start.x <= selectedRoi.x + selectedRoi.width
-      && start.y >= selectedRoi.y && start.y <= selectedRoi.y + selectedRoi.height
-      ? activeRoi
-      : null;
+    const visibleRoiKeys = [
+      "leftLowerBody",
+      "rightLowerBody",
+      ...(forefootEnabled && lowerBodyMethod === "regionMotion" ? ["leftForefoot", "rightForefoot"] : []),
+      "hands",
+    ];
+    const clickedKey = !resizeCorner
+      ? visibleRoiKeys
+        .filter((key) => pointInsideRoi(start, rois[key]))
+        .sort((first, second) => (
+          (rois[first].width * rois[first].height) - (rois[second].width * rois[second].height)
+        ))[0] || null
+      : activeRoi;
+    const movingKey = !resizeCorner ? clickedKey : null;
+    if (clickedKey && clickedKey !== activeRoi) setActiveRoi(clickedKey);
     const initialRoi = resizeCorner ? selectedRoi : movingKey ? rois[movingKey] : null;
     roiDragStartRef.current = start;
     const onMove = (moveEvent) => {
@@ -2721,7 +2742,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           </button>
           <span className="text-[11px] text-muted-foreground">
             {roiFrameReady
-              ? roiLayout === "pip" ? "Choose the region to edit first. Drag its white corner handles to resize, drag inside to move it, or drag elsewhere to redraw it." : "The full frame will be analyzed."
+              ? roiLayout === "pip" ? "Click any rectangle to select it, drag inside to move it, use white corner handles to resize, or drag elsewhere to redraw the selected region." : "The full frame will be analyzed."
               : "Load a local video, then capture a frame to adjust the regions."}
           </span>
         </div>
@@ -2787,7 +2808,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
-              These colored rectangles are the exact crop regions used for the next analysis. White corner handles resize the selected region; anatomical left/right assignment is shown above.
+              These colored rectangles are the exact crop regions used for the next analysis. Click a rectangle to select it; white corner handles resize the selected region. Anatomical left/right assignment is shown above.
             </p>
           </div>
         )}

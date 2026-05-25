@@ -34,6 +34,7 @@ import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
+import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -84,13 +85,16 @@ function getEventCategories(event) {
 
 function EventNotesPanel({
   events = [],
+  motionSummary,
   selectedIndex,
   onSelect,
+  onUpdateMotionVerification,
   title = "Timeline Notes",
   helper = "Click a note to highlight its pin.",
   maxHeight = true,
 }) {
   const [filter, setFilter] = useState("all");
+  const showPausePrecedenceNote = hasMixedPauseResumeEvidence({ event_timeline: events, motion_analysis_summary: motionSummary });
   const filteredEvents = events
     .map((event, index) => ({ event, index }))
     .filter(({ event }) => {
@@ -139,44 +143,74 @@ function EventNotesPanel({
           </button>
         ))}
       </div>
+      {showPausePrecedenceNote && (
+        <div className="rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          Manual pause/resume annotations are used as primary stimulation timing evidence. Motion-derived hand pauses are supporting visual evidence because hand tracking may be incomplete.
+        </div>
+      )}
       <div className="space-y-1.5">
         {filteredEvents.map(({ event, index }) => {
           const categories = getEventCategories(event);
           const primary = _getCategoryMeta(categories[0]);
           const selected = selectedIndex === index;
+          const verified = isVerifiedMotionEvent(event);
           return (
-            <button
+            <div
               key={`${event.time_s}-${index}`}
-              type="button"
-              onClick={() => onSelect(selected ? null : index)}
-              className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+              className={`w-full rounded-lg border px-3 py-2 transition-colors ${
                 selected ? "bg-primary/10 border-primary/50" : "bg-card/50 border-border hover:border-primary/40"
               }`}
             >
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold" style={{ color: primary.color }}>{_fmtMmSs(event.time_s)}</span>
-                <div className="flex flex-wrap gap-1">
-                  {categories.map((category) => {
-                    const meta = _getCategoryMeta(category);
-                    return (
-                      <span
-                        key={category}
-                        className="rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
-                        style={{ color: meta.color, borderColor: `${meta.color}55`, background: `${meta.color}18` }}
-                      >
-                        {meta.label}
+              <button type="button" onClick={() => onSelect(selected ? null : index)} className="w-full text-left">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs font-bold" style={{ color: primary.color }}>{_fmtMmSs(event.time_s)}</span>
+                  <div className="flex flex-wrap gap-1">
+                    {categories.map((category) => {
+                      const meta = _getCategoryMeta(category);
+                      return (
+                        <span
+                          key={category}
+                          className="rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+                          style={{ color: meta.color, borderColor: `${meta.color}55`, background: `${meta.color}18` }}
+                        >
+                          {meta.label}
+                        </span>
+                      );
+                    })}
+                    {event.source === "motion_derived" && (
+                      <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                        Motion-derived
                       </span>
-                    );
-                  })}
-                  {event.source === "motion_derived" && (
-                    <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                      Motion-derived
-                    </span>
+                    )}
+                    {verified && (
+                      <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                        event.verification_status === "reviewed_verified"
+                          ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                          : "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                      }`}>
+                        {event.verification_status === "reviewed_verified" ? "Verified" : "Reviewed / adjusted"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="mt-1 text-sm leading-relaxed text-foreground/90">{event.note || "No note"}</p>
+              </button>
+              {event.source === "motion_derived" && onUpdateMotionVerification && (
+                <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/70 pt-2">
+                  <button type="button" onClick={() => onUpdateMotionVerification(index, "reviewed_verified")} className="rounded-md border border-emerald-400/25 px-2 py-1 text-[10px] font-medium text-emerald-300 hover:bg-emerald-400/10">
+                    Mark verified
+                  </button>
+                  <button type="button" onClick={() => onUpdateMotionVerification(index, "reviewed_adjusted")} className="rounded-md border border-amber-400/25 px-2 py-1 text-[10px] font-medium text-amber-300 hover:bg-amber-400/10">
+                    Mark adjusted
+                  </button>
+                  {verified && (
+                    <button type="button" onClick={() => onUpdateMotionVerification(index, "unverified")} className="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                      Clear verification
+                    </button>
                   )}
                 </div>
-              </div>
-              <p className="mt-1 text-sm leading-relaxed text-foreground/90">{event.note || "No note"}</p>
-            </button>
+              )}
+            </div>
           );
         })}
         {!filteredEvents.length && (
@@ -209,6 +243,22 @@ export default function SessionDetail() {
   const handleAnalysisSaved = useCallback((field, value) => {
     setSession((current) => (current ? { ...current, [field]: value } : current));
   }, []);
+  const handleMotionVerificationUpdate = useCallback(async (eventIndex, verificationStatus) => {
+    if (!session?.id) return;
+    const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+    const selectedEvent = currentEvents[eventIndex];
+    if (!selectedEvent || selectedEvent.source !== "motion_derived") return;
+    const verified = verificationStatus === "reviewed_verified" || verificationStatus === "reviewed_adjusted";
+    const nextEvent = {
+      ...selectedEvent,
+      verification_status: verified ? verificationStatus : "unverified",
+      verified_at: verified ? new Date().toISOString() : null,
+      verified_by: verified ? "user" : null,
+    };
+    const eventTimeline = currentEvents.map((event, index) => (index === eventIndex ? nextEvent : event));
+    await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
+    setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
+  }, [session]);
 
   const nearClimaxEvents = useMemo(() => {
     if (!session) return [];
@@ -751,8 +801,10 @@ export default function SessionDetail() {
                     <div className="mt-3">
                       <EventNotesPanel
                         events={s.event_timeline || []}
+                        motionSummary={s.motion_analysis_summary}
                         selectedIndex={selectedEventIdx}
                         onSelect={setSelectedEventIdx}
+                        onUpdateMotionVerification={handleMotionVerificationUpdate}
                         helper="Tap a note to highlight its marker on the heart-rate chart."
                       />
                     </div>
@@ -1082,8 +1134,10 @@ export default function SessionDetail() {
             <div className="mt-3">
             <EventNotesPanel
               events={s.event_timeline || []}
+              motionSummary={s.motion_analysis_summary}
               selectedIndex={selectedEventIdx}
               onSelect={setSelectedEventIdx}
+              onUpdateMotionVerification={handleMotionVerificationUpdate}
               title="Event Notes"
               helper="Use this as the readable log beside the timeline visualizations."
               maxHeight={false}
