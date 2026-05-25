@@ -187,6 +187,17 @@ async function runProfilerAIJob(payload, label, onProgress) {
   return completedJob.result;
 }
 
+function completedAt(job) {
+  return job?.finishedAt || job?.updatedAt || job?.createdAt || null;
+}
+
+function isNewerCompletedJob(job, savedResult) {
+  if (job?.status !== "complete") return false;
+  const jobTime = new Date(completedAt(job) || 0).getTime();
+  const savedTime = new Date(savedResult?._meta?.last_generated_at || savedResult?._meta?.updated_at || 0).getTime();
+  return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
+}
+
 function ProfilerJobStatus({ job, fallback }) {
   if (!job && !fallback) return null;
   const progress = job?.progress || {};
@@ -488,7 +499,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
         });
         if (cancelled) return;
         let job = (activeData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Comprehensive Profile");
-        if (!job && !result) {
+        if (!job) {
           const completedData = await listBackgroundJobs({
             type: "ai_invoke",
             status: "complete",
@@ -499,6 +510,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
           job = (completedData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Comprehensive Profile");
         }
         if (!job) return;
+        if (job.status === "complete" && !isNewerCompletedJob(job, result)) return;
 
         setJobStatus(job);
         setLoading(job.status !== "complete");
@@ -511,12 +523,13 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
             },
           });
         if (cancelled) return;
+        if (!isNewerCompletedJob(completedJob, result)) return;
 
         const parsed = normalizeAIProfileResult(completedJob.result);
         if (!parsed?.profile_overview && !parsed?.arousal_physiology?.length) return;
         const storedResult = {
           ...parsed,
-          _meta: buildProfileAIContentMeta(sessions, result?._meta),
+          _meta: buildProfileAIContentMeta(sessions, result?._meta, completedAt(completedJob)),
         };
         setResult(storedResult);
         await saveClusterAnalysisPatch({ result: storedResult }, sessions.length);
@@ -846,7 +859,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
         });
         if (cancelled) return;
         let job = (activeData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Anatomical & Physiological Profile");
-        if (!job && !result) {
+        if (!job) {
           const completedData = await listBackgroundJobs({
             type: "ai_invoke",
             status: "complete",
@@ -857,6 +870,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
           job = (completedData.jobs || []).find((item) => item.meta?.label === "AI Profiler: Anatomical & Physiological Profile");
         }
         if (!job) return;
+        if (job.status === "complete" && !isNewerCompletedJob(job, result)) return;
 
         setJobStatus(job);
         setLoading(job.status !== "complete");
@@ -869,12 +883,13 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
             },
           });
         if (cancelled) return;
+        if (!isNewerCompletedJob(completedJob, result)) return;
 
         const parsed = normalizeAnatomicalProfileResult(completedJob.result);
         if (!parsed?.overview) return;
         const storedResult = {
           ...parsed,
-          _meta: buildProfileAIContentMeta(sessions, result?._meta),
+          _meta: buildProfileAIContentMeta(sessions, result?._meta, completedAt(completedJob)),
         };
         setResult(storedResult);
         await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: storedResult }, sessions.length);
@@ -1575,6 +1590,29 @@ export default function Profiler() {
       setAllTimelines(map);
       setLoading(false);
     })();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshEvidenceAfterReturn = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const all = await base44.entities.Session.list("-date", 300);
+        if (!cancelled) setSessions(all);
+      } catch {
+        // Preserve currently visible evidence if an opportunistic refresh is unavailable.
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshEvidenceAfterReturn();
+    };
+    window.addEventListener("focus", refreshEvidenceAfterReturn);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshEvidenceAfterReturn);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   const refreshEvidence = async () => {

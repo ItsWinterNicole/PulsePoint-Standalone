@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
@@ -206,6 +206,9 @@ export default function SessionDetail() {
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
+  const handleAnalysisSaved = useCallback((field, value) => {
+    setSession((current) => (current ? { ...current, [field]: value } : current));
+  }, []);
 
   const nearClimaxEvents = useMemo(() => {
     if (!session) return [];
@@ -376,6 +379,31 @@ export default function SessionDetail() {
 
       setLoading(false);
     })();
+  }, [id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshSessionAfterReturn = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const rows = await base44.entities.Session.filter({ id });
+        if (!cancelled && rows[0]) {
+          setSession((current) => (current ? { ...current, ...rows[0] } : rows[0]));
+        }
+      } catch {
+        // Keep the currently displayed session if a background refresh is unavailable.
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshSessionAfterReturn();
+    };
+    window.addEventListener("focus", refreshSessionAfterReturn);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshSessionAfterReturn);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [id]);
 
   useEffect(() => {
@@ -636,10 +664,10 @@ export default function SessionDetail() {
         {!s.no_climax && (
           <section className="space-y-4">
             <section id="session-ai-companion" className="scroll-mt-24">
-              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
             </section>
             <section id="session-ai-technical" className="scroll-mt-24">
-              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" />
+              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
             </section>
             <details id="session-ai-support" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
               <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">

@@ -2,6 +2,7 @@ import { richTextToPlainText } from "@/lib/richText";
 
 export const PERSONALIZED_ANATOMY_OUTPUT_RULE = `
 PERSONALIZED ANATOMY OUTPUT RULE - HIGH PRIORITY:
+- In companion-style or personally addressed analysis, never refer to the person as "the user," "the subject," "the participant," "the patient," "this person," or "the individual." Use "you," "your notes," "your body," "your physiology," "your recovery," and "your pattern."
 - In any sentence describing this person's recorded body, anatomy, appearance, sensation, session response, device interaction, or supported finding, use a personal reference: "your penis," "your shaft," "your glans," "your foreskin" when applicable, "your meatus," "your urethra," "your erection," "your pelvic floor," "your scrotum," "your lower body," "your feet," or the corresponding "your ..." construction.
 - This applies even when source notes or structured fields use detached labels. Paraphrase session-linked findings personally rather than echoing phrases such as "the penis," "the shaft," "the glans," "the meatus," "the urethra," "the feet," or "the body."
 - Generic phrasing with "the" is permitted only for an unmistakably general physiology or anatomy explanation, such as explaining how penile tissue, the urethra, or the pelvic floor generally functions. As soon as the sentence returns to this person's data, observations, or interpretation, switch back to "your."
@@ -156,6 +157,8 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Use neutral physiological language when intent is not stated: stimulation slowed, arousal plateaued, heart rate decelerated, climax did not occur, recovery signs appeared, stimulation stopped, or the body shifted toward recovery.
 - If offering a hypothesis about physiology, make it evidence-linked and explain why it fits. Only label it as tentative when the evidence is indirect or ambiguous.
 - Do not present speculation as established physiology.
+- If a subjective note conflicts with stronger reviewed visual evidence, saved telemetry, or a later corrected observation, explicitly note the discrepancy and prefer the stronger evidence for interpretation. Do not build confident recommendations on disputed source data.
+- Use one consistent numeric source within each claim. If saved summary values differ from directly computed telemetry or differ only because of rounding, identify which value you are citing or explain the rounding/source difference instead of silently mixing figures.
 - Do not invent hormone explanations, neurological localization claims, or anatomical causal claims that are not directly supported by the available evidence.
 - Do not assume person-specific anatomy or sensations that are not present in the data. You may discuss anatomy and physiology implied by logged methods or sensations, such as glans, foreskin, urethral, perineal, pelvic floor, ejaculatory, autonomic, or recovery physiology when those methods or cues are present.
 - Use anatomical dimensions only when they meaningfully affect stimulation mechanics, device interaction, pressure distribution, or interpretation of repeated observed patterns.

@@ -43,10 +43,19 @@ export function getMotionEvidenceFreshnessKey(session) {
   const timeline = rows(session?.event_timeline);
   const promoted = getMotionDerivedEvents(session);
   return [
+    session?.updated_date || session?.updated_at || "",
     motion.analyzed_at || "",
     rows(motion.derived_timeline).length,
     rows(motion.findings).length,
     rows(motion.review_peaks).length,
+    JSON.stringify({
+      asymmetry: motion.asymmetry_summary || null,
+      cadence: motion.hand_movement_summary || null,
+      handBehavior: motion.hand_behavior_summary || null,
+      lowerBody: motion.lower_body_pattern_summary || null,
+      posture: motion.lower_body_posture_summary || null,
+      quality: motion.quality_indicators || null,
+    }),
     timeline.length,
     timeline.map((event) => `${event.source || "legacy"}:${event.time_s || 0}:${event.note || ""}`).join("|"),
     promoted.length,

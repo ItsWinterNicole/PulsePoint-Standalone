@@ -116,6 +116,17 @@ function aiErrorMessage(error) {
   }
 }
 
+function completedAt(job) {
+  return job?.finishedAt || job?.updatedAt || job?.createdAt || null;
+}
+
+function isNewerCompletedJob(job, savedResult) {
+  if (job?.status !== "complete") return false;
+  const jobTime = new Date(completedAt(job) || 0).getTime();
+  const savedTime = new Date(savedResult?._meta?.last_generated_at || savedResult?._meta?.updated_at || 0).getTime();
+  return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
+}
+
 function normalizeSessionAnalysis(res) {
   const raw = typeof res === "string" ? JSON.parse(res) : res;
   const parsed = raw?.response ?? raw;
@@ -183,7 +194,7 @@ function AnalysisStatus({ job }) {
   );
 }
 
-export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion" }) {
+export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
   const analysisLabel = isTechnical ? "AI Session Technical Deep Dive" : "AI Session Analysis";
@@ -201,7 +212,6 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
 
   useEffect(() => {
     let cancelled = false;
-    if (session[analysisField] || result) return undefined;
 
     const reconnect = async () => {
       try {
@@ -214,6 +224,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
         const job = (data.jobs || []).find((item) => item.meta?.label === analysisLabel);
         if (!job) return;
+        if (job.status === "complete" && !isNewerCompletedJob(job, result || session[analysisField])) return;
 
         setCollapsed(false);
         setJobStatus(job);
@@ -228,11 +239,12 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             },
           });
         if (cancelled) return;
+        if (!isNewerCompletedJob(completedJob, result || session[analysisField])) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result);
         const storedResult = {
           ...parsed,
-          _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta),
+          _meta: buildSessionAIContentMeta(session, (result || session[analysisField])?._meta, completedAt(completedJob)),
         };
         setResult(storedResult);
         setJobStatus({
@@ -246,6 +258,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
           },
         });
         await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
+        onAnalysisSaved?.(analysisField, storedResult);
       } catch (err) {
         if (!cancelled) {
           console.warn(`${analysisLabel} reconnect skipped:`, err);
@@ -259,7 +272,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, result, session, session.id]);
+  }, [analysisField, analysisLabel, onAnalysisSaved, result, session, session.id]);
 
   const analyze = async () => {
     setLoading(true);
@@ -358,6 +371,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       total_points: timelineRows.length,
       duration_s: Math.round(Math.max(...timelineRows.map(r => Number(r.time_offset_s) || 0))),
       hr_min: Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))),
+      hr_avg: Math.round(timelineRows.reduce((sum, row) => sum + Number(row.hr), 0) / timelineRows.length),
       hr_max: Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))),
     } : null;
 
@@ -473,6 +487,7 @@ ${isTechnical
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
 - If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
 - Connect subjective sensations (pressure, throb, tightness, wave) to anatomical generators ONLY if the user actually logged those sensations.
+- When figures from saved session summaries and sampled timeline calculations differ, use the directly computed timeline figure for timeline interpretation and explicitly state that a stored summary differs or may reflect rounding. Never silently cite conflicting heart-rate maxima or averages.
 - Interpret discomfort anatomically ONLY if discomfort entries are present.
 - The goal is ${isTechnical
   ? "a tight, evidence-driven explanation of what happened and why it likely happened. Every anatomical or physiological claim must be traceable to a specific data point in the session, but do not omit relevant physiology when the data supports it."
@@ -562,7 +577,14 @@ ${JSON.stringify({
   unusual_sensations: session.unusual_sensations,
   refractory_notes: session.refractory_notes,
   notes: session.notes,
-  hr: hrSummary ? { avg: session.avg_hr, max: session.max_hr, hr_at_climax: session.hr_at_climax, min: hrSummary.hr_min } : undefined,
+  hr: hrSummary ? {
+    timeline_derived_avg: hrSummary.hr_avg,
+    timeline_derived_max: hrSummary.hr_max,
+    timeline_derived_min: hrSummary.hr_min,
+    hr_at_climax: session.hr_at_climax,
+    ...(session.avg_hr != null && Number(session.avg_hr) !== hrSummary.hr_avg ? { stored_summary_avg: session.avg_hr } : {}),
+    ...(session.max_hr != null && Number(session.max_hr) !== hrSummary.hr_max ? { stored_summary_max: session.max_hr } : {}),
+  } : undefined,
   phase_markers_s: {
     pre_climax: session.pre_climax_offset_s,
     climax: session.climax_offset_s,
@@ -624,7 +646,7 @@ Provide ${isTechnical
     const parsed = normalizeSessionAnalysis(completedJob.result);
     const storedResult = {
       ...parsed,
-      _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta),
+      _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
     };
     setResult(storedResult);
     setJobStatus({
@@ -638,6 +660,7 @@ Provide ${isTechnical
       },
     });
     await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
+    onAnalysisSaved?.(analysisField, storedResult);
     } catch (err) {
       console.error(`${analysisLabel} failed:`, err);
       setError(aiErrorMessage(err));

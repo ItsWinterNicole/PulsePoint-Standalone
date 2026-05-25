@@ -13,8 +13,8 @@ export function formatGeneratedAt(value) {
   });
 }
 
-export function buildSessionAIContentMeta(session, previousMeta = null) {
-  const generatedAt = new Date().toISOString();
+export function buildSessionAIContentMeta(session, previousMeta = null, generatedAtOverride = null) {
+  const generatedAt = generatedAtOverride || new Date().toISOString();
   const motion = getMotionEvidenceSummary(session);
   return {
     created_at: previousMeta?.created_at || generatedAt,
@@ -28,8 +28,8 @@ export function buildSessionAIContentMeta(session, previousMeta = null) {
   };
 }
 
-export function buildProfileAIContentMeta(sessions, previousMeta = null) {
-  const generatedAt = new Date().toISOString();
+export function buildProfileAIContentMeta(sessions, previousMeta = null, generatedAtOverride = null) {
+  const generatedAt = generatedAtOverride || new Date().toISOString();
   const values = Array.isArray(sessions) ? sessions : [];
   const freshnessKey = values.map((session) => `${session.id || ""}:${getMotionEvidenceFreshnessKey(session)}`).join("||");
   const motionSessions = values.filter((session) => getMotionEvidenceSummary(session).hasAnyMotionEvidence);
