@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, ChevronDown, ChevronUp, Play, ShieldCheck } from "lucide-react";
+import { Activity, ChevronDown, ChevronUp, Footprints, Play, ShieldCheck } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -42,6 +42,46 @@ function SavedQualityBadge({ level }) {
       {level}
     </span>
   );
+}
+
+function confidenceStyle(level) {
+  if (level === "moderate") return "text-emerald-400 border-emerald-400/30 bg-emerald-400/10";
+  if (level === "low") return "text-amber-400 border-amber-400/30 bg-amber-400/10";
+  return "text-rose-400 border-rose-400/30 bg-rose-400/10";
+}
+
+function SavedConfidenceBadge({ level }) {
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${confidenceStyle(level)}`}>
+      {level || "weak"}
+    </span>
+  );
+}
+
+function patternAccent(count) {
+  if ((Number(count) || 0) >= 12) return "border-rose-400/25 bg-rose-400/[0.06]";
+  if ((Number(count) || 0) >= 4) return "border-amber-400/25 bg-amber-400/[0.05]";
+  return "border-border bg-muted/15";
+}
+
+function PatternMetric({ label, value }) {
+  return (
+    <div className={`rounded-lg border p-1 ${patternAccent(value)}`}>
+      <Metric label={label} value={value} />
+    </div>
+  );
+}
+
+function clusterPeaks(peaks, nearbyWindowS = 6) {
+  return peaks.reduce((clusters, peak) => {
+    const previous = clusters[clusters.length - 1];
+    if (previous && Number(peak.time_s) - Number(previous[previous.length - 1].time_s) <= nearbyWindowS) {
+      previous.push(peak);
+    } else {
+      clusters.push([peak]);
+    }
+    return clusters;
+  }, []);
 }
 
 function MotionTooltip({ active, payload, label }) {
@@ -155,7 +195,9 @@ export default function SavedMotionSummaryCard({
   });
   const [displayMode, setDisplayMode] = useState("smoothed");
   const [expanded, setExpanded] = useState(chartOnly || !compact);
+  const [expandedPeakClusters, setExpandedPeakClusters] = useState([]);
   const chartTimeline = useMemo(() => addSmoothedSignals(timeline), [timeline]);
+  const peakClusters = useMemo(() => clusterPeaks(peaks), [peaks]);
 
   useEffect(() => {
     setVisibleSignals({
@@ -533,10 +575,10 @@ export default function SavedMotionSummaryCard({
             <span className="text-[10px] text-muted-foreground">Review candidates only</span>
           </div>
           <div className={`grid gap-2 ${compact ? "grid-cols-2" : "sm:grid-cols-4"}`}>
-            <Metric label="Movement Bursts" value={lowerBodyPatterns.movement_burst_count} />
-            <Metric label="Oscillatory / Shudder-Like" value={lowerBodyPatterns.oscillatory_candidate_count} />
-            <Metric label="Sustained Elevations" value={lowerBodyPatterns.sustained_activity_shift_count} />
-            <Metric label="Side Divergences" value={lowerBodyPatterns.left_right_divergence_count} />
+            <PatternMetric label="Movement Bursts" value={lowerBodyPatterns.movement_burst_count} />
+            <PatternMetric label="Oscillatory / Shudder-Like" value={lowerBodyPatterns.oscillatory_candidate_count} />
+            <PatternMetric label="Sustained Elevations" value={lowerBodyPatterns.sustained_activity_shift_count} />
+            <PatternMetric label="Side Divergences" value={lowerBodyPatterns.left_right_divergence_count} />
           </div>
           {[...(lowerBodyPatterns.oscillatory_candidates || []), ...(lowerBodyPatterns.divergence_candidates || [])].length > 0 && (
             <div className="flex flex-wrap gap-1.5">
@@ -555,7 +597,7 @@ export default function SavedMotionSummaryCard({
                     <span className="font-mono">{formatTime(candidate.time_s)}</span>
                     <span className="text-muted-foreground">
                       {candidate.type === "oscillatory_candidate"
-                        ? "oscillatory"
+                        ? "shudder-like"
                         : `${candidate.predominant_side || "side"} divergence`}
                     </span>
                   </button>
@@ -573,19 +615,32 @@ export default function SavedMotionSummaryCard({
             <span className="text-[10px] text-muted-foreground">{postureSummary.coverage_pct}% sampled frame coverage</span>
           </div>
           {postureSummary.posture_candidates?.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {postureSummary.posture_candidates.slice(0, 10).map((candidate) => (
-                <button
+                <div
                   key={`${candidate.posture}-${candidate.time_s}`}
-                  type="button"
-                  onClick={() => onSeek?.(candidate.time_s)}
-                  disabled={!onSeek}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-primary/20 bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors enabled:hover:border-primary/40 disabled:cursor-default"
+                  className="flex items-center gap-2 rounded-lg border border-primary/20 bg-card/60 p-2"
                 >
-                  <Play className="h-3 w-3 text-primary" />
-                  <span className="font-mono">{formatTime(candidate.time_s)}</span>
-                  <span>{candidate.posture_phrase}</span>
-                </button>
+                  <div className="flex h-11 w-12 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border bg-muted/15 text-muted-foreground">
+                    <Footprints className="h-3.5 w-3.5" />
+                    <span className="text-[8px] uppercase">Preview</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onSeek?.(candidate.time_s)}
+                    disabled={!onSeek}
+                    className="min-w-0 flex-1 text-left enabled:hover:text-primary disabled:cursor-default"
+                  >
+                    <span className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-primary">
+                      <Play className="h-3 w-3" />{formatTime(candidate.time_s)}
+                    </span>
+                    <span className="block truncate text-[10px] text-foreground">{candidate.posture_phrase}</span>
+                    <span className="mt-1 flex items-center gap-1">
+                      <SavedConfidenceBadge level={candidate.confidence} />
+                      {candidate.supporting_frames && <span className="text-[9px] text-muted-foreground">{candidate.supporting_frames} frames</span>}
+                    </span>
+                  </button>
+                </div>
               ))}
             </div>
           ) : (
@@ -630,23 +685,53 @@ export default function SavedMotionSummaryCard({
         <div className="space-y-1.5">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Saved Review Peaks</p>
           <div className="flex flex-wrap gap-1.5">
-            {peaks.map((peak) => (
-              <button
-                key={peak.time_s}
-                type="button"
-                onClick={() => onSeek?.(peak.time_s)}
-                disabled={!onSeek}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors enabled:hover:border-primary/40 enabled:hover:bg-primary/[0.08] disabled:cursor-default"
-              >
-                <Play className="h-3 w-3 text-primary" />
-                <span className="font-mono">{formatTime(peak.time_s)}</span>
-                {peak.left_lower_body_activity != null && (
-                  <span className="text-muted-foreground">
-                    L{peak.left_lower_body_activity}/R{peak.right_lower_body_activity ?? "-"}
-                  </span>
-                )}
-              </button>
-            ))}
+            {peakClusters.map((cluster, clusterIndex) => {
+              if (cluster.length === 1) {
+                const peak = cluster[0];
+                return (
+                  <button
+                    key={peak.time_s}
+                    type="button"
+                    onClick={() => onSeek?.(peak.time_s)}
+                    disabled={!onSeek}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors enabled:hover:border-primary/40 enabled:hover:bg-primary/[0.08] disabled:cursor-default"
+                  >
+                    <Play className="h-3 w-3 text-primary" />
+                    <span className="font-mono">{formatTime(peak.time_s)}</span>
+                    {peak.left_lower_body_activity != null && <span className="text-muted-foreground">L{peak.left_lower_body_activity}/R{peak.right_lower_body_activity ?? "-"}</span>}
+                  </button>
+                );
+              }
+              const expandedCluster = expandedPeakClusters.includes(clusterIndex);
+              return (
+                <div key={`${cluster[0].time_s}-${cluster[cluster.length - 1].time_s}`} className="rounded-md border border-primary/20 bg-primary/[0.05] p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSeek?.(cluster[0].time_s);
+                      setExpandedPeakClusters((current) => current.includes(clusterIndex)
+                        ? current.filter((value) => value !== clusterIndex)
+                        : [...current, clusterIndex]);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-1 text-[10px] text-foreground"
+                  >
+                    <Play className="h-3 w-3 text-primary" />
+                    <span className="font-mono">{formatTime(cluster[0].time_s)}-{formatTime(cluster[cluster.length - 1].time_s)}</span>
+                    <span className="text-muted-foreground">cluster</span>
+                    <span className="text-primary">{cluster.length} peaks</span>
+                  </button>
+                  {expandedCluster && (
+                    <div className="mt-1 flex flex-wrap gap-1 border-t border-border pt-1">
+                      {cluster.map((peak) => (
+                        <button key={peak.time_s} type="button" onClick={() => onSeek?.(peak.time_s)} disabled={!onSeek} className="rounded border border-border px-1.5 py-0.5 text-[9px] disabled:cursor-default">
+                          {formatTime(peak.time_s)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
           )}

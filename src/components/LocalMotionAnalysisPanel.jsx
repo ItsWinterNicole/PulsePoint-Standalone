@@ -695,7 +695,7 @@ function calculateLowerBodyPatternSummary(samples, sampleRate) {
     .map((group) => compactPatternCandidate(
       group,
       "oscillatory_candidate",
-      "Rapid oscillatory / shudder-like movement candidate",
+      "Rapid shudder-like lower-body activity",
       stepS,
       { repeated_peaks: group.length },
     ));
@@ -703,13 +703,13 @@ function calculateLowerBodyPatternSummary(samples, sampleRate) {
   const burstCandidates = orderedTopCandidates(burstSegments.map((segment) => compactPatternCandidate(
     segment,
     "movement_burst",
-    "Movement burst candidate",
+    "Brief lower-body movement burst",
     stepS,
   )));
   const sustainedCandidates = orderedTopCandidates(sustainedSegments.map((segment) => compactPatternCandidate(
     segment,
     "sustained_activity_shift",
-    "Sustained lower-body activity elevation candidate",
+    "Sustained lower-body activity",
     stepS,
   )));
   const divergenceCandidates = orderedTopCandidates(divergenceSegments.map((segment) => {
@@ -718,7 +718,7 @@ function calculateLowerBodyPatternSummary(samples, sampleRate) {
     return compactPatternCandidate(
       segment,
       "left_right_divergence",
-      "Left / right divergence candidate",
+      "Lower-body side divergence",
       stepS,
       { predominant_side: leftAverage >= rightAverage ? "left" : "right" },
     );
@@ -755,6 +755,16 @@ function pairedAppearanceDistance(sample, reference) {
     appearanceDistance(sample.rightAppearance, reference.rightAppearance),
   ].filter((value) => Number.isFinite(value));
   return mean(distances) ?? Infinity;
+}
+
+function postureConfidence(matchDistance, stabilitySpread, coveragePct, supportingFrames) {
+  if (Number.isFinite(matchDistance) && matchDistance <= 0.36 && stabilitySpread <= 0.14 && coveragePct >= 65 && supportingFrames >= 4) {
+    return "moderate";
+  }
+  if (Number.isFinite(matchDistance) && matchDistance <= 0.5 && stabilitySpread <= 0.24 && coveragePct >= 35 && supportingFrames >= 3) {
+    return "low";
+  }
+  return "weak";
 }
 
 function buildPostureAppearanceSummary(samples, referenceTimes, sampleRate) {
@@ -814,6 +824,11 @@ function buildPostureAppearanceSummary(samples, referenceTimes, sampleRate) {
     .map((segment) => {
       const posture = segment[0].posture;
       const meta = POSTURE_REFERENCE_OPTIONS.find((option) => option.key === posture);
+      const matchDistances = segment.map((sample) => sample.confidenceScore).filter(Number.isFinite);
+      const matchDistance = mean(matchDistances);
+      const stabilitySpread = matchDistances.length
+        ? Math.max(...matchDistances) - Math.min(...matchDistances)
+        : Infinity;
       return {
         type: "calibrated_posture_candidate",
         posture,
@@ -821,7 +836,10 @@ function buildPostureAppearanceSummary(samples, referenceTimes, sampleRate) {
         time_s: Math.round(segment[0].timeS * 10) / 10,
         start_time_s: Math.round(segment[0].timeS * 10) / 10,
         duration_s: Math.round(segmentDuration(segment, stepS) * 10) / 10,
-        confidence: "moderate",
+        confidence: postureConfidence(matchDistance, stabilitySpread, coveragePct, segment.length),
+        match_distance: Number.isFinite(matchDistance) ? Math.round(matchDistance * 100) / 100 : undefined,
+        stability_spread: Number.isFinite(stabilitySpread) ? Math.round(stabilitySpread * 100) / 100 : undefined,
+        supporting_frames: segment.length,
       };
     })
     .slice(0, 16);
@@ -1155,7 +1173,7 @@ function motionSuggestionEvent(suggestion) {
     time_s: suggestion.timeS,
     note: isPause
       ? "Motion-derived: hand activity pause observed."
-      : `Motion-derived: hand activity resumed after a ${pauseSeconds}-second pause.`,
+      : `Motion-derived: hand activity resumed after brief pause (${pauseSeconds} seconds).`,
     category: [isPause ? "motion_pause" : "motion_resume"],
     annotation_tags: ["other_context"],
     source: "motion_derived",
@@ -1176,6 +1194,71 @@ function QualityBadge({ coverage }) {
       {quality.label}
     </span>
   );
+}
+
+function ConfidenceBadge({ level }) {
+  const color = level === "moderate"
+    ? "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300"
+    : level === "low"
+      ? "border-amber-400/25 bg-amber-400/[0.08] text-amber-300"
+      : "border-rose-400/25 bg-rose-400/[0.08] text-rose-300";
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${color}`}>
+      {level || "weak"}
+    </span>
+  );
+}
+
+function patternSeverity(count) {
+  if (count >= 12) {
+    return {
+      label: "High count",
+      className: "border-rose-400/25 bg-rose-400/[0.06]",
+      numberClassName: "text-rose-300",
+      badgeClassName: "border-rose-400/25 bg-rose-400/[0.09] text-rose-300",
+    };
+  }
+  if (count >= 4) {
+    return {
+      label: "Moderate count",
+      className: "border-amber-400/25 bg-amber-400/[0.05]",
+      numberClassName: "text-amber-300",
+      badgeClassName: "border-amber-400/25 bg-amber-400/[0.08] text-amber-300",
+    };
+  }
+  return {
+    label: "Low count",
+    className: "border-border bg-muted/15",
+    numberClassName: "text-foreground",
+    badgeClassName: "border-border bg-muted/20 text-muted-foreground",
+  };
+}
+
+function PatternProxyMetric({ label, count }) {
+  const severity = patternSeverity(Number(count) || 0);
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${severity.className}`}>
+      <div className="flex flex-wrap items-center justify-between gap-1">
+        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+        <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${severity.badgeClassName}`}>
+          {severity.label}
+        </span>
+      </div>
+      <p className={`mt-1 font-mono text-base font-semibold ${severity.numberClassName}`}>{count}</p>
+    </div>
+  );
+}
+
+function clusterMoments(moments, nearbyWindowS = 6) {
+  return moments.reduce((clusters, moment) => {
+    const previous = clusters[clusters.length - 1];
+    if (previous && moment.timeS - previous[previous.length - 1].timeS <= nearbyWindowS) {
+      previous.push(moment);
+    } else {
+      clusters.push([moment]);
+    }
+    return clusters;
+  }, []);
 }
 
 function buildFindings(result) {
@@ -1386,6 +1469,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState([]);
   const [acceptedSuggestionIds, setAcceptedSuggestionIds] = useState([]);
   const [acceptingSuggestions, setAcceptingSuggestions] = useState(false);
+  const [expandedPeakClusters, setExpandedPeakClusters] = useState([]);
   const [setupExpanded, setSetupExpanded] = useState(false);
   const [regionsExpanded, setRegionsExpanded] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
@@ -1406,6 +1490,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     previewReadyRef.current = false;
     setDismissedSuggestionIds([]);
     setAcceptedSuggestionIds([]);
+    setExpandedPeakClusters([]);
     setPostureReferenceTimes({
       neutral: null,
       outward: null,
@@ -1461,6 +1546,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     () => [...handTransitionSuggestions, ...lowerBodySemanticSuggestions].sort((a, b) => a.timeS - b.timeS),
     [handTransitionSuggestions, lowerBodySemanticSuggestions],
   );
+  const reviewPeakClusters = useMemo(() => clusterMoments(result?.moments || []), [result?.moments]);
   const visibleMotionSuggestions = motionSuggestions.filter((suggestion) => (
     visibleSuggestionTypes[suggestion.type]
     && !dismissedSuggestionIds.includes(suggestion.id)
@@ -1653,6 +1739,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setSaved(false);
     setDismissedSuggestionIds([]);
     setAcceptedSuggestionIds([]);
+    setExpandedPeakClusters([]);
     previewReadyRef.current = false;
     setPreviewReady(false);
 
@@ -2542,22 +2629,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 <span className="text-[10px] text-muted-foreground">Video confirmation required</span>
               </div>
               <div className="grid gap-2 sm:grid-cols-4">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Movement Bursts</p>
-                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.movement_burst_count}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Oscillatory / Shudder-Like</p>
-                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.oscillatory_candidate_count}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Sustained Elevations</p>
-                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.sustained_activity_shift_count}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Side Divergences</p>
-                  <p className="mt-1 font-mono text-base font-semibold text-foreground">{result.lowerBodyPatterns.left_right_divergence_count}</p>
-                </div>
+                <PatternProxyMetric label="Movement Bursts" count={result.lowerBodyPatterns.movement_burst_count} />
+                <PatternProxyMetric label="Oscillatory / Shudder-Like" count={result.lowerBodyPatterns.oscillatory_candidate_count} />
+                <PatternProxyMetric label="Sustained Elevations" count={result.lowerBodyPatterns.sustained_activity_shift_count} />
+                <PatternProxyMetric label="Side Divergences" count={result.lowerBodyPatterns.left_right_divergence_count} />
               </div>
               {[...result.lowerBodyPatterns.oscillatory_candidates, ...result.lowerBodyPatterns.divergence_candidates].length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
@@ -2574,7 +2649,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                         <Play className="h-3 w-3 text-primary" />
                         <span className="font-mono">{formatTime(candidate.time_s)}</span>
                         <span className="text-muted-foreground">
-                          {candidate.type === "oscillatory_candidate" ? "oscillatory" : `${candidate.predominant_side} divergence`}
+                          {candidate.type === "oscillatory_candidate" ? "shudder-like" : `${candidate.predominant_side} divergence`}
                         </span>
                       </button>
                     ))}
@@ -2592,18 +2667,32 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               </div>
               {result.postureGeometry.status === "calibrated_matching_available" ? (
                 <>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {result.postureGeometry.posture_candidates.length > 0 ? result.postureGeometry.posture_candidates.map((candidate) => (
-                      <button
+                      <div
                         key={`${candidate.posture}-${candidate.time_s}`}
-                        type="button"
-                        onClick={() => onSeek?.(candidate.time_s)}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors hover:border-primary/50"
+                        className="flex items-center gap-2 rounded-lg border border-primary/20 bg-card/60 p-2"
                       >
-                        <Play className="h-3 w-3 text-primary" />
-                        <span className="font-mono">{formatTime(candidate.time_s)}</span>
-                        <span>{candidate.posture_phrase}</span>
-                      </button>
+                        <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-border bg-muted/15 text-muted-foreground">
+                          <Footprints className="h-4 w-4" />
+                          <span className="mt-0.5 text-[8px] uppercase tracking-wider">Preview</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onSeek?.(candidate.time_s)}
+                          className="min-w-0 flex-1 text-left transition-colors hover:text-primary"
+                        >
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-primary">
+                            <Play className="h-3 w-3" />
+                            <span className="font-mono">{formatTime(candidate.time_s)}</span>
+                          </span>
+                          <span className="mt-1 block truncate text-[11px] text-foreground">{candidate.posture_phrase}</span>
+                          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <ConfidenceBadge level={candidate.confidence} />
+                            <span className="text-[9px] text-muted-foreground">{candidate.supporting_frames} sampled frames</span>
+                          </span>
+                        </button>
+                      </div>
                     )) : (
                       <p className="text-xs text-muted-foreground">No sustained reference matches met the cautious match threshold in this analysis window.</p>
                     )}
@@ -2651,7 +2740,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-primary">Motion-Derived Event Suggestions</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">Draft observations only. Review against video before saving.</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">Draft observations only. Promote reviewed findings to the timeline; finalizing replaces the saved motion-derived set.</p>
                 </div>
                 {motionSuggestions.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
@@ -2661,7 +2750,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                       disabled={!selectedSession || acceptingSuggestions || visibleMotionSuggestions.length === 0}
                       className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-45"
                     >
-                      Accept all visible
+                      Promote all visible
                     </button>
                     <button
                       type="button"
@@ -2769,15 +2858,13 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                         <span className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-0.5 text-[10px] font-semibold text-primary">
                           {isLowerBody ? "Lower-body finding" : isPause ? "Pause candidate" : "Resumption candidate"}
                         </span>
-                        <span className="rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                          {suggestion.confidence}
-                        </span>
+                        <ConfidenceBadge level={suggestion.confidence} />
                         <p className="min-w-[16rem] flex-1 text-xs text-foreground">
                           {isLowerBody
                             ? suggestion.note
                             : isPause
-                            ? `Motion-derived: hand activity pause observed (${pauseSeconds} seconds).`
-                            : `Motion-derived: hand activity resumed after a ${pauseSeconds}-second pause.`}
+                            ? `Motion-derived: hand activity pause candidate (${pauseSeconds} seconds).`
+                            : "Motion-derived: hand activity resumed after brief pause."}
                         </p>
                         {isLowerBody ? (
                           <span className="text-[10px] text-muted-foreground">
@@ -2796,7 +2883,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                           disabled={!selectedSession || acceptingSuggestions}
                           className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-45"
                         >
-                          Accept
+                          Promote
                         </button>
                         <button
                           type="button"
@@ -2965,22 +3052,65 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Review Peaks</p>
               <div className="flex flex-wrap gap-2">
-                {result.moments.map((moment) => (
-                  <button
-                    key={moment.timeS}
-                    type="button"
-                    onClick={() => onSeek?.(moment.timeS)}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-primary/[0.08]"
-                  >
-                    <Play className="h-3 w-3 text-primary" />
-                    <span className="font-mono">{formatTime(moment.timeS)}</span>
-                    <span className="text-muted-foreground">
-                      {result.hasLegs
-                        ? `left ${moment.leftScore} / right ${moment.rightScore}${result.hasHands ? ` / hands ${moment.handScore}` : ""}`
-                        : `activity ${moment.score}`}
-                    </span>
-                  </button>
-                ))}
+                {reviewPeakClusters.map((cluster, clusterIndex) => {
+                  const expanded = expandedPeakClusters.includes(clusterIndex);
+                  if (cluster.length === 1) {
+                    const moment = cluster[0];
+                    return (
+                      <button
+                        key={moment.timeS}
+                        type="button"
+                        onClick={() => onSeek?.(moment.timeS)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-primary/[0.08]"
+                      >
+                        <Play className="h-3 w-3 text-primary" />
+                        <span className="font-mono">{formatTime(moment.timeS)}</span>
+                        <span className="text-muted-foreground">
+                          {result.hasLegs
+                            ? `left ${moment.leftScore} / right ${moment.rightScore}${result.hasHands ? ` / hands ${moment.handScore}` : ""}`
+                            : `activity ${moment.score}`}
+                        </span>
+                      </button>
+                    );
+                  }
+                  return (
+                    <div key={`${cluster[0].timeS}-${cluster[cluster.length - 1].timeS}`} className="rounded-lg border border-primary/20 bg-primary/[0.05] p-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSeek?.(cluster[0].timeS);
+                          setExpandedPeakClusters((current) => (
+                            current.includes(clusterIndex)
+                              ? current.filter((value) => value !== clusterIndex)
+                              : [...current, clusterIndex]
+                          ));
+                        }}
+                        className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs text-foreground transition-colors hover:bg-primary/[0.08]"
+                      >
+                        <Play className="h-3 w-3 text-primary" />
+                        <span className="font-mono">{formatTime(cluster[0].timeS)}-{formatTime(cluster[cluster.length - 1].timeS)}</span>
+                        <span className="text-muted-foreground">burst cluster</span>
+                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{cluster.length} peaks</span>
+                        <span className="text-[10px] text-muted-foreground">{expanded ? "Hide" : "Inspect"}</span>
+                      </button>
+                      {expanded && (
+                        <div className="mt-1 flex flex-wrap gap-1 border-t border-border/60 pt-1.5">
+                          {cluster.map((moment) => (
+                            <button
+                              key={moment.timeS}
+                              type="button"
+                              onClick={() => onSeek?.(moment.timeS)}
+                              className="rounded-md border border-border bg-card/60 px-2 py-1 text-[10px] text-foreground hover:border-primary/40"
+                            >
+                              <span className="font-mono text-primary">{formatTime(moment.timeS)}</span>
+                              {result.hasLegs && <span className="ml-1 text-muted-foreground">L{moment.leftScore}/R{moment.rightScore}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : (

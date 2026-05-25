@@ -272,12 +272,17 @@ export default function SessionReviewPlayer() {
   const handleAcceptMotionSuggestions = async (suggestedEvents) => {
     if (!selectedSession?.id) throw new Error("Select a session before accepting motion-derived suggestions.");
     const existingEvents = selectedSession.event_timeline || [];
-    const additions = (Array.isArray(suggestedEvents) ? suggestedEvents : []).filter((suggestion) => (
-      !existingEvents.some((event) => (
+    const isMatchingMotionEvent = (event, suggestion) => (
         event.source === "motion_derived"
-        && event.motion_evidence?.candidate_id === suggestion.motion_evidence?.candidate_id
         && event.motion_evidence?.suggestion_type === suggestion.motion_evidence?.suggestion_type
-      ))
+        && (
+          event.motion_evidence?.candidate_id === suggestion.motion_evidence?.candidate_id
+          || Math.abs(Number(event.time_s) - Number(suggestion.time_s)) <= 0.75
+        )
+    );
+    const additions = (Array.isArray(suggestedEvents) ? suggestedEvents : []).filter((suggestion, index, suggestions) => (
+      !existingEvents.some((event) => isMatchingMotionEvent(event, suggestion))
+      && !suggestions.slice(0, index).some((prior) => isMatchingMotionEvent(prior, suggestion))
     ));
     if (!additions.length) return selectedSession;
     const eventTimeline = [...existingEvents, ...additions].sort((a, b) => Number(a.time_s) - Number(b.time_s));
