@@ -6,8 +6,19 @@ function present(value) {
   return value != null && value !== "";
 }
 
+function eventCategories(event) {
+  return Array.isArray(event?.category) ? event.category : [event?.category].filter(Boolean);
+}
+
 export function getMotionDerivedEvents(session) {
   return rows(session?.event_timeline).filter((event) => event?.source === "motion_derived");
+}
+
+export function getManualStimulationPauseResumeEvents(session) {
+  return rows(session?.event_timeline).filter((event) => (
+    event?.source !== "motion_derived"
+    && eventCategories(event).some((category) => ["stimulation_paused", "stimulation_resumed"].includes(category))
+  ));
 }
 
 export function hasPromotedMotionEvents(session) {
@@ -66,6 +77,7 @@ export function getMotionEvidenceFreshnessKey(session) {
 export function getMotionEvidenceSummary(session) {
   const motion = session?.motion_analysis_summary || {};
   const promotedEvents = getMotionDerivedEvents(session);
+  const manualStimulationPauseResumeEvents = getManualStimulationPauseResumeEvents(session);
   const hasSavedTelemetry = hasSavedMotionTelemetry(session);
   const hasPromotedEvents = promotedEvents.length > 0;
   const sourceTypes = [
@@ -81,6 +93,8 @@ export function getMotionEvidenceSummary(session) {
     analyzedAt: motion.analyzed_at || null,
     promotedEventCount: promotedEvents.length,
     promotedEvents,
+    manualStimulationPauseResumeCount: manualStimulationPauseResumeEvents.length,
+    manualStimulationPauseResumeEvents,
     savedFindingCount: rows(motion.findings).length,
     reviewPeakCount: rows(motion.review_peaks).length,
     hasDerivedTimeline: rows(motion.derived_timeline).length > 0,
@@ -124,6 +138,11 @@ export function getMotionEvidenceDigest(session) {
   }
   if (evidence.handCadenceSummary?.movement_cycles_per_minute_estimate != null) {
     lines.push(`Hand-movement cadence proxy: approximately ${evidence.handCadenceSummary.movement_cycles_per_minute_estimate} movement cycles per minute; pauses of at least two seconds: ${evidence.handCadenceSummary.pause_count ?? "unknown"}.`);
+  }
+  if (evidence.manualStimulationPauseResumeCount) {
+    lines.push(`Explicit manually entered stimulation pause/resume evidence is present (${evidence.manualStimulationPauseResumeCount} timeline events). For stimulation pause timing and duration, these manual events take priority over motion-derived hand inactivity or resumption candidates; use motion pause signals only as secondary corroborating context because hand tracking may be incomplete.`);
+  } else if (evidence.handCadenceSummary?.pause_count != null) {
+    lines.push("No explicit manually entered stimulation pause/resume events were identified in this session. Motion-derived hand pause counts may be discussed only as provisional observed hand-activity gaps, not confirmed stimulation pauses.");
   }
   if (evidence.handBehaviorSummary?.status === "calibrated_matching_available") {
     lines.push(`Calibrated hand-behavior comparison: ${evidence.handBehaviorSummary.stroke_like_window_count ?? 0} stroke-like rhythmic motion proxy windows matched recorded-video examples, covering approximately ${evidence.handBehaviorSummary.stroke_like_time_pct ?? 0}% of the analyzed window. This is an observational proxy, not confirmed technique or intent.`);

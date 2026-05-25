@@ -161,6 +161,8 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Use one consistent numeric source within each claim. If saved summary values differ from directly computed telemetry or differ only because of rounding, identify which value you are citing or explain the rounding/source difference instead of silently mixing figures.
 - Do not invent hormone explanations, neurological localization claims, or anatomical causal claims that are not directly supported by the available evidence.
 - Do not assume person-specific anatomy or sensations that are not present in the data. You may discuss anatomy and physiology implied by logged methods or sensations, such as glans, foreskin, urethral, perineal, pelvic floor, ejaculatory, autonomic, or recovery physiology when those methods or cues are present.
+- If explicit manually entered timeline events identify stimulation as paused or resumed, treat those entries as the primary evidence for stimulation pause timing and duration. Motion-derived hand inactivity or resumption candidates are secondary observational support only, because hand tracking may be incomplete or unreliable.
+- If only motion-derived pause/resume evidence exists, describe it as an observed hand-activity gap or resumption candidate rather than a confirmed stimulation pause or resumption.
 - Use anatomical dimensions only when they meaningfully affect stimulation mechanics, device interaction, pressure distribution, or interpretation of repeated observed patterns.
 - Do not use anatomy for unsupported physiological claims, vanity assumptions, or speculative causal conclusions.
 - Meatal morphology may be considered only when interpreting device fit, movement perception, sealing behavior, stimulation mechanics, or repeated observed functional patterns.

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, ListPlus, Play, ShieldCheck, Trash2, Video } from "lucide-react";
+import { ArrowRight, ListPlus, Maximize2, Minimize2, Play, ShieldCheck, Trash2, Video } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
@@ -38,6 +38,7 @@ export default function MotionLab() {
   const [feedRole, setFeedRole] = useState("composite");
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [previewFloating, setPreviewFloating] = useState(false);
 
   useEffect(() => {
     base44.entities.Session.list("-date", 300)
@@ -211,21 +212,40 @@ export default function MotionLab() {
 
           <section className="space-y-4">
             {videoSrc ? (
-              <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <div className={`rounded-xl border border-border bg-card p-4 space-y-3 ${
+                previewFloating
+                  ? "fixed bottom-4 right-4 z-50 min-h-[12rem] min-w-[18rem] max-h-[calc(100vh-5rem)] max-w-[calc(100vw-2rem)] w-[min(38rem,calc(100vw-2rem))] resize overflow-auto border-primary/35 shadow-2xl"
+                  : ""
+              }`}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Processing Preview</p>
-                  {selectedSession && (
-                    <Link to={`/review-player?session=${encodeURIComponent(selectedSession.id)}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                      Return to Review Player <ArrowRight className="h-3 w-3" />
-                    </Link>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewFloating((floating) => !floating)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/[0.06] px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/45 hover:bg-primary/10"
+                    >
+                      {previewFloating ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                      {previewFloating ? "Dock preview" : "Float preview"}
+                    </button>
+                    {selectedSession && (
+                      <Link to={`/review-player?session=${encodeURIComponent(selectedSession.id)}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                        Return to Review Player <ArrowRight className="h-3 w-3" />
+                      </Link>
+                    )}
+                  </div>
                 </div>
+                {previewFloating && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Drag the lower-right corner to resize. Video seeking remains available in the player controls.
+                  </p>
+                )}
                 <video
                   ref={videoRef}
                   src={videoSrc}
                   controls
                   playsInline
-                  className="max-h-[60vh] w-full rounded-lg bg-black object-contain"
+                  className={`${previewFloating ? "max-h-[42vh]" : "max-h-[60vh]"} w-full rounded-lg bg-black object-contain`}
                   onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)}
                   onPlay={() => setVideoPlaying(true)}
                   onPause={() => setVideoPlaying(false)}

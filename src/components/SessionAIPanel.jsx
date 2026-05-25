@@ -71,7 +71,9 @@ MOTION INTERPRETATION RULES:
 - Any hand cadence estimate is an observational hand-movement cadence proxy, not confirmed stroke speed.
 
 EVIDENCE PRECEDENCE HIERARCHY FOR MOVEMENT:
-- Saved motion telemetry has precedence for visible movement timing, left/right comparison, asymmetry, pause/resumption timing, cadence proxy, and motion peaks.
+- Saved motion telemetry has precedence for visible lower-body movement timing, left/right comparison, asymmetry, cadence proxy, and motion peaks.
+- For stimulation pause/resume timing and pause duration, explicit manually entered timeline events tagged stimulation_paused or stimulation_resumed take priority over motion-derived hand pause/resume candidates. Hand tracking can miss or misclassify activity, so use motion-derived pauses only as secondary corroboration when manual pause/resume events exist.
+- If there are no explicit manually entered stimulation pause/resume events, describe motion-derived pauses only as observed hand-activity gap candidates, not confirmed stimulation pauses.
 - Manual notes remain valuable when they add context motion cannot infer, such as repositioning, method changes, breathing changes, subjective sensation, or interruption.
 - If a vague manual movement description conflicts with saved motion telemetry, prefer telemetry for the visible movement description while preserving the note as subjective or contextual history.
 - Treat motion-derived evidence as observational only. Do not infer intent, arousal phase, muscle force, neurological meaning, or physiological mechanism from motion alone.`;
@@ -410,10 +412,12 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     const eventTimeline = (session.event_timeline || []).map(e => {
       const timeWords = formatTimeWords(e.time_s);
       const hr = nearestHR(e.time_s);
-      const catMeta = getCategoryMeta(e.category);
+      const categories = Array.isArray(e.category) ? e.category : [e.category].filter(Boolean);
+      const categoryLabels = categories.map((category) => getCategoryMeta(category).label).join(", ") || "Other";
+      const provenance = e.source === "motion_derived" ? "motion-derived observation" : "manual observation";
       const relToClimax = session.climax_offset_s != null ? Math.round(e.time_s - session.climax_offset_s) : null;
       const relStr = relToClimax != null ? ` (${formatTimeWords(Math.abs(relToClimax))} ${relToClimax >= 0 ? 'after' : 'before'} climax)` : "";
-      return `[${catMeta.label}] at ${timeWords}${relStr} — ${e.note}${hr != null ? ` (heart rate: ${hr} beats per minute)` : ''}`;
+      return `[${categoryLabels}; ${provenance}] at ${timeWords}${relStr} — ${e.note}${hr != null ? ` (heart rate: ${hr} beats per minute)` : ''}`;
     });
 
     const arousalProfile = userProfile && (userProfile.arousal_response_style || userProfile.arousal_notes || userProfile.climax_sensitivity) ? `

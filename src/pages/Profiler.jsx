@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
-import { getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
+import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -55,7 +55,9 @@ function naturalizeSpokenDates(value) {
 const MOTION_EVIDENCE_PRECEDENCE_RULE = `
 MOVEMENT EVIDENCE PRECEDENCE RULE (apply only when saved media-derived motion evidence exists):
 - For visible movement interpretation, prioritize saved MediaPipe-derived motion telemetry over vague or conflicting movement-only notes.
-- Media-derived evidence may support observational synthesis of lower-body movement timing, left/right activity comparison, asymmetry, forefoot or toe-region activity proxies, hand-movement cadence proxy, pause/resume structure, movement clustering, and confidence or reliability limitations.
+- Media-derived evidence may support observational synthesis of lower-body movement timing, left/right activity comparison, asymmetry, forefoot or toe-region activity proxies, hand-movement cadence proxy, provisional hand-activity gap/resumption candidates, movement clustering, and confidence or reliability limitations.
+- For stimulation pause/resume timing and pause duration, explicit manually entered timeline events tagged stimulation_paused or stimulation_resumed take priority. Treat motion-derived hand pause/resume candidates as secondary corroboration because hand visibility and tracking may be imperfect.
+- If manual stimulation pause/resume entries are absent, describe motion pause/resume evidence only as observed hand-activity gap or resumption candidates, not confirmed stimulation timing.
 - Manual notes remain valuable when they contribute context that motion telemetry cannot know, including repositioning, method or grip change, breathing changes, interruption, subjective sensation, threshold behavior explicitly noted by the person, or environmental context.
 - Treat older vague movement-only notes such as "feet moving," "toes twitching," "left foot active," "bilateral tremors," or "hand moving faster" as secondary when saved motion telemetry addresses the same visible behavior.
 - If saved telemetry conflicts with vague manual movement notes, characterize visible movement from telemetry and preserve the manual note only as subjective or contextual history unless it adds distinct information.
@@ -254,6 +256,9 @@ function compactSessionLine(s) {
     .slice(0, 4)
     .map((e) => `${fmtSec(e.time_s)}${e.source === "motion_derived" ? " [motion-derived observation]" : ""} ${briefText(e.note, 70)}`)
     .join(" | ");
+  const manualPauseResumeEvents = getManualStimulationPauseResumeEvents(s)
+    .map((event) => `${fmtSec(event.time_s)} ${(Array.isArray(event.category) ? event.category : [event.category]).includes("stimulation_paused") ? "stimulation paused" : "stimulation resumed"}`)
+    .join(" | ");
   const motion = s.motion_analysis_summary;
   const motionSummary = getMotionEvidenceSummary(s);
   const motionQuality = motion?.quality_indicators
@@ -297,6 +302,7 @@ function compactSessionLine(s) {
     s.unusual_sensations ? `sensations ${briefText(s.unusual_sensations, 90)}` : null,
     s.notes ? `notes ${briefText(s.notes, 120)}` : null,
     events ? `events ${events}` : null,
+    manualPauseResumeEvents ? `manual stimulation pause/resume timing (primary for pause interpretation) ${manualPauseResumeEvents}` : null,
     motionEvidence,
   ].filter(Boolean).join("; ");
 }
@@ -473,7 +479,7 @@ function SectionCard({ icon, title, color, children, defaultCollapsed = false })
   );
 }
 
-function AIProfilePanel({ sessions, userProfile, journals }) {
+function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = false }) {
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
@@ -488,6 +494,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
 
   useEffect(() => {
     let cancelled = false;
+    if (evidenceLoading) return undefined;
 
     const reconnect = async () => {
       try {
@@ -544,7 +551,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
     return () => {
       cancelled = true;
     };
-  }, [result, sessions.length]);
+  }, [evidenceLoading, result, sessions.length]);
 
   const analyze = async () => {
     setLoading(true);
@@ -742,7 +749,7 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         <p className="text-xs text-muted-foreground">
           AI-generated personal physiological & arousal profile based on all sessions, event timelines, and profile notes.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || sessions.length < 2} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
+        <Button size="sm" onClick={analyze} disabled={loading || evidenceLoading || sessions.length < 2} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Profiling…</>
             : <><Brain className="w-3 h-3" />{result ? "Re-generate" : "Generate Profile"}</>}
@@ -762,7 +769,13 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         </div>
       )}
 
-      {sessions.length < 2 && (
+      {evidenceLoading && !result && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" /> Loading session evidence in the background...
+        </p>
+      )}
+
+      {!evidenceLoading && sessions.length < 2 && (
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           <AlertCircle className="w-3.5 h-3.5" /> Need at least 2 sessions to generate a profile.
         </p>
@@ -777,7 +790,7 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         />
       )}
 
-      {!result && !loading && sessions.length >= 2 && (
+      {!result && !loading && !evidenceLoading && sessions.length >= 2 && (
         <p className="text-xs text-muted-foreground">
           Click Generate Profile to create your comprehensive physiological and arousal profile. Uses Claude Sonnet.
         </p>
@@ -831,7 +844,7 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
   );
 }
 
-function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
+function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoading = false, evidenceLoading = false }) {
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
@@ -848,6 +861,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
 
   useEffect(() => {
     let cancelled = false;
+    if (evidenceLoading) return undefined;
 
     const reconnect = async () => {
       try {
@@ -904,7 +918,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
     return () => {
       cancelled = true;
     };
-  }, [result, sessions.length]);
+  }, [evidenceLoading, result, sessions.length]);
 
   const analyze = async () => {
     setLoading(true);
@@ -1021,7 +1035,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
         <p className="text-xs text-muted-foreground">
           Evidence-grounded anatomy, dynamic function, fit, and instrumentation synthesis from your optional profile data and supported session findings.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || !userProfile} className="h-7 text-xs gap-1.5 shrink-0">
+        <Button size="sm" onClick={analyze} disabled={loading || profileLoading || !userProfile} className="h-7 text-xs gap-1.5 shrink-0">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Synthesizing...</>
             : <><Activity className="w-3 h-3" />{result ? "Re-generate" : "Generate A&P"}</>}
@@ -1043,7 +1057,10 @@ Write directly to the person in clear, clinically grounded language. Favor meani
 
       <CompactError message={error} />
       {loading && <ProfilerJobStatus job={jobStatus} fallback="The anatomical and physiological profile is running in the background..." />}
-      {!result && !loading && (
+      {!result && !loading && profileLoading && (
+        <p className="text-xs text-muted-foreground">Loading your saved profile context...</p>
+      )}
+      {!result && !loading && !profileLoading && (
         <p className="text-xs text-muted-foreground">
           Populate any relevant optional Profile fields, then generate this dedicated A&P synthesis. Unpopulated details will not be inferred.
         </p>
@@ -1100,7 +1117,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
   );
 }
 
-function NearClimaxPanel({ sessions, allTimelines, userProfile }) {
+function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading = false }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [eventStats, setEventStats] = useState(null);
@@ -1218,12 +1235,16 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
     <SectionCard icon={<Zap className="w-4 h-4" />} title="Near-Climax Event Analysis" color="hsl(var(--chart-3))" defaultCollapsed={true}>
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">Detects erratic HR spikes & reversals that resemble — but don't complete — a climax cascade.</p>
-        <Button size="sm" onClick={analyze} disabled={loading} className="h-7 text-xs gap-1.5 shrink-0">
+        <Button size="sm" onClick={analyze} disabled={loading || timelineLoading} className="h-7 text-xs gap-1.5 shrink-0">
           {loading ?
             <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Analyzing…</> :
             <><Brain className="w-3 h-3" />{result ? "Re-run" : "Analyze"}</>}
         </Button>
       </div>
+
+      {timelineLoading && !result && (
+        <p className="text-xs text-muted-foreground">Loading heart-rate timelines for event analysis...</p>
+      )}
 
       <CompactError message={error} />
 
@@ -1324,7 +1345,7 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
 
 }
 
-function StimulationMethodsPanel({ sessions, userProfile }) {
+function StimulationMethodsPanel({ sessions, userProfile, evidenceLoading = false }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -1469,14 +1490,18 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
         <p className="text-xs text-muted-foreground">
           How each stimulation method affects your physiology, arousal, and climax outcomes across sessions.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || sessions.length < 2} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
+        <Button size="sm" onClick={analyze} disabled={loading || evidenceLoading || sessions.length < 2} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Analyzing…</>
             : <><Brain className="w-3 h-3" />{result ? "Re-generate" : "Analyze Methods"}</>}
         </Button>
       </div>
 
-      {sessions.length < 2 && (
+      {evidenceLoading && !result && (
+        <p className="text-xs text-muted-foreground">Loading session evidence for method comparison...</p>
+      )}
+
+      {!evidenceLoading && sessions.length < 2 && (
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           <AlertCircle className="w-3.5 h-3.5" /> Need at least 2 sessions to analyze.
         </p>
@@ -1501,7 +1526,7 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
         </div>
       )}
 
-      {!result && !loading && sessions.length >= 2 && (
+      {!result && !loading && !evidenceLoading && sessions.length >= 2 && (
         <p className="text-xs text-muted-foreground">Click Analyze Methods to generate a deep physiological interpretation of each stimulation method. Uses Claude Sonnet.</p>
       )}
 
@@ -1558,39 +1583,86 @@ export default function Profiler() {
   const [allTimelines, setAllTimelines] = useState({});
   const [userProfile, setUserProfile] = useState(null);
   const [journals, setJournals] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [sessionEvidenceLoading, setSessionEvidenceLoading] = useState(true);
+  const [timelineLoading, setTimelineLoading] = useState(true);
+  const [profileContextLoading, setProfileContextLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [refreshingEvidence, setRefreshingEvidence] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
-    (async () => {
-      const [all, me, journalRows] = await Promise.all([
-        base44.entities.Session.list("-date", 300),
-        base44.auth.me(),
-        base44.entities.Journal.list("-session_date", 300),
-      ]);
-      setSessions(all);
-      setUserProfile(me);
-      setJournals(journalRows);
+    let cancelled = false;
+    setSessionEvidenceLoading(true);
+    setTimelineLoading(true);
+    setLoadError("");
+    setAllTimelines({});
 
-      // Load HR timelines in small batches to avoid rate limits
-      const withData = all.filter((s) => s.climax_offset_s != null || s.avg_hr != null);
-      const BATCH = 5;
-      const pairs = [];
-      for (let i = 0; i < withData.length; i += BATCH) {
-        const chunk = withData.slice(i, i + BATCH);
-        const results = await Promise.all(
-          chunk.map((s) =>
-            base44.entities.HeartRateTimeline.filter({ session: s.id }, "time_offset_s", 5000).then((rows) => [s.id, rows])
-          )
-        );
-        pairs.push(...results);
+    const loadSessionsAndTimelines = async () => {
+      try {
+        const all = await base44.entities.Session.list("-date", 300);
+        if (cancelled) return;
+        setSessions(all);
+        setSessionEvidenceLoading(false);
+
+        // HR timelines are useful for secondary analysis, but should never block the saved profile UI.
+        const withData = all.filter((session) => session.climax_offset_s != null || session.avg_hr != null);
+        const BATCH = 5;
+        for (let i = 0; i < withData.length; i += BATCH) {
+          const chunk = withData.slice(i, i + BATCH);
+          const results = await Promise.all(
+            chunk.map((session) =>
+              base44.entities.HeartRateTimeline.filter({ session: session.id }, "time_offset_s", 5000).then((rows) => [session.id, rows])
+            )
+          );
+          if (cancelled) return;
+          setAllTimelines((current) => {
+            const next = { ...current };
+            results.forEach(([sessionId, rows]) => {
+              if (rows.length > 0) next[sessionId] = rows;
+            });
+            return next;
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error?.message || "Could not load current profiler evidence.");
+          setSessionEvidenceLoading(false);
+        }
+      } finally {
+        if (!cancelled) setTimelineLoading(false);
       }
-      const map = {};
-      pairs.forEach(([id, rows]) => {if (rows.length > 0) map[id] = rows;});
-      setAllTimelines(map);
-      setLoading(false);
-    })();
-  }, []);
+    };
+
+    loadSessionsAndTimelines();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAttempt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProfileContextLoading(true);
+    base44.auth.me()
+      .then((me) => {
+        if (!cancelled) setUserProfile(me);
+      })
+      .catch(() => {
+        if (!cancelled) setUserProfile(null);
+      })
+      .finally(() => {
+        if (!cancelled) setProfileContextLoading(false);
+      });
+    base44.entities.Journal.list("-session_date", 300)
+      .then((rows) => {
+        if (!cancelled) setJournals(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setJournals([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAttempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1617,21 +1689,16 @@ export default function Profiler() {
 
   const refreshEvidence = async () => {
     setRefreshingEvidence(true);
+    setLoadError("");
     try {
       const all = await base44.entities.Session.list("-date", 300);
       setSessions(all);
+    } catch (error) {
+      setLoadError(error?.message || "Could not refresh current profiler evidence.");
     } finally {
       setRefreshingEvidence(false);
     }
   };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <div className="px-4 py-6 pb-24 space-y-6">
@@ -1639,7 +1706,9 @@ export default function Profiler() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">AI Profiler</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {sessions.length} sessions · {Object.keys(allTimelines).length} with HR data · {summarizeMotionEvidenceCoverage(sessions).any} with motion evidence
+            {sessionEvidenceLoading
+              ? "Loading saved session evidence..."
+              : `${sessions.length} sessions · ${timelineLoading ? "loading HR timelines" : `${Object.keys(allTimelines).length} with HR data`} · ${summarizeMotionEvidenceCoverage(sessions).any} with motion evidence`}
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={refreshEvidence} disabled={refreshingEvidence} className="gap-1.5 text-xs">
@@ -1648,10 +1717,19 @@ export default function Profiler() {
         </Button>
       </div>
 
-      <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} />
-      <AnatomicalPhysiologicalProfilePanel sessions={sessions} userProfile={userProfile} />
-      <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} />
-      <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} />
+      {loadError && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
+          <p className="text-sm text-destructive">{loadError}</p>
+          <Button size="sm" variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="h-8 text-xs">
+            Retry loading evidence
+          </Button>
+        </div>
+      )}
+
+      <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} evidenceLoading={sessionEvidenceLoading} />
+      <AnatomicalPhysiologicalProfilePanel sessions={sessions} userProfile={userProfile} profileLoading={profileContextLoading} evidenceLoading={sessionEvidenceLoading} />
+      <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} evidenceLoading={sessionEvidenceLoading} />
+      <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} timelineLoading={timelineLoading} />
     </div>
   );
 }
