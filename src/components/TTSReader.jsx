@@ -14,6 +14,7 @@ import {
   TTS_CHUNK_TARGET_CHARS,
 } from "./TTSButton";
 import { fmtSecondsInText } from "@/utils/formatSeconds";
+import { buildAudioExportFilename } from "@/utils/exportFilenames";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
@@ -689,6 +690,12 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       : `PhysioLog Analysis – ${friendlyDate}`;
   };
 
+  const getAudioDownloadFilename = (format = runtimeRef.current.format) => buildAudioExportFilename({
+    title: title || "Audio Narration",
+    sessionDate: sessionDate || sourceGeneratedAt || new Date(),
+    extension: getTTSFileExtension(format),
+  });
+
   const clearSavedExportJob = () => {
     try {
       localStorage.removeItem(ttsExportStorageKey(sessionId, title));
@@ -721,7 +728,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const triggerSavedExportDownload = (exportRecord) => {
     const a = document.createElement("a");
     a.href = exportRecord.file_url;
-    a.download = exportRecord.filename || `${getDownloadDisplayTitle().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportRecord.format || runtimeRef.current.format)}`;
+    a.download = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
     a.click();
     saveDownloadRecord({
       downloaded_at: new Date().toISOString(),
@@ -735,7 +742,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
-    const filename = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
+    const filename = getAudioDownloadFilename(rendered.format || exportFormat);
     const a = document.createElement("a");
     a.href = rendered.file_url;
     a.download = filename;
@@ -753,6 +760,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       filename,
       tts_session_key: sessionId || null,
       analysis_title: title || null,
+      session_date: sessionDate || null,
       source_generated_at: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
       exported_at: new Date().toISOString(),
     });

@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Trash2, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PageHeader from "@/components/PageHeader";
+import { buildAudioExportFilename } from "@/utils/exportFilenames";
 
 const formatDuration = (seconds) => {
   const mins = Math.floor(seconds / 60);
@@ -43,7 +44,11 @@ export default function Library() {
   const handleDownload = (export_) => {
     const a = document.createElement("a");
     a.href = export_.file_url;
-    a.download = `${export_.title}.wav`;
+    a.download = buildAudioExportFilename({
+      title: export_.analysis_title || export_.title,
+      sessionDate: export_.session_date || export_.exported_at || export_.created_date,
+      extension: export_.format || "mp3",
+    });
     a.click();
   };
 

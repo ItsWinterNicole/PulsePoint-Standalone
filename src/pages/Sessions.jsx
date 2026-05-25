@@ -39,11 +39,13 @@ import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { hasAnyMotionEvidence, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileExportFilename } from "@/utils/exportFilenames";
 import { useToast } from "@/components/ui/use-toast";
+import { getSessionLatestUpdateAt } from "@/utils/sessionFreshness";
 
 const ALL_METHODS = ["Manual", "Silicone Sleeve", "Coyote E-Stim", "TENS", "Foley Catheter"];
 const BUILD_TYPES = ["Gradual", "Stepwise", "Spike", "Plateau-heavy", "Erratic", "Other"];
 const SORT_OPTIONS = [
   { value: "newest", label: "Newest" },
+  { value: "last_updated", label: "Last Updated" },
   { value: "best_score", label: "Best Score" },
   { value: "satisfaction", label: "Satisfaction" },
   { value: "intensity", label: "Intensity" },
@@ -274,6 +276,9 @@ export default function Sessions() {
 
     const sorted = sessions.filter(matchesFilters);
     sorted.sort((a, b) => {
+      if (sortMode === "last_updated") {
+        return new Date(getSessionLatestUpdateAt(b) || b.date || 0) - new Date(getSessionLatestUpdateAt(a) || a.date || 0);
+      }
       if (sortMode === "best_score") return (scoreOf(b) ?? 0) - (scoreOf(a) ?? 0);
       if (sortMode === "satisfaction") return (num(b.satisfaction) ?? 0) - (num(a.satisfaction) ?? 0);
       if (sortMode === "intensity") return (num(b.intensity) ?? 0) - (num(a.intensity) ?? 0);

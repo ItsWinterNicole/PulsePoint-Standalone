@@ -25,6 +25,26 @@ export function buildProfileExportFilename({ outputType, extension, generatedAt 
   return `PulsePoint_${output}_generated-${datePart(generatedAt)}.${extension}`;
 }
 
+function audioTitleParts(value) {
+  const raw = String(value || "Audio Narration").trim();
+  const datedTitle = raw.match(/^([A-Za-z]+ \d{1,2},? \d{4})\s*[-\u2013\u2014]\s*(.+)$/);
+  const title = (datedTitle?.[2] || raw)
+    .replace(/^AI\s+/i, "")
+    .replace(/\s+and\s+/gi, " ")
+    .replace(/\s*&\s*/g, " ");
+
+  return {
+    title: sanitizeFilenamePart(title) || "Audio-Narration",
+    embeddedDate: datedTitle?.[1] || null,
+  };
+}
+
+export function buildAudioExportFilename({ title, sessionDate, extension = "mp3" }) {
+  const parts = audioTitleParts(title);
+  const recordedDate = datePart(sessionDate || parts.embeddedDate || new Date());
+  return `${parts.title}_${recordedDate}.${extension}`;
+}
+
 export function buildExportMetadataHeader({ type, session, generatedAt, evidenceStatus }) {
   return [
     "PulsePoint Export",

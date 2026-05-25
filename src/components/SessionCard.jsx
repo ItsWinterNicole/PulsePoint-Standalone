@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
@@ -30,6 +30,7 @@ import {
 import moment from "moment";
 import { gradeFromPct } from "@/utils/sessionScore";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
+import { getSessionLatestUpdateAt } from "@/utils/sessionFreshness";
 
 const num = (value) => {
   const parsed = Number(value);
@@ -81,38 +82,13 @@ function DataPill({ icon: Icon, label, active, tone = "muted" }) {
   );
 }
 
-function latestSessionUpdate(session) {
-  const candidates = [
-    session.updated_date,
-    session.updated_at,
-    session.motion_analysis_summary?.analyzed_at,
-    session.ai_analysis?._meta?.last_generated_at,
-    session.ai_analysis?._meta?.updated_at,
-    session.ai_analysis?._meta?.generated_at,
-    session.ai_session_deep_dive?._meta?.last_generated_at,
-    session.ai_session_deep_dive?._meta?.updated_at,
-    session.ai_cascade?._meta?.last_generated_at,
-    session.ai_cascade?._meta?.updated_at,
-    session.ai_no_climax?._meta?.last_generated_at,
-    session.ai_no_climax?._meta?.updated_at,
-    session.ai_timeline_narrative?._meta?.last_generated_at,
-    session.ai_timeline_narrative?._meta?.updated_at,
-    session.ai_near_climax_overview?._meta?.last_generated_at,
-    session.ai_near_climax_overview?._meta?.updated_at,
-  ].filter(Boolean);
-
-  const dates = candidates
-    .map((candidate) => moment(candidate))
-    .filter((candidate) => candidate.isValid());
-  if (!dates.length) return null;
-  return dates.reduce((latest, candidate) => candidate.isAfter(latest) ? candidate : latest);
-}
-
 export default function SessionCard({ session, selectable, selected, onSelect, onDelete }) {
+  const navigate = useNavigate();
   const [aiExpanded, setAiExpanded] = useState(false);
 
   const date = moment(session.date).format("MMM D, YYYY");
-  const updatedMoment = latestSessionUpdate(session);
+  const updatedAt = getSessionLatestUpdateAt(session);
+  const updatedMoment = updatedAt ? moment(updatedAt) : null;
   const updatedLabel = updatedMoment ? `Updated ${updatedMoment.fromNow()}` : "Updated time unavailable";
   const updatedTitle = updatedMoment ? `Last updated ${updatedMoment.format("MMM D, YYYY [at] h:mm A")}` : undefined;
   const methods = session.methods || [];
@@ -137,11 +113,25 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
     session.discomfort_interference,
     session.primary_limiting_factor,
   ].filter((value) => value != null && value !== "").length;
+  const openSession = () => {
+    if (!selectable) navigate(`/sessions/${session.id}`);
+  };
 
   const content = (
-    <div className={`bg-card rounded-xl border p-4 transition-all ${
+    <div
+      className={`bg-card rounded-xl border p-4 transition-all ${
       selected ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/30"
-    }`}>
+      } ${!selectable ? "cursor-pointer" : ""}`}
+      onClick={!selectable ? openSession : undefined}
+      onKeyDown={!selectable ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openSession();
+        }
+      } : undefined}
+      role={!selectable ? "link" : undefined}
+      tabIndex={!selectable ? 0 : undefined}
+    >
       {/* Header row */}
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
@@ -324,6 +314,5 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
     </div>
   );
 
-  if (selectable) return content;
-  return <Link to={`/sessions/${session.id}`}>{content}</Link>;
+  return content;
 }

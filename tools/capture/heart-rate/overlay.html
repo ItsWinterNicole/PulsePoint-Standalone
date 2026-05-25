@@ -6,8 +6,16 @@
 
 <style>
 :root{
-  --bg: rgba(255,255,255,0.88);
-  --text: rgba(0,0,0,0.92);
+  --bg: rgba(15,20,25,0.94);
+  --card: rgba(22,29,36,0.86);
+  --border: rgba(51,65,75,0.9);
+  --border-accent: rgba(45,212,191,0.32);
+  --text: rgba(236,244,247,0.96);
+  --muted: rgba(148,163,184,0.9);
+  --teal: rgb(45,212,191);
+  --violet: rgb(167,139,250);
+  --baseline: rgba(148,163,184,0.82);
+  --rose: rgb(251,113,133);
 }
 
 html,body{
@@ -20,40 +28,61 @@ html,body{
   width:100%;
   height:100%;
   box-sizing:border-box;
-  padding:12px;
+  padding:16px;
   background:var(--bg);
-  border-radius:16px;
+  border:1px solid var(--border-accent);
+  border-radius:18px;
   display:flex;
   flex-direction:row;
   align-items:center;
-  gap:14px;
-  backdrop-filter:blur(2px);
+  gap:16px;
+  box-shadow:0 12px 32px rgba(0,0,0,0.22), inset 0 1px rgba(255,255,255,0.025);
+  backdrop-filter:blur(8px);
 }
 
 #stats{
-  width:220px;
-  text-align:center;
+  width:238px;
+  text-align:left;
   font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
   color:var(--text);
   display:flex;
   flex-direction:column;
   justify-content:center;
-  gap:14px;
-  flex:0 0 220px;
+  gap:10px;
+  flex:0 0 238px;
+}
+
+.metric{
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:var(--card);
+  padding:12px 14px;
 }
 
 .value{
-  font-size:72px;
-  font-weight:800;
+  font-size:52px;
+  font-weight:750;
   line-height:1;
+  color:var(--text);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-1.5px;
 }
 
 .label{
-  font-size:20px;
+  font-size:12px;
   font-weight:700;
-  letter-spacing:1px;
-  opacity:.72;
-  margin-top:4px;
+  letter-spacing:1.3px;
+  color:var(--muted);
+  margin-bottom:7px;
+  text-transform:uppercase;
+}
+
+.metric:first-child .value{
+  color:var(--teal);
+}
+
+.metric:last-child .value{
+  color:var(--rose);
 }
 
 #chartWrap{
@@ -63,28 +92,90 @@ html,body{
   display:flex;
   flex-direction:column;
   justify-content:center;
-  gap:10px;
+  gap:9px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:var(--card);
+  padding:11px 13px 10px;
+}
+
+#chartHeader{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+}
+
+#chartTitle{
+  color:var(--teal);
+  font-size:12px;
+  font-weight:750;
+  letter-spacing:1.2px;
+  text-transform:uppercase;
+}
+
+#chartSubtitle{
+  margin-top:3px;
+  color:var(--muted);
+  font-size:11px;
+}
+
+#legend{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  color:var(--muted);
+  font:600 10px/1 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  white-space:nowrap;
+}
+
+.legendItem{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+}
+
+.legendLine{
+  display:inline-block;
+  width:15px;
+  border-top:2px solid;
+}
+
+.legendLine.baseline{
+  border-top-style:dashed;
+  border-color:var(--baseline);
+}
+
+.legendLine.smooth{
+  border-color:var(--violet);
+}
+
+.legendLine.hr{
+  border-color:var(--teal);
 }
 
 #statusRow{
-  min-height:88px;
+  min-height:0;
   display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-  gap:8px;
+  justify-content:flex-end;
+  position:absolute;
+  top:12px;
+  right:13px;
+  z-index:1;
 }
 
 #statusBadge{
-  min-width:320px;
-  padding:8px 18px;
-  border-radius:14px;
-  background:rgba(0,0,0,0.14);
+  min-width:152px;
+  padding:7px 11px;
+  border-radius:10px;
+  border:1px solid rgba(45,212,191,.24);
+  background:rgba(15,20,25,0.9);
   color:var(--text);
   font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
   text-align:center;
   display:none;
-  box-shadow:0 1px 6px rgba(0,0,0,0.10);
+  box-shadow:0 4px 14px rgba(0,0,0,0.18);
 }
 
 #statusBadge.active{
@@ -92,17 +183,17 @@ html,body{
 }
 
 #statusLabel{
-  font-size:18px;
+  font-size:10px;
   font-weight:800;
   letter-spacing:1px;
-  opacity:.82;
+  color:var(--teal);
   text-transform:uppercase;
   line-height:1.1;
 }
 
 #statusTimer{
-  font-size:42px;
-  font-weight:900;
+  font-size:24px;
+  font-weight:750;
   line-height:1;
   margin-top:2px;
 }
@@ -112,6 +203,7 @@ html,body{
   min-height:0;
   display:flex;
   align-items:center;
+  position:relative;
 }
 
 canvas{
@@ -127,25 +219,36 @@ canvas{
 
 <div id="panel">
   <div id="stats">
-    <div>
-      <div class="value" id="avg">--</div>
+    <div class="metric">
       <div class="label">AVG BPM</div>
+      <div class="value" id="avg">--</div>
     </div>
-    <div>
-      <div class="value" id="max">--</div>
+    <div class="metric">
       <div class="label">MAX BPM</div>
+      <div class="value" id="max">--</div>
     </div>
   </div>
 
   <div id="chartWrap">
-    <div id="statusRow">
-      <div id="statusBadge">
-        <div id="statusLabel">SUSTAINED BUILD</div>
-        <div id="statusTimer">00:00</div>
+    <div id="chartHeader">
+      <div>
+        <div id="chartTitle">Heart Rate Trend</div>
+        <div id="chartSubtitle">Current, smoothed, and baseline HR</div>
+      </div>
+      <div id="legend">
+        <span class="legendItem"><span class="legendLine baseline"></span>Baseline</span>
+        <span class="legendItem"><span class="legendLine smooth"></span>Smoothed</span>
+        <span class="legendItem"><span class="legendLine hr"></span>HR</span>
       </div>
     </div>
 
     <div id="chartBox">
+      <div id="statusRow">
+        <div id="statusBadge">
+          <div id="statusLabel">SUSTAINED BUILD</div>
+          <div id="statusTimer">00:00</div>
+        </div>
+      </div>
       <canvas id="chart"></canvas>
     </div>
   </div>
@@ -197,17 +300,6 @@ const BUILD_REENTRY_COOLDOWN_SEC = 6;
 /*** OBS RECORD STATE ***/
 let obsRecordingActive = false;
 
-/*** COLOR STOPS FOR LINE / BG ***/
-const COLOR_STOPS = [
-  { bpm: 70,  rgb: [96,176,68] },
-  { bpm: 90,  rgb: [200,180,0] },
-  { bpm: 110, rgb: [230,126,34] },
-  { bpm: 140, rgb: [215,58,73] }
-];
-const BG_ALPHA = 0.78;
-const BG_SMOOTHING = 0.18;
-let displayHr = null;
-
 /*** DETECTION WINDOWS ***/
 const SHORT_WINDOW_SEC = 10;
 const SLOPE_WINDOW_SEC = 8;
@@ -222,7 +314,6 @@ const statusTimer = document.getElementById("statusTimer");
 const statusBadge = document.getElementById("statusBadge");
 
 /*** HELPERS ***/
-function lerp(a,b,t){ return a + (b-a)*t; }
 function mean(nums){ return nums.length ? nums.reduce((a,b)=>a+b,0)/nums.length : 0; }
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
@@ -230,31 +321,6 @@ function formatTimer(sec){
   sec = Math.max(0, Math.floor(sec));
   return `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;
 }
-
-function rgbToString(rgb, alpha=1){
-  return `rgba(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])},${alpha})`;
-}
-
-function interpolateColorForBpm(bpm){
-  if (bpm <= COLOR_STOPS[0].bpm) return COLOR_STOPS[0].rgb;
-  if (bpm >= COLOR_STOPS[COLOR_STOPS.length - 1].bpm) return COLOR_STOPS[COLOR_STOPS.length - 1].rgb;
-
-  for(let i=0;i<COLOR_STOPS.length-1;i++){
-    const a = COLOR_STOPS[i], b = COLOR_STOPS[i+1];
-    if (bpm >= a.bpm && bpm <= b.bpm){
-      const t = (bpm - a.bpm) / (b.bpm - a.bpm);
-      return [
-        lerp(a.rgb[0], b.rgb[0], t),
-        lerp(a.rgb[1], b.rgb[1], t),
-        lerp(a.rgb[2], b.rgb[2], t)
-      ];
-    }
-  }
-  return COLOR_STOPS[0].rgb;
-}
-
-function lineColorForBpm(bpm){ return rgbToString(interpolateColorForBpm(bpm), 1); }
-function panelColorForBpm(bpm){ return rgbToString(interpolateColorForBpm(bpm), BG_ALPHA); }
 
 function setStatus(mode, elapsedSec){
   if(!mode){
@@ -267,13 +333,17 @@ function setStatus(mode, elapsedSec){
   statusTimer.textContent = formatTimer(elapsedSec);
 
   if (mode === "SUSTAINED BUILD") {
-    statusBadge.style.background = "rgba(0,0,0,0.18)";
+    statusBadge.style.borderColor = "rgba(251,191,36,0.42)";
+    statusLabel.style.color = "rgb(251,191,36)";
   } else if (mode === "ELEVATED") {
-    statusBadge.style.background = "rgba(0,0,0,0.14)";
+    statusBadge.style.borderColor = "rgba(251,113,133,0.42)";
+    statusLabel.style.color = "rgb(251,113,133)";
   } else if (mode === "RECOVERY") {
-    statusBadge.style.background = "rgba(0,0,0,0.12)";
+    statusBadge.style.borderColor = "rgba(96,165,250,0.42)";
+    statusLabel.style.color = "rgb(96,165,250)";
   } else {
-    statusBadge.style.background = "rgba(0,0,0,0.10)";
+    statusBadge.style.borderColor = "rgba(45,212,191,0.24)";
+    statusLabel.style.color = "rgb(45,212,191)";
   }
 }
 
@@ -399,6 +469,7 @@ function sendTelemetry(data) {
 /*** DATA ***/
 const points = [];
 const detectPoints = [];
+const baselinePoints = [];
 
 /*** WINDOW HELPERS ***/
 function getRecentPoints(arr, windowSec){
@@ -444,9 +515,19 @@ const chart = new Chart(ctx,{
   type:'line',
   data:{datasets:[
     {
-      data:points,
-      borderWidth:8,
-      borderColor:'rgba(0,0,0,0.50)',
+      data:baselinePoints,
+      borderWidth:1.5,
+      borderColor:'rgba(148,163,184,0.8)',
+      borderDash:[5,5],
+      tension:.2,
+      pointRadius:0,
+      borderCapStyle:'round',
+      borderJoinStyle:'round'
+    },
+    {
+      data:detectPoints,
+      borderWidth:2,
+      borderColor:'rgb(167,139,250)',
       tension:.35,
       cubicInterpolationMode:'monotone',
       pointRadius:0,
@@ -455,13 +536,13 @@ const chart = new Chart(ctx,{
     },
     {
       data:points,
-      borderWidth:4,
+      borderWidth:2.6,
+      borderColor:'rgb(45,212,191)',
       tension:.35,
       cubicInterpolationMode:'monotone',
       pointRadius:0,
       borderCapStyle:'round',
-      borderJoinStyle:'round',
-      segment:{ borderColor:c=>lineColorForBpm(c.p1.parsed.y) }
+      borderJoinStyle:'round'
     }
   ]},
   options:{
@@ -469,10 +550,15 @@ const chart = new Chart(ctx,{
     maintainAspectRatio:false,
     animation:false,
     plugins:{legend:{display:false},tooltip:{enabled:false}},
-    layout:{padding:0},
+    layout:{padding:{top:6,right:5,bottom:2,left:4}},
     scales:{
       x:{display:false,type:'linear',min:0,max:WINDOW_SEC},
-      y:{display:false,suggestedMin:50,suggestedMax:150}
+      y:{
+        display:false,
+        suggestedMin:50,
+        suggestedMax:150,
+        grid:{color:'rgba(51,65,75,0.42)'}
+      }
     }
   }
 });
@@ -484,6 +570,7 @@ function advanceWindow(){
 
   while(points.length && points[0].x < left) points.shift();
   while(detectPoints.length && detectPoints[0].x < left) detectPoints.shift();
+  while(baselinePoints.length && baselinePoints[0].x < left) baselinePoints.shift();
 
   chart.options.scales.x.min = left;
   chart.options.scales.x.max = now;
@@ -495,12 +582,6 @@ function updateStats(){
   const ys = points.map(p => p.y);
   avgEl.textContent = Math.round(mean(ys)) || "--";
   maxEl.textContent = Math.round(Math.max(...ys)) || "--";
-}
-
-function updateBackground(currentHr){
-  if(displayHr === null) displayHr = currentHr;
-  displayHr = lerp(displayHr, currentHr, BG_SMOOTHING);
-  document.documentElement.style.setProperty('--bg', panelColorForBpm(displayHr));
 }
 
 function updateBaseline(currentSmoothedHr){
@@ -557,8 +638,8 @@ function resetOverlayState(options = {}){
   eventWasActive = false;
   points.length = 0;
   detectPoints.length = 0;
+  baselinePoints.length = 0;
   startTs = Date.now();
-  displayHr = null;
   smoothedHr = null;
   baselineHr = null;
   avgEl.textContent = "--";
@@ -808,6 +889,7 @@ async function pollHR(){
       detectPoints.push({ x: nowSec, y: smoothedHr });
 
       updateBaseline(smoothedHr);
+      baselinePoints.push({ x: nowSec, y: baselineHr });
 
       const shortPts = getRecentPoints(detectPoints, SHORT_WINDOW_SEC);
       const slopePts = getRecentPoints(detectPoints, SLOPE_WINDOW_SEC);
@@ -822,7 +904,6 @@ async function pollHR(){
 
       advanceWindow();
       updateStats();
-      updateBackground(bpm);
 
       updatePhase({
         currentHr: smoothedHr,
