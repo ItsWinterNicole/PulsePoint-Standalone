@@ -19,6 +19,7 @@ import CadenceWidget from "../components/dashboard/CadenceWidget";
 import MoodContextWidget from "../components/dashboard/MoodContextWidget";
 import TrendsSection from "../components/dashboard/TrendsSection";
 import { useDashboardWidgets } from "@/hooks/useDashboardWidgets";
+import MotionClimaxOverview from "../components/MotionClimaxOverview";
 
 function StatCard({ label, value, sub, icon: Icon, color = "primary" }) {
   return (
@@ -694,6 +695,8 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      <MotionClimaxOverview sessions={sessions} />
 
       {/* Render widgets in user-defined order */}
       {config.map((w) => {

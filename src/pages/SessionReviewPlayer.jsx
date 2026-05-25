@@ -130,6 +130,22 @@ function activeLowerBodyPattern(summary, timeS) {
     .sort((a, b) => Math.abs(Number(a.time_s) - Number(timeS)) - Math.abs(Number(b.time_s) - Number(timeS)))[0] || null;
 }
 
+function postureCandidates(summary) {
+  return Array.isArray(summary?.lower_body_posture_summary?.posture_candidates)
+    ? summary.lower_body_posture_summary.posture_candidates
+    : [];
+}
+
+function activePostureCandidate(summary, timeS) {
+  if (!Number.isFinite(Number(timeS))) return null;
+  return postureCandidates(summary)
+    .filter((candidate) => (
+      Number(timeS) >= Number(candidate.start_time_s) - 0.5
+      && Number(timeS) <= Number(candidate.start_time_s) + Number(candidate.duration_s || 0) + 0.5
+    ))
+    .sort((a, b) => Math.abs(Number(a.time_s) - Number(timeS)) - Math.abs(Number(b.time_s) - Number(timeS)))[0] || null;
+}
+
 export default function SessionReviewPlayer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("session") || "";
@@ -237,12 +253,19 @@ export default function SessionReviewPlayer() {
     handleSelectSession(requestedSessionId);
   }, [handleSelectSession, loadingSessions, requestedSessionId, selectedId, sessions]);
 
-  const handleSaveMotionSummary = async (summary) => {
+  const handleSaveMotionSummary = async (summary, finalizedMotionEvents = []) => {
     if (!selectedSession?.id) throw new Error("Select a session before saving a motion summary.");
-    const updated = await base44.entities.Session.update(selectedSession.id, { motion_analysis_summary: summary });
-    setSelectedSession(updated);
+    const manualAndLegacyEvents = (selectedSession.event_timeline || []).filter((event) => event.source !== "motion_derived");
+    const eventTimeline = [...manualAndLegacyEvents, ...(Array.isArray(finalizedMotionEvents) ? finalizedMotionEvents : [])]
+      .sort((a, b) => Number(a.time_s) - Number(b.time_s));
+    const updated = await base44.entities.Session.update(selectedSession.id, {
+      motion_analysis_summary: summary,
+      event_timeline: eventTimeline,
+    });
+    const nextSession = { ...updated, motion_analysis_summary: summary, event_timeline: eventTimeline };
+    setSelectedSession(nextSession);
     setSessions((existing) => existing.map((session) => (
-      session.id === updated.id ? { ...session, motion_analysis_summary: summary } : session
+      session.id === updated.id ? { ...session, motion_analysis_summary: summary, event_timeline: eventTimeline } : session
     )));
   };
 
@@ -390,7 +413,9 @@ export default function SessionReviewPlayer() {
       ? (Math.abs(currentIndex) <= 0.1 ? "Similar now" : `${currentIndex > 0 ? "Left" : "Right"} now`)
       : null;
     const lowerBodyPatterns = motion?.lower_body_pattern_summary;
+    const postureSummary = motion?.lower_body_posture_summary;
     const currentPattern = activeLowerBodyPattern(motion, reviewTime);
+    const currentPosture = activePostureCandidate(motion, reviewTime);
     const reviewPatterns = lowerBodyPatternCandidates(motion)
       .filter((candidate) => ["oscillatory_candidate", "left_right_divergence"].includes(candidate.type))
       .slice(0, 6);
@@ -558,6 +583,13 @@ export default function SessionReviewPlayer() {
                         <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">Visual motion proxy only; review the video before describing this as a specific movement or spasm.</p>
                       </div>
                     )}
+                    {currentPosture && (
+                      <div className="rounded-lg border border-primary/25 bg-primary/[0.08] px-2.5 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Calibrated Posture Candidate</p>
+                        <p className="mt-1 text-xs font-medium text-foreground">{currentPosture.posture_phrase}</p>
+                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">Matched against foot-region appearance at a reference moment you marked in the recording; this is a visual posture proxy only.</p>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">No saved motion summary yet.</p>
@@ -591,6 +623,32 @@ export default function SessionReviewPlayer() {
                   )}
                   <p className="text-[10px] leading-relaxed text-muted-foreground">
                     These flags are activity-pattern proxies only. Directional posture changes such as feet moving outward are not measured in this version.
+                  </p>
+                </div>
+              )}
+
+              {postureSummary && postureCandidates(motion).length > 0 && (
+                <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Calibrated Foot Appearance Moments</p>
+                    <span className="text-[10px] text-muted-foreground">{postureSummary.coverage_pct}% coverage</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {postureCandidates(motion).slice(0, 8).map((candidate) => (
+                      <button
+                        key={`${candidate.posture}-${candidate.time_s}`}
+                        type="button"
+                        onClick={() => seekVideoTo(candidate.time_s, false, true)}
+                        disabled={!videoSrc}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card/60 px-2.5 py-2 text-left enabled:hover:border-primary/40 disabled:cursor-default"
+                      >
+                        <span className="line-clamp-1 text-[11px] text-foreground">{candidate.posture_phrase}</span>
+                        <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">{formatTime(candidate.time_s)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    These moments compare visible foot-region appearance to your marked examples. They do not measure pressure, force, or physiological cause.
                   </p>
                 </div>
               )}
@@ -728,6 +786,7 @@ export default function SessionReviewPlayer() {
           videoSrc={videoSrc}
           videoDuration={videoDuration}
           videoTime={videoTime}
+          videoPlaying={videoPlaying}
           selectedSession={selectedSession}
           onSeek={(timeS) => seekVideoTo(timeS, false, true)}
           onSaveSummary={handleSaveMotionSummary}

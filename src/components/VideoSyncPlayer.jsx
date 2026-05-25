@@ -15,6 +15,8 @@ import {
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 import { base44 } from "@/api/base44Client";
 import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
+import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
+import MotionPlaybackReadout from "./MotionPlaybackReadout";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -74,6 +76,15 @@ const EXPLORATION_AI_EVENT_TAGS = [
   "other_context",
 ];
 const VALID_AI_EVENT_TAGS = new Set(Object.keys(AI_EVENT_TAGS));
+const EVENT_FILTERS = [
+  { key: "stimulation", label: "Stimulation", matches: (ev) => normalizeCategoryArray(ev.category).includes("stimulation") || (ev.annotation_tags || []).includes("stimulation_action") },
+  { key: "stimulation_change", label: "Stimulation Change", matches: (ev) => (ev.annotation_tags || []).includes("stimulation_change") || normalizeCategoryArray(ev.category).some((cat) => cat.includes("stimulation_")) },
+  { key: "physical", label: "Physical", matches: (ev) => normalizeCategoryArray(ev.category).includes("physical") || (ev.annotation_tags || []).includes("physical_finding") },
+  { key: "movement", label: "Movement", matches: (ev) => ev.source === "motion_derived" || (ev.annotation_tags || []).some((tag) => ["lower_body", "movement", "motion_derived"].includes(tag)) || normalizeCategoryArray(ev.category).includes("movement_observed") },
+  { key: "physiology", label: "Physiology", matches: (ev) => (ev.annotation_tags || []).includes("physiological_observation") },
+  { key: "sensation", label: "Sensation", matches: (ev) => normalizeCategoryArray(ev.category).includes("sensation") || (ev.annotation_tags || []).includes("sensation_report") },
+  { key: "context", label: "Context", matches: (ev) => (ev.annotation_tags || []).some((tag) => ["position_or_comfort", "equipment_or_setup", "other_context"].includes(tag)) },
+];
 
 // Nearest HR from sorted chart data
 function nearestHR(chartData, time_s) {
@@ -344,6 +355,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
+  const [selectedEventFilters, setSelectedEventFilters] = useState([]);
 
   // Local mutable events list
   const [events, setEvents] = useState(session.event_timeline || []);
@@ -658,6 +670,13 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         }
       }
 
+      if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && !inInput && videoRef.current) {
+        e.preventDefault();
+        const direction = e.code === "ArrowLeft" ? -1 : 1;
+        const jumpS = e.shiftKey ? 30 : 5;
+        videoRef.current.currentTime = Math.max(0, Math.min(videoDuration || Infinity, videoRef.current.currentTime + (direction * jumpS)));
+      }
+
       // S: pause video + open event form at current playhead (if not already open)
       if (e.code === "KeyS" && !inInput) {
         e.preventDefault();
@@ -674,7 +693,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingNew, playheadS, lastUsedCat]);
+  }, [addingNew, playheadS, lastUsedCat, videoDuration]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
@@ -763,6 +782,13 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   }, [chartData, xDomain]);
 
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
+  const visibleEventEntries = useMemo(() => events
+    .map((ev, i) => ({ ev, i }))
+    .filter(({ ev }) => (
+      selectedEventFilters.length === 0
+      || EVENT_FILTERS.some((filter) => selectedEventFilters.includes(filter.key) && filter.matches(ev))
+    )), [events, selectedEventFilters]);
+  const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
 
   return (
@@ -1081,6 +1107,42 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
               className="w-full xl:min-w-[320px] xl:max-w-[560px] shrink-0 space-y-4 xl:sticky xl:top-4 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
               style={{ flex: `1 1 ${100 - playerWidth}%` }}
             >
+            {events.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Event Note Filters</p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedEventFilters([])}
+                    className="text-[10px] font-medium text-primary hover:underline"
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {EVENT_FILTERS.map((filter) => {
+                    const active = selectedEventFilters.includes(filter.key);
+                    return (
+                      <button
+                        key={filter.key}
+                        type="button"
+                        onClick={() => setSelectedEventFilters((current) => (
+                          current.includes(filter.key)
+                            ? current.filter((key) => key !== filter.key)
+                            : [...current, filter.key]
+                        ))}
+                        className={`rounded-full border px-2 py-1 text-[10px] font-medium transition-colors ${active ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+                      >
+                        {filter.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  {selectedEventFilters.length ? `${visibleEvents.length} of ${events.length} notes visible. Multiple filters combine.` : `Showing all ${events.length} notes.`}
+                </p>
+              </div>
+            )}
             {/* HR Timeline */}
             {chartData.length > 0 && (
               <div>
@@ -1132,7 +1194,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                       )}
 
                       {/* Event markers */}
-                      {events.map((ev, i) => {
+                      {visibleEventEntries.map(({ ev, i }) => {
                         const color = EVENT_COLORS[i % EVENT_COLORS.length];
                         return (
                           <ReferenceLine key={i} x={ev.time_s} stroke={color} strokeWidth={1.5}
@@ -1165,18 +1227,27 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
             )}
 
             {savedMotionSummary && (
-              <SavedMotionSummaryCard
-                summary={savedMotionSummary}
-                onSeek={videoSrc ? seekToMotionPeak : undefined}
-                playbackTime={playheadS}
-                compact
-              />
+              <>
+                <MotionPlaybackReadout
+                  summary={savedMotionSummary}
+                  playbackTime={playheadS}
+                  currentHR={currentHR}
+                />
+                <SavedMotionSummaryCard
+                  summary={savedMotionSummary}
+                  onSeek={videoSrc ? seekToMotionPeak : undefined}
+                  playbackTime={playheadS}
+                  chartOnly
+                  focus
+                />
+                <ClimaxMotionSnapshotCard session={session} compact />
+              </>
             )}
 
             {/* Nearby Events */}
-            {events.length > 0 && (() => {
-              const nearby = events
-                .map((ev, i) => ({ ev, i, dist: Math.abs(ev.time_s - playheadS) }))
+            {visibleEvents.length > 0 && (() => {
+              const nearby = visibleEventEntries
+                .map(({ ev, i }) => ({ ev, i, dist: Math.abs(ev.time_s - playheadS) }))
                 .filter(({ dist }) => dist <= 60)
                 .sort((a, b) => a.dist - b.dist);
               if (!nearby.length) return null;
@@ -1233,9 +1304,9 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
             })()}
 
             {/* Most Recent Events */}
-            {events.length > 0 && (() => {
-              const past = events
-                .map((ev, i) => ({ ev, i, diff: playheadS - ev.time_s }))
+            {visibleEvents.length > 0 && (() => {
+              const past = visibleEventEntries
+                .map(({ ev, i }) => ({ ev, i, diff: playheadS - ev.time_s }))
                 .filter(({ diff }) => diff >= 0)
                 .sort((a, b) => a.diff - b.diff)
                 .slice(0, 3);
@@ -1309,10 +1380,9 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
         {events.length > 0 && (
           <div className="space-y-1.5">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              All Events ({events.length}) — nearby highlighted
+              Visible Events ({visibleEvents.length}/{events.length}) — nearby highlighted
             </p>
-            {[...events].reverse().map((ev) => {
-              const i = events.indexOf(ev);
+            {[...visibleEventEntries].reverse().map(({ ev, i }) => {
               const color = EVENT_COLORS[i % EVENT_COLORS.length];
               const cats = normalizeCategoryArray(ev.category);
               const annotationTags = getAnnotationTags(ev);
@@ -1405,6 +1475,11 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                 </div>
               );
             })}
+            {visibleEventEntries.length === 0 && (
+              <p className="rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
+                No event notes match the selected filters.
+              </p>
+            )}
           </div>
         )}
       </div>

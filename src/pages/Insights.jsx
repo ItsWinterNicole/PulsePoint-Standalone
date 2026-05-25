@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import PageHeader from "../components/PageHeader";
 import BestSessionPanel from "../components/BestSessionPanel";
 import HRSatisfactionCorrelationChart from "../components/HRSatisfactionCorrelationChart";
+import MotionClimaxOverview from "../components/MotionClimaxOverview";
 
 const POSITIVE_FIELDS = [
   "satisfaction",
@@ -499,6 +500,8 @@ export default function Insights() {
             The strongest insights below weight older session fields when needed, then become more specific as the newer subjective metrics fill in.
           </p>
         </div>
+
+        <MotionClimaxOverview sessions={sessions} title="Motion Evidence Around Marked Climax" />
 
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">

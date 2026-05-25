@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, CheckCircle2, Footprints, Hand, Loader2, Play, Save, ShieldCheck, Square } from "lucide-react";
+import { Activity, CheckCircle2, Footprints, Hand, Loader2, Play, Save, Settings2, ShieldCheck, Square } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -36,6 +36,14 @@ const PIP_ROI_PRESET = {
   rightForefoot: { x: 0.02, y: 0.03, width: 0.15, height: 0.15 },
   hands: { x: 0.35, y: 0.08, width: 0.62, height: 0.86 },
 };
+const POSTURE_REFERENCE_OPTIONS = [
+  { key: "neutral", label: "Neutral / relaxed", phrase: "neutral / relaxed appearance" },
+  { key: "outward", label: "Fanned outward", phrase: "outward / fanned appearance proxy" },
+  { key: "inward", label: "Toward midline", phrase: "inward / toward-midline appearance proxy" },
+  { key: "planted", label: "Downward planted", phrase: "downward planted appearance proxy" },
+  { key: "dorsiflexed", label: "Toward body", phrase: "toward-body / dorsiflexed appearance proxy" },
+  { key: "heel_lift", label: "Heel lift", phrase: "heel-lift appearance proxy" },
+];
 
 const LOWER_BODY_METHODS = {
   regionMotion: {
@@ -465,6 +473,27 @@ function regionPixelMotion(current, previous) {
   return total / (current.length * 255);
 }
 
+function appearanceSignature(pixels) {
+  if (!pixels?.length) return null;
+  const bins = 96;
+  const binSize = Math.max(1, Math.floor(pixels.length / bins));
+  const values = Array.from({ length: bins }, (_, index) => {
+    const start = index * binSize;
+    const end = index === bins - 1 ? pixels.length : Math.min(pixels.length, start + binSize);
+    let total = 0;
+    for (let pixel = start; pixel < end; pixel += 1) total += pixels[pixel];
+    return total / Math.max(1, end - start);
+  });
+  const center = mean(values) || 0;
+  const deviation = Math.sqrt(mean(values.map((value) => (value - center) ** 2)) || 1);
+  return values.map((value) => Math.round(((value - center) / deviation) * 1000) / 1000);
+}
+
+function appearanceDistance(first, second) {
+  if (!first || !second || first.length !== second.length) return Infinity;
+  return mean(first.map((value, index) => Math.abs(value - second[index]))) ?? Infinity;
+}
+
 function sideMotion(current, previous) {
   if (!current || !previous) return null;
   return mean(current.map((point, index) => pointDistance(point, previous[index])));
@@ -710,6 +739,102 @@ function calculateLowerBodyPatternSummary(samples, sampleRate) {
   };
 }
 
+function nearestAppearanceSample(samples, timeS, toleranceS) {
+  if (!Number.isFinite(Number(timeS))) return null;
+  const candidates = samples.filter((sample) => sample.leftAppearance || sample.rightAppearance);
+  if (!candidates.length) return null;
+  const nearest = candidates.reduce((closest, sample) => (
+    Math.abs(sample.timeS - timeS) < Math.abs(closest.timeS - timeS) ? sample : closest
+  ), candidates[0]);
+  return Math.abs(nearest.timeS - timeS) <= toleranceS ? nearest : null;
+}
+
+function pairedAppearanceDistance(sample, reference) {
+  const distances = [
+    appearanceDistance(sample.leftAppearance, reference.leftAppearance),
+    appearanceDistance(sample.rightAppearance, reference.rightAppearance),
+  ].filter((value) => Number.isFinite(value));
+  return mean(distances) ?? Infinity;
+}
+
+function buildPostureAppearanceSummary(samples, referenceTimes, sampleRate) {
+  const appearanceSamples = samples.filter((sample) => sample.leftAppearance || sample.rightAppearance);
+  if (!appearanceSamples.length) {
+    return {
+      method: "calibrated_region_image_appearance",
+      coverage_pct: 0,
+      status: "insufficient_appearance",
+      method_note: "No local foot-region appearance samples were available for calibrated matching.",
+      posture_candidates: [],
+    };
+  }
+  const toleranceS = Math.max(1, 2 / sampleRate);
+  const references = Object.fromEntries(POSTURE_REFERENCE_OPTIONS.map(({ key }) => {
+    const sample = nearestAppearanceSample(appearanceSamples, referenceTimes[key], toleranceS);
+    return [key, sample || null];
+  }));
+  const neutral = references.neutral;
+  const exemplarKeys = POSTURE_REFERENCE_OPTIONS
+    .map(({ key }) => key)
+    .filter((key) => key !== "neutral" && references[key]);
+  const coveragePct = Math.round((appearanceSamples.length / samples.length) * 100);
+  if (!neutral || !exemplarKeys.length) {
+    return {
+      method: "calibrated_region_image_appearance",
+      coverage_pct: coveragePct,
+      status: "references_needed",
+      calibrated_references: Object.fromEntries(POSTURE_REFERENCE_OPTIONS.map(({ key }) => [key, !!references[key]])),
+      method_note: "Foot-region appearance samples were captured, but neutral plus at least one named posture reference inside the analyzed window is needed for matching.",
+      posture_candidates: [],
+    };
+  }
+
+  const classified = appearanceSamples.map((sample) => {
+    const neutralDistance = pairedAppearanceDistance(sample, neutral);
+    const match = exemplarKeys
+      .map((key) => ({ key, distance: pairedAppearanceDistance(sample, references[key]) }))
+      .sort((a, b) => a.distance - b.distance)[0];
+    const posture = match && match.distance <= 0.62 && match.distance + 0.05 < neutralDistance ? match.key : null;
+    return { ...sample, posture, confidenceScore: match?.distance };
+  });
+  const segments = [];
+  let current = [];
+  classified.forEach((sample) => {
+    if (sample.posture && (!current.length || current[0].posture === sample.posture)) {
+      current.push(sample);
+      return;
+    }
+    if (current.length) segments.push(current);
+    current = sample.posture ? [sample] : [];
+  });
+  if (current.length) segments.push(current);
+  const stepS = 1 / sampleRate;
+  const postureCandidates = segments
+    .filter((segment) => segmentDuration(segment, stepS) >= 0.75)
+    .map((segment) => {
+      const posture = segment[0].posture;
+      const meta = POSTURE_REFERENCE_OPTIONS.find((option) => option.key === posture);
+      return {
+        type: "calibrated_posture_candidate",
+        posture,
+        posture_phrase: meta?.phrase || posture,
+        time_s: Math.round(segment[0].timeS * 10) / 10,
+        start_time_s: Math.round(segment[0].timeS * 10) / 10,
+        duration_s: Math.round(segmentDuration(segment, stepS) * 10) / 10,
+        confidence: "moderate",
+      };
+    })
+    .slice(0, 16);
+  return {
+    method: "calibrated_region_image_appearance",
+    coverage_pct: coveragePct,
+    status: "calibrated_matching_available",
+    calibrated_references: Object.fromEntries(POSTURE_REFERENCE_OPTIONS.map(({ key }) => [key, !!references[key]])),
+    method_note: "Matches compact left/right foot-region image appearance against user-marked reference moments. Images and frame signatures are used transiently during local analysis and are not stored; labels remain visual posture proxies.",
+    posture_candidates: postureCandidates,
+  };
+}
+
 function calculateHandRhythmSummary(samples, scoreKey, handCoverage, sampleRate) {
   if (!samples.length || handCoverage < 65 || sampleRate < 6) {
     return {
@@ -927,36 +1052,51 @@ function lowerBodyIntensity(peakActivity) {
 }
 
 function buildLowerBodySemanticSuggestions(result) {
-  const patterns = result?.lowerBodyPatterns;
-  if (!result?.hasLegs || !patterns) return [];
+  if (!result?.hasLegs) return [];
+  const patterns = result.lowerBodyPatterns || {};
+  const postureCandidates = (result.postureGeometry?.posture_candidates || []).map((candidate, index) => ({
+    id: `lower-body-posture-${candidate.posture}-${Math.round(candidate.time_s * 10)}-${index}`,
+    pairId: `lower-body-posture-${candidate.posture}-${Math.round(candidate.time_s * 10)}`,
+    type: "lower_body_semantic_finding",
+    timeS: candidate.time_s,
+    durationS: candidate.duration_s,
+    confidence: candidate.confidence,
+    note: `Motion-derived: ${candidate.posture_phrase} observed for approximately ${candidate.duration_s.toFixed(1).replace(/\.0$/, "")} seconds.`,
+    semanticLabel: candidate.posture_phrase,
+    sidePattern: "not_determined",
+    sidePatternPhrase: "calibrated appearance match",
+    intensity: "not_applicable",
+    movementQuality: ["calibrated_posture_match"],
+    posture: candidate.posture,
+  }));
   const oscillatory = (patterns.oscillatory_candidates || []).map((candidate) => ({
     ...candidate,
     semanticQuality: "rapid_oscillatory_shudder_like_activity",
-    qualityPhrase: "rapid oscillatory / shudder-like lower-body activity candidate",
+    qualityPhrase: "rapid shudder-like lower-body activity",
   }));
   const sustained = (patterns.sustained_activity_shift_candidates || [])
     .filter((candidate) => !oscillatory.some((existing) => candidateOverlaps(candidate, existing)))
     .map((candidate) => ({
       ...candidate,
       semanticQuality: "sustained_activity_elevation",
-      qualityPhrase: "sustained lower-body activity elevation candidate",
+      qualityPhrase: "sustained lower-body activity",
     }));
   const bursts = (patterns.burst_candidates || [])
     .filter((candidate) => ![...oscillatory, ...sustained].some((existing) => candidateOverlaps(candidate, existing)))
     .map((candidate) => ({
       ...candidate,
       semanticQuality: "brief_movement_burst",
-      qualityPhrase: "brief lower-body movement burst candidate",
+      qualityPhrase: "brief lower-body movement burst",
     }));
   const divergenceOnly = (patterns.divergence_candidates || [])
     .filter((candidate) => ![...oscillatory, ...sustained, ...bursts].some((existing) => candidateOverlaps(candidate, existing)))
     .map((candidate) => ({
       ...candidate,
       semanticQuality: "left_right_divergence",
-      qualityPhrase: "left / right lower-body divergence candidate",
+      qualityPhrase: "lower-body side divergence",
     }));
 
-  return [...oscillatory, ...sustained, ...bursts, ...divergenceOnly]
+  const activityCandidates = [...oscillatory, ...sustained, ...bursts, ...divergenceOnly]
     .sort((a, b) => a.time_s - b.time_s)
     .slice(0, 16)
     .map((candidate, index) => {
@@ -984,6 +1124,9 @@ function buildLowerBodySemanticSuggestions(result) {
         posture: "not_classified_from_activity_trace",
       };
     });
+  return [...postureCandidates, ...activityCandidates]
+    .sort((a, b) => a.timeS - b.timeS)
+    .slice(0, 20);
 }
 
 function motionSuggestionEvent(suggestion) {
@@ -1011,8 +1154,8 @@ function motionSuggestionEvent(suggestion) {
   return {
     time_s: suggestion.timeS,
     note: isPause
-      ? "Motion-derived: observed hand activity pause candidate."
-      : `Motion-derived: observed hand activity resumed after approximately ${pauseSeconds} seconds of reduced activity.`,
+      ? "Motion-derived: hand activity pause observed."
+      : `Motion-derived: hand activity resumed after a ${pauseSeconds}-second pause.`,
     category: [isPause ? "motion_pause" : "motion_resume"],
     annotation_tags: ["other_context"],
     source: "motion_derived",
@@ -1067,6 +1210,9 @@ function buildFindings(result) {
       findings.push(`${side}-side activity predominated in ${result.asymmetry.predominantPct}% of active paired lower-body windows (${result.asymmetry.comparedWindows} compared samples).`);
     }
   }
+  if (result.postureGeometry?.status === "calibrated_matching_available" && result.postureGeometry.posture_candidates.length > 0) {
+    findings.push(`${result.postureGeometry.posture_candidates.length} calibrated visual foot-posture candidate${result.postureGeometry.posture_candidates.length === 1 ? " was" : "s were"} identified from user-marked reference appearances; these remain observational proxies.`);
+  }
   findings.push(`There were ${result.moments.length} high-activity moments flagged for direct video review.`);
   return findings;
 }
@@ -1117,6 +1263,8 @@ function buildSavedSummary(result) {
     },
     asymmetry_summary: result.hasLegs && result.asymmetry ? result.asymmetry : undefined,
     lower_body_pattern_summary: result.hasLegs ? result.lowerBodyPatterns : undefined,
+    lower_body_posture_summary: result.hasLegs ? result.postureGeometry : undefined,
+    posture_reference_times_s: result.hasLegs && result.postureGeometry ? result.postureReferenceTimes : undefined,
     left_lower_body_average_activity: result.hasLegs ? result.leftAverage : undefined,
     right_lower_body_average_activity: result.hasLegs ? result.rightAverage : undefined,
     left_forefoot_average_activity: result.hasForefoot ? result.leftForefootAverage : undefined,
@@ -1173,7 +1321,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, selectedSession, onSeek, onSaveSummary, onAcceptSuggestions }) {
+export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, onSeek, onSaveSummary, onAcceptSuggestions }) {
   const stopRequestedRef = useRef(false);
   const previewCanvasRef = useRef(null);
   const previewEnabledRef = useRef(false);
@@ -1182,6 +1330,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const previewReadyRef = useRef(false);
   const roiCanvasRef = useRef(null);
   const roiFrameCanvasRef = useRef(null);
+  const roiFrameRequestRef = useRef(0);
   const roiDragStartRef = useRef(null);
   const [mode, setMode] = useState("combined");
   const [windowMode, setWindowMode] = useState("segment");
@@ -1190,8 +1339,21 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [rois, setRois] = useState(() => copyRois(PIP_ROI_PRESET));
   const [activeRoi, setActiveRoi] = useState("leftLowerBody");
   const [forefootEnabled, setForefootEnabled] = useState(false);
+  const [postureMatchingEnabled, setPostureMatchingEnabled] = useState(true);
+  const [postureReferenceTimes, setPostureReferenceTimes] = useState({
+    neutral: null,
+    outward: null,
+    inward: null,
+    planted: null,
+    dorsiflexed: null,
+    heel_lift: null,
+  });
   const [leftRightOrientation, setLeftRightOrientation] = useState("anatomical_left_on_screen_right");
   const [roiFrameReady, setRoiFrameReady] = useState(false);
+  const [roiSetupTime, setRoiSetupTime] = useState(0);
+  const [roiFrameRevision, setRoiFrameRevision] = useState(0);
+  const [syncRoiWithMainPlayer, setSyncRoiWithMainPlayer] = useState(true);
+  const [loadingRoiFrame, setLoadingRoiFrame] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
@@ -1224,6 +1386,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState([]);
   const [acceptedSuggestionIds, setAcceptedSuggestionIds] = useState([]);
   const [acceptingSuggestions, setAcceptingSuggestions] = useState(false);
+  const [setupExpanded, setSetupExpanded] = useState(false);
+  const [regionsExpanded, setRegionsExpanded] = useState(false);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
 
   useEffect(() => {
     stopRequestedRef.current = true;
@@ -1233,10 +1398,22 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setSaved(false);
     setPreviewReady(false);
     setRoiFrameReady(false);
+    setRoiSetupTime(0);
+    setRoiFrameRevision(0);
+    setLoadingRoiFrame(false);
     roiFrameCanvasRef.current = null;
+    roiFrameRequestRef.current += 1;
     previewReadyRef.current = false;
     setDismissedSuggestionIds([]);
     setAcceptedSuggestionIds([]);
+    setPostureReferenceTimes({
+      neutral: null,
+      outward: null,
+      inward: null,
+      planted: null,
+      dorsiflexed: null,
+      heel_lift: null,
+    });
   }, [videoSrc]);
 
   useEffect(() => {
@@ -1322,14 +1499,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       return;
     }
     const visibleRegions = [
-      { key: "leftLowerBody", color: "#20d3c2", label: `Your left foot (${anatomicalScreenSide(leftRightOrientation, "left")})` },
-      { key: "rightLowerBody", color: "#f59e0b", label: `Your right foot (${anatomicalScreenSide(leftRightOrientation, "right")})` },
-      { key: "hands", color: "#a78bfa", label: "Hands / main" },
+      { key: "leftLowerBody", color: "#20d3c2", label: "L foot" },
+      { key: "rightLowerBody", color: "#f59e0b", label: "R foot" },
+      { key: "hands", color: "#a78bfa", label: "Hands" },
     ];
     if (forefootEnabled && lowerBodyMethod === "regionMotion") {
       visibleRegions.splice(2, 0,
-        { key: "leftForefoot", color: "#2dd4bf", label: "Left forefoot / toes" },
-        { key: "rightForefoot", color: "#fb923c", label: "Right forefoot / toes" },
+        { key: "leftForefoot", color: "#2dd4bf", label: "L toes" },
+        { key: "rightForefoot", color: "#fb923c", label: "R toes" },
       );
     }
     visibleRegions.forEach(({ key, color, label }) => {
@@ -1363,11 +1540,15 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
   useEffect(() => {
     drawRoiSetupFrame();
-  }, [activeRoi, forefootEnabled, leftRightOrientation, lowerBodyMethod, roiFrameReady, roiLayout, rois]);
+  }, [activeRoi, forefootEnabled, leftRightOrientation, lowerBodyMethod, roiFrameReady, roiFrameRevision, roiLayout, rois]);
 
-  const captureRoiSetupFrame = async () => {
+  const captureRoiSetupFrame = async (requestedTime = videoTime) => {
     if (!videoSrc) return;
     let probe = null;
+    const requestId = roiFrameRequestRef.current + 1;
+    roiFrameRequestRef.current = requestId;
+    const targetTime = clamp(Number(requestedTime) || 0, 0, Number(videoDuration) || Number.MAX_SAFE_INTEGER);
+    setLoadingRoiFrame(true);
     try {
       probe = document.createElement("video");
       probe.src = videoSrc;
@@ -1376,13 +1557,17 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       probe.preload = "auto";
       await waitForVideoMetadata(probe);
       await waitForVideoPixels(probe);
-      await seekVideo(probe, clamp(Number(videoTime) || 0, 0, Number(probe.duration) || 0));
+      const frameTime = clamp(targetTime, 0, Number(probe.duration) || 0);
+      await seekVideo(probe, frameTime);
       await waitForVideoPixels(probe);
       const frame = document.createElement("canvas");
       frame.width = probe.videoWidth;
       frame.height = probe.videoHeight;
       frame.getContext("2d")?.drawImage(probe, 0, 0, frame.width, frame.height);
+      if (roiFrameRequestRef.current !== requestId) return;
       roiFrameCanvasRef.current = frame;
+      setRoiSetupTime(frameTime);
+      setRoiFrameRevision((current) => current + 1);
       setRoiFrameReady(true);
     } catch (caughtError) {
       setError(caughtError?.message || "The analysis-region preview could not be captured.");
@@ -1391,8 +1576,21 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         probe.pause();
         probe.src = "";
       }
+      if (roiFrameRequestRef.current === requestId) setLoadingRoiFrame(false);
     }
   };
+
+  const navigateRoiSetupFrame = (timeS) => {
+    const nextTime = clamp(Number(timeS) || 0, 0, Number(videoDuration) || 0);
+    captureRoiSetupFrame(nextTime);
+    if (syncRoiWithMainPlayer) onSeek?.(nextTime);
+  };
+
+  useEffect(() => {
+    if (!roiFrameReady || !syncRoiWithMainPlayer || videoPlaying || running) return;
+    if (Math.abs(Number(videoTime) - Number(roiSetupTime)) < 0.05) return;
+    captureRoiSetupFrame(videoTime);
+  }, [roiFrameReady, roiSetupTime, running, syncRoiWithMainPlayer, videoPlaying, videoTime]);
 
   const handleRoiMouseDown = (event) => {
     if (running || roiLayout === "full" || !roiFrameReady) return;
@@ -1453,6 +1651,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setError("");
     setResult(null);
     setSaved(false);
+    setDismissedSuggestionIds([]);
+    setAcceptedSuggestionIds([]);
     previewReadyRef.current = false;
     setPreviewReady(false);
 
@@ -1471,6 +1671,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const rightForefootMotionCanvas = document.createElement("canvas");
     const analysisRois = resolveRois(roiLayout, rois);
     const analyzeForefoot = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && forefootEnabled;
+    const analyzePostureAppearance = mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && postureMatchingEnabled;
     try {
       const { FilesetResolver, PoseLandmarker, HandLandmarker } = await import("@mediapipe/tasks-vision");
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
@@ -1594,6 +1795,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             leftForefootMotion: leftForefootValue,
             rightForefootMotion: rightForefootValue,
             handMotion: mode === "combined" ? handValue : null,
+            leftAppearance: analyzePostureAppearance ? appearanceSignature(regionFrames.left) : null,
+            rightAppearance: analyzePostureAppearance ? appearanceSignature(regionFrames.right) : null,
             leftDetected: appliedLowerBodyMethod === "regionMotion" ? leftValue != null : !!legs?.left,
             rightDetected: appliedLowerBodyMethod === "regionMotion" ? rightValue != null : !!legs?.right,
             legsDetected: appliedLowerBodyMethod === "regionMotion" ? leftValue != null || rightValue != null : !!legs?.left || !!legs?.right,
@@ -1644,6 +1847,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         sampleRate: selectedMode.fps,
         roiLayout,
         rois: analysisRois,
+        postureReferenceTimes,
         leftCoverage: hasLegs
           ? Math.round((samples.filter((sample) => sample.leftDetected).length / samples.length) * 100)
           : null,
@@ -1666,6 +1870,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       };
       nextResult.asymmetry = hasLegs ? calculateAsymmetry(samples) : null;
       nextResult.lowerBodyPatterns = hasLegs ? calculateLowerBodyPatternSummary(samples, selectedMode.fps) : null;
+      nextResult.postureGeometry = hasLegs && analyzePostureAppearance
+        ? buildPostureAppearanceSummary(samples, postureReferenceTimes, selectedMode.fps)
+        : null;
       nextResult.handRhythm = hasHands
         ? calculateHandRhythmSummary(samples, hasLegs ? "handScore" : "score", nextResult.handCoverage, selectedMode.fps)
         : null;
@@ -1691,7 +1898,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setSaving(true);
     setError("");
     try {
-      await onSaveSummary(buildSavedSummary(result));
+      const finalizedMotionEvents = motionSuggestions
+        .filter((suggestion) => acceptedSuggestionIds.includes(suggestion.id))
+        .map(motionSuggestionEvent);
+      await onSaveSummary(buildSavedSummary(result), finalizedMotionEvents);
       setSaved(true);
     } catch (caughtError) {
       setError(caughtError?.message || "The motion summary could not be saved to this session.");
@@ -1724,7 +1934,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Motion Analysis</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Experimental landmark tracking for review support. Results remain temporary unless you explicitly save a compact summary to a selected session.
+              Experimental local movement tracking for review support. Results remain temporary unless you explicitly save a compact summary to a selected session.
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               Combined tracking expects both views in one composite video; separate recordings can be analyzed one at a time.
@@ -1737,7 +1947,72 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={analyze}
+            disabled={!videoSrc || running}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <ModeIcon className="h-4 w-4" />}
+            {running ? `Analyzing ${progress}%` : `Analyze ${selectedMode.label}`}
+          </button>
+          {running && (
+            <button
+              type="button"
+              onClick={stopAnalysis}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-border px-4 text-sm font-semibold text-foreground transition-colors hover:bg-muted/50"
+            >
+              <Square className="h-3.5 w-3.5" />
+              Stop
+            </button>
+          )}
+          <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
+            {selectedMode.label}
+          </span>
+          <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
+            {windowMode === "full" ? "Entire recording" : "Current position +/- 1 min"}
+          </span>
+          {mode !== "hands" && (
+            <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
+              {roiLayout === "pip" ? "Upper-left inset" : "Full frame"}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSetupExpanded((current) => !current)}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${setupExpanded ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/35"}`}
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Analysis setup
+          </button>
+          <button
+            type="button"
+            onClick={() => setRegionsExpanded((current) => !current)}
+            className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${regionsExpanded ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/35"}`}
+          >
+            Regions & calibration
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreviewExpanded((current) => !current)}
+            className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${previewExpanded ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/35"}`}
+          >
+            Analysis preview {previewEnabled ? "on" : "off"}
+          </button>
+          {!videoSrc && (
+            <span className="text-xs text-muted-foreground">Load a local video to begin.</span>
+          )}
+        </div>
+      </div>
+
+      {setupExpanded && (
+      <div className="space-y-3 rounded-lg border border-border bg-muted/10 p-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Setup</p>
+        <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-foreground">Analysis signal</label>
           <Select value={mode} onValueChange={setMode} disabled={running}>
@@ -1793,7 +2068,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           </p>
         </div>
       )}
+      </div>
+      )}
 
+      {regionsExpanded && (
       <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1931,6 +2209,68 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 </p>
               </div>
             )}
+            {mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && (
+              <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={postureMatchingEnabled}
+                    onChange={(event) => setPostureMatchingEnabled(event.target.checked)}
+                    disabled={running}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  Enable calibrated foot appearance matching (experimental)
+                </label>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  Use the region editor below to find and mark visible reference moments in this video, then analyze a window containing those moments. The app compares later images inside your left/right foot rectangles to those marked appearances. Activity tracking still runs separately.
+                </p>
+                {postureMatchingEnabled && (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {POSTURE_REFERENCE_OPTIONS.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => setPostureReferenceTimes((current) => ({
+                            ...current,
+                            [option.key]: Math.round((Number(roiFrameReady ? roiSetupTime : videoTime) || 0) * 10) / 10,
+                          }))}
+                          disabled={!videoSrc || running || !roiFrameReady}
+                          className={`rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                            postureReferenceTimes[option.key] != null
+                              ? "border-primary/40 bg-primary/[0.12] text-primary"
+                              : "border-border text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {option.label}
+                          {postureReferenceTimes[option.key] != null && (
+                            <span className="ml-1.5 font-mono">{formatTime(postureReferenceTimes[option.key])}</span>
+                          )}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setPostureReferenceTimes({
+                          neutral: null,
+                          outward: null,
+                          inward: null,
+                          planted: null,
+                          dorsiflexed: null,
+                          heel_lift: null,
+                        })}
+                        disabled={running}
+                        className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                      >
+                        Clear references
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Required for matching: <span className="font-medium text-foreground">Neutral / relaxed</span> plus at least one named posture reference.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
             <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
               <p><span className="font-medium text-primary">Your left foot ({anatomicalScreenSide(leftRightOrientation, "left")}):</span> {formatRoiLabel(appliedRois.leftLowerBody)}</p>
               <p><span className="font-medium text-[#fbbf24]">Your right foot ({anatomicalScreenSide(leftRightOrientation, "right")}):</span> {formatRoiLabel(appliedRois.rightLowerBody)}</p>
@@ -1952,11 +2292,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={captureRoiSetupFrame}
-            disabled={!videoSrc || running}
+            onClick={() => captureRoiSetupFrame(videoTime)}
+            disabled={!videoSrc || running || loadingRoiFrame}
             className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
           >
-            Preview regions at current video position
+            {loadingRoiFrame ? "Loading frame..." : "Open region editor at player position"}
           </button>
           <span className="text-[11px] text-muted-foreground">
             {roiFrameReady
@@ -1967,6 +2307,57 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
         {roiFrameReady && (
           <div className="space-y-2">
+            <div className="space-y-2 rounded-lg border border-border bg-muted/10 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Region Editor Position</p>
+                <span className="font-mono text-sm font-semibold text-foreground">{formatTime(roiSetupTime)}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max={Math.max(0, Number(videoDuration) || 0)}
+                step="0.1"
+                value={roiSetupTime}
+                onChange={(event) => navigateRoiSetupFrame(Number(event.target.value))}
+                disabled={running || loadingRoiFrame || !videoDuration}
+                className="w-full accent-primary"
+                aria-label="Region editor video position"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                {[-5, -1, 1, 5].map((delta) => (
+                  <button
+                    key={delta}
+                    type="button"
+                    onClick={() => navigateRoiSetupFrame(roiSetupTime + delta)}
+                    disabled={running || loadingRoiFrame}
+                    className="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 disabled:opacity-45"
+                  >
+                    {delta > 0 ? "+" : ""}{delta}s
+                  </button>
+                ))}
+                <label className="inline-flex items-center gap-2 rounded-md border border-primary/25 bg-primary/[0.06] px-2.5 py-1 text-xs font-medium text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={syncRoiWithMainPlayer}
+                    onChange={(event) => setSyncRoiWithMainPlayer(event.target.checked)}
+                    disabled={running}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  Link with main player seeks
+                </label>
+                {!syncRoiWithMainPlayer && (
+                  <button
+                    type="button"
+                    onClick={() => onSeek?.(roiSetupTime)}
+                    disabled={running}
+                    className="rounded-md border border-primary/30 bg-primary/[0.08] px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/[0.14] disabled:opacity-45"
+                  >
+                    Seek main player here
+                  </button>
+                )}
+                <span className="text-[11px] text-muted-foreground">Scrub here to find postures without leaving the rectangle editor.</span>
+              </div>
+            </div>
             <div className="overflow-hidden rounded-lg border border-border bg-black">
               <canvas
                 ref={roiCanvasRef}
@@ -1975,37 +2366,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
-              These colored rectangles are the exact crop regions used for the next analysis. White corner handles resize the selected region.
+              These colored rectangles are the exact crop regions used for the next analysis. White corner handles resize the selected region; anatomical left/right assignment is shown above.
             </p>
           </div>
         )}
       </div>
+      )}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={analyze}
-          disabled={!videoSrc || running}
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <ModeIcon className="h-4 w-4" />}
-          {running ? `Analyzing ${progress}%` : `Analyze ${selectedMode.label}`}
-        </button>
-        {running && (
-          <button
-            type="button"
-            onClick={stopAnalysis}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-border px-4 text-sm font-semibold text-foreground transition-colors hover:bg-muted/50"
-          >
-            <Square className="h-3.5 w-3.5" />
-            Stop
-          </button>
-        )}
-        {!videoSrc && (
-          <span className="text-xs text-muted-foreground">The loaded review video remains in browser memory only.</span>
-        )}
-      </div>
-
+      {previewExpanded && (
       <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-3">
         <label className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <input
@@ -2030,7 +2398,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                     onChange={(event) => setPreviewLegs(event.target.checked)}
                     className="h-3 w-3 accent-primary"
                   />
-                  {appliedLowerBodyMethod === "regionMotion" ? "Foot signal regions" : "Lower-body landmarks"}
+                  {appliedLowerBodyMethod === "regionMotion"
+                    ? (postureMatchingEnabled ? "Foot signal regions + appearance matching" : "Foot signal regions")
+                    : "Lower-body landmarks"}
                 </label>
               )}
               {mode !== "legs" && (
@@ -2056,6 +2426,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           </>
         )}
       </div>
+      )}
 
       {error && (
         <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -2067,7 +2438,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         <div className="space-y-4 border-t border-border pt-4">
           <div className="rounded-lg border border-primary/25 bg-primary/[0.07] px-3 py-2 text-sm text-foreground">
             <span className="font-semibold text-primary">Current analysis result.</span>{" "}
-            This temporary trace reflects the most recent run and replaces the saved summary only after you select <span className="font-medium">Save summary to selected session</span>.
+            This temporary trace reflects the most recent run and replaces the saved summary and saved motion-derived events only after you select <span className="font-medium">Finalize summary and replace saved motion events</span>.
           </div>
           <div className={`grid gap-2 ${result.hasLegs ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
             <div className="rounded-lg bg-muted/25 px-3 py-2">
@@ -2210,6 +2581,44 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 </div>
               )}
               <p className="text-[11px] text-muted-foreground">{result.lowerBodyPatterns.method_note}</p>
+            </div>
+          )}
+
+          {result.hasLegs && result.postureGeometry && (
+            <div className="rounded-lg border border-primary/25 bg-primary/[0.04] p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Calibrated Foot Appearance Matching</p>
+                <span className="text-[10px] text-muted-foreground">{result.postureGeometry.coverage_pct}% sampled frame coverage</span>
+              </div>
+              {result.postureGeometry.status === "calibrated_matching_available" ? (
+                <>
+                  <div className="flex flex-wrap gap-1.5">
+                    {result.postureGeometry.posture_candidates.length > 0 ? result.postureGeometry.posture_candidates.map((candidate) => (
+                      <button
+                        key={`${candidate.posture}-${candidate.time_s}`}
+                        type="button"
+                        onClick={() => onSeek?.(candidate.time_s)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors hover:border-primary/50"
+                      >
+                        <Play className="h-3 w-3 text-primary" />
+                        <span className="font-mono">{formatTime(candidate.time_s)}</span>
+                        <span>{candidate.posture_phrase}</span>
+                      </button>
+                    )) : (
+                      <p className="text-xs text-muted-foreground">No sustained reference matches met the cautious match threshold in this analysis window.</p>
+                    )}
+                  </div>
+                </>
+              ) : result.postureGeometry.status === "references_needed" ? (
+                <p className="text-xs text-muted-foreground">
+                  Foot-region image samples were captured. Mark a neutral reference plus at least one named posture reference within the selected analysis window, then run analysis again.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Foot-region appearance samples were not available for this run.
+                </p>
+              )}
+              <p className="text-[11px] leading-relaxed text-muted-foreground">{result.postureGeometry.method_note}</p>
             </div>
           )}
 
@@ -2367,12 +2776,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                           {isLowerBody
                             ? suggestion.note
                             : isPause
-                            ? `Motion-derived: observed hand activity pause candidate (${pauseSeconds} seconds).`
-                            : `Motion-derived: observed hand activity resumed after approximately ${pauseSeconds} seconds.`}
+                            ? `Motion-derived: hand activity pause observed (${pauseSeconds} seconds).`
+                            : `Motion-derived: hand activity resumed after a ${pauseSeconds}-second pause.`}
                         </p>
                         {isLowerBody ? (
                           <span className="text-[10px] text-muted-foreground">
-                            {suggestion.sidePatternPhrase} / {suggestion.intensity}
+                            {suggestion.posture !== "not_classified_from_activity_trace"
+                              ? "calibrated visual posture proxy"
+                              : `${suggestion.sidePatternPhrase} / ${suggestion.intensity}`}
                           </span>
                         ) : (
                           <span className="text-[10px] text-muted-foreground">
@@ -2581,15 +2992,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-muted/10 px-3 py-3">
             {selectedSession ? (
               <>
-                <button
-                  type="button"
-                  onClick={saveSummaryForAI}
+              <button
+                type="button"
+                onClick={saveSummaryForAI}
                   disabled={saving}
                   className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                 >
                   {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                  {saving ? "Saving..." : "Save summary to selected session"}
-                </button>
+                  {saving ? "Saving..." : "Finalize summary and replace saved motion events"}
+              </button>
+              <p className="basis-full text-[11px] leading-relaxed text-muted-foreground">
+                Finalizing replaces earlier motion-derived timeline events with accepted findings from this analysis. Manual event notes remain unchanged.
+              </p>
                 {saved && (
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400">
                     <CheckCircle2 className="h-3.5 w-3.5" />

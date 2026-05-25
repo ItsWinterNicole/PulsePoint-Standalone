@@ -14,9 +14,9 @@ const MARKER_COLORS = {
 };
 
 const PHASE_COLORS = {
-  build: "#14b8a6",
-  pre_climax: "#a855f7",
-  climax: "#ef4444",
+  build: "#f59e0b",
+  pre_climax: "#f59e0b",
+  climax: "#f43f5e",
   recovery: "#3b82f6",
 };
 
@@ -49,7 +49,7 @@ function MarkerDot(props) {
   return <circle cx={cx} cy={cy} r={5} fill={color} stroke="white" strokeWidth={1.5} />;
 }
 
-function ManualTimeInput({ phase, color, label, currentOffset, maxOffset, onSet }) {
+function ManualTimeInput({ color, label, currentOffset, maxOffset, onSet }) {
   const [min, setMin] = useState("");
   const [sec, setSec] = useState("");
 
@@ -116,6 +116,8 @@ export default function HRTimelineChart({
   initialWindow,
   compact = false,
   playbackTime,
+  inspectionTime,
+  onInspectionTimeChange,
 }) {
   const maxOffsetS = useMemo(() => Math.max(...rows.map((r) => Number(r.time_offset_s) || 0)), [rows]);
   const durationMins = maxOffsetS / 60;
@@ -330,6 +332,43 @@ export default function HRTimelineChart({
       .filter(({ event }) => Number(event.time_s) >= min && Number(event.time_s) <= max);
   }, [events, showEvents, zoomDomain, visibleMin, visibleMax]);
 
+  const eventMarkers = useMemo(() => {
+    if (eventsInView.length <= 10 || visibleMax - visibleMin <= 180) {
+      return eventsInView.map(({ event, index }) => ({
+        key: `event-${index}`,
+        timeS: Number(event.time_s),
+        events: [{ event, index }],
+      }));
+    }
+    const bucketS = Math.max(30, Math.ceil((visibleMax - visibleMin) / 12));
+    const clusters = new Map();
+    eventsInView.forEach(({ event, index }) => {
+      const bucket = Math.floor((Number(event.time_s) - visibleMin) / bucketS);
+      const existing = clusters.get(bucket) || [];
+      existing.push({ event, index });
+      clusters.set(bucket, existing);
+    });
+    return [...clusters.entries()].map(([bucket, clusteredEvents]) => ({
+      key: `cluster-${bucket}`,
+      timeS: clusteredEvents.reduce((sum, item) => sum + Number(item.event.time_s), 0) / clusteredEvents.length,
+      events: clusteredEvents,
+    }));
+  }, [eventsInView, visibleMax, visibleMin]);
+
+  const handleInspectMove = (data) => {
+    chartProps.onMouseMove?.(data);
+    if (!isSelecting && Number.isFinite(Number(data?.activeLabel))) {
+      onInspectionTimeChange?.(Number(data.activeLabel));
+    }
+  };
+
+  const handleChartInteraction = (data) => {
+    handleChartClick(data);
+    if (!markingPhase && Number.isFinite(Number(data?.activeLabel))) {
+      onInspectionTimeChange?.(Number(data.activeLabel));
+    }
+  };
+
   if (!rows || rows.length === 0) return null;
 
   return (
@@ -392,8 +431,9 @@ export default function HRTimelineChart({
           <LineChart
             data={displayRows}
             margin={{ top: 8, right: 4, bottom: 0, left: -20 }}
-            onClick={handleChartClick}
             {...chartProps}
+            onMouseMove={handleInspectMove}
+            onClick={handleChartInteraction}
           >
             <XAxis
               dataKey="time_offset_s"
@@ -458,19 +498,21 @@ export default function HRTimelineChart({
             ))}
 
             {/* Event pins */}
-            {eventsInView.map(({ event, index }) => {
-              const color = getEventColor(event);
-              const isSelected = selectedEventIndex === index;
+            {eventMarkers.map((marker) => {
+              const first = marker.events[0];
+              const color = getEventColor(first.event);
+              const isSelected = marker.events.some(({ index }) => selectedEventIndex === index);
+              const label = marker.events.length > 1 ? `[${marker.events.length}]` : `E${first.index + 1}`;
               return (
                 <ReferenceLine
-                  key={`event-${index}`}
-                  x={event.time_s}
+                  key={marker.key}
+                  x={marker.timeS}
                   stroke={color}
                   strokeWidth={isSelected ? 2.4 : 1.2}
                   strokeOpacity={isSelected ? 0.95 : 0.52}
                   strokeDasharray={isSelected ? "none" : "2 3"}
-                  label={{ value: `E${index + 1}`, fontSize: 8, fill: color, position: "insideTopRight" }}
-                  onClick={() => onSelectEventIndex?.(selectedEventIndex === index ? null : index)}
+                  label={{ value: label, fontSize: 8, fill: color, position: "insideTopRight" }}
+                  onClick={() => onSelectEventIndex?.(selectedEventIndex === first.index ? null : first.index)}
                 />
               );
             })}
@@ -520,6 +562,19 @@ export default function HRTimelineChart({
                 x={Number(playbackTime)}
                 stroke="#f43f5e"
                 strokeWidth={2}
+                strokeOpacity={0.9}
+              />
+            )}
+
+            {Number.isFinite(Number(inspectionTime))
+              && Number(inspectionTime) >= visibleMin
+              && Number(inspectionTime) <= visibleMax
+              && Number(inspectionTime) !== Number(playbackTime) && (
+              <ReferenceLine
+                x={Number(inspectionTime)}
+                stroke="#f43f5e"
+                strokeWidth={1.5}
+                strokeDasharray="3 2"
                 strokeOpacity={0.9}
               />
             )}
@@ -625,7 +680,6 @@ export default function HRTimelineChart({
             {MARKING_PHASES.map((phase) => (
               <ManualTimeInput
                 key={phase}
-                phase={phase}
                 color={PHASE_COLORS[phase]}
                 label={PHASE_LABELS[phase]}
                 currentOffset={localMarkers[phase]}

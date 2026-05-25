@@ -58,11 +58,39 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, compact = false, chartOnly = false, focus = false }) {
+function addSmoothedSignals(points, windowSize = 4) {
+  return points.map((point, index) => {
+    const window = points.slice(Math.max(0, index - windowSize + 1), index + 1);
+    const average = (key) => {
+      const values = window.map((entry) => Number(entry[key])).filter(Number.isFinite);
+      return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+    };
+    return {
+      ...point,
+      leftSmooth: average("leftScore"),
+      rightSmooth: average("rightScore"),
+      leftForefootSmooth: average("leftForefootScore"),
+      rightForefootSmooth: average("rightForefootScore"),
+      handSmooth: average("handScore"),
+      activitySmooth: average("score"),
+    };
+  });
+}
+
+export default function SavedMotionSummaryCard({
+  summary,
+  onSeek,
+  playbackTime,
+  compact = false,
+  chartOnly = false,
+  focus = false,
+  interactionLabel = "Feet/leg and hand signals aligned to playback; click the timeline to seek the loaded video.",
+}) {
   const savedSummary = summary || {};
   const peaks = Array.isArray(savedSummary.review_peaks) ? savedSummary.review_peaks : [];
   const findings = Array.isArray(savedSummary.findings) ? savedSummary.findings : [];
   const lowerBodyPatterns = savedSummary.lower_body_pattern_summary;
+  const postureSummary = savedSummary.lower_body_posture_summary;
   const timeline = useMemo(() => (
     Array.isArray(savedSummary.derived_timeline)
       ? savedSummary.derived_timeline.map((point) => ({
@@ -83,6 +111,40 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
   const hasRightForefoot = timeline.some((point) => point.rightForefootScore != null);
   const hasHands = timeline.some((point) => point.handScore != null);
   const usesSingleActivity = timeline.length > 0 && !hasLeft && !hasRight && !hasHands;
+  const cadenceTimeline = useMemo(() => (
+    Array.isArray(savedSummary.hand_cadence_timeline)
+      ? savedSummary.hand_cadence_timeline.map((point) => ({
+        ...point,
+        timeS: point.time_s,
+        cadence: point.movement_cycles_per_minute_estimate,
+      }))
+      : []
+  ), [savedSummary.hand_cadence_timeline]);
+  const playbackPoint = useMemo(() => {
+    if (!timeline.length || !Number.isFinite(Number(playbackTime))) return null;
+    return timeline.reduce((nearest, point) => (
+      Math.abs(Number(point.timeS) - Number(playbackTime)) < Math.abs(Number(nearest.timeS) - Number(playbackTime))
+        ? point
+        : nearest
+    ), timeline[0]);
+  }, [playbackTime, timeline]);
+  const playbackCadence = useMemo(() => {
+    if (!cadenceTimeline.length || !Number.isFinite(Number(playbackTime))) return null;
+    return cadenceTimeline.reduce((nearest, point) => (
+      Math.abs(Number(point.timeS) - Number(playbackTime)) < Math.abs(Number(nearest.timeS) - Number(playbackTime))
+        ? point
+        : nearest
+    ), cadenceTimeline[0]);
+  }, [cadenceTimeline, playbackTime]);
+  const playbackSideTotal = Number(playbackPoint?.leftScore || 0) + Number(playbackPoint?.rightScore || 0);
+  const playbackSideIndex = playbackSideTotal > 0
+    ? (Number(playbackPoint.leftScore || 0) - Number(playbackPoint.rightScore || 0)) / playbackSideTotal
+    : null;
+  const playbackSideLabel = playbackSideIndex == null
+    ? "--"
+    : Math.abs(playbackSideIndex) <= 0.1
+      ? "Similar"
+      : `${playbackSideIndex > 0 ? "Left" : "Right"} higher`;
   const [visibleSignals, setVisibleSignals] = useState({
     left: true,
     right: true,
@@ -91,7 +153,9 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
     hands: true,
     activity: true,
   });
+  const [displayMode, setDisplayMode] = useState("smoothed");
   const [expanded, setExpanded] = useState(chartOnly || !compact);
+  const chartTimeline = useMemo(() => addSmoothedSignals(timeline), [timeline]);
 
   useEffect(() => {
     setVisibleSignals({
@@ -99,7 +163,7 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
       right: hasRight,
       leftForefoot: false,
       rightForefoot: false,
-      hands: hasHands && !hasLeft && !hasRight,
+      hands: hasHands,
       activity: usesSingleActivity,
     });
   }, [hasHands, hasLeft, hasRight, hasLeftForefoot, hasRightForefoot, usesSingleActivity, savedSummary.analyzed_at]);
@@ -116,10 +180,20 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
       <div className="space-y-2 rounded-lg border border-border bg-muted/15 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Motion Activity Trace</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">Saved derived motion signals; click to seek a loaded local video.</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Movement And Hand Activity Timeline</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{interactionLabel}</p>
           </div>
           <div className="flex flex-wrap gap-1.5">
+            {["raw", "smoothed", "both"].map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setDisplayMode(mode)}
+                className={`rounded-full border px-2 py-1 text-[10px] capitalize ${displayMode === mode ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+              >
+                {mode}
+              </button>
+            ))}
             {hasLeft && (
               <label className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] text-foreground">
                 <input type="checkbox" checked={visibleSignals.left} onChange={(event) => setVisibleSignals((current) => ({ ...current, left: event.target.checked }))} className="h-3 w-3 accent-primary" />
@@ -155,7 +229,7 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
         <div className={`${focus ? "h-40" : "h-44"} cursor-pointer`}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
-              data={timeline}
+              data={chartTimeline}
               margin={{ top: 8, right: 8, bottom: 2, left: -24 }}
               onClick={(chartData) => {
                 if (Number.isFinite(Number(chartData?.activeLabel))) onSeek?.(Number(chartData.activeLabel));
@@ -170,15 +244,29 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
                 && playbackTime <= savedSummary.window_end_s && (
                 <ReferenceLine x={playbackTime} stroke="#f43f5e" strokeWidth={2} />
               )}
-              {hasLeft && visibleSignals.left && <Line type="monotone" name="Left foot / leg" dataKey="leftScore" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />}
-              {hasRight && visibleSignals.right && <Line type="monotone" name="Right foot / leg" dataKey="rightScore" stroke="#f59e0b" dot={false} strokeWidth={2} />}
-              {hasLeftForefoot && visibleSignals.leftForefoot && <Line type="monotone" name="Left forefoot / toe region" dataKey="leftForefootScore" stroke="#2dd4bf" dot={false} strokeWidth={1.5} strokeDasharray="4 2" />}
-              {hasRightForefoot && visibleSignals.rightForefoot && <Line type="monotone" name="Right forefoot / toe region" dataKey="rightForefootScore" stroke="#fb923c" dot={false} strokeWidth={1.5} strokeDasharray="4 2" />}
-              {hasHands && visibleSignals.hands && <Line type="monotone" name="Hands" dataKey="handScore" stroke="#a78bfa" dot={false} strokeWidth={2} />}
-              {usesSingleActivity && visibleSignals.activity && <Line type="monotone" name="Activity" dataKey="score" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />}
+              {hasLeft && (displayMode === "raw" || displayMode === "both") && <Line type="monotone" name="Left foot / leg raw" dataKey="leftScore" stroke="hsl(var(--primary))" strokeOpacity={visibleSignals.left ? (displayMode === "both" ? 0.32 : 1) : 0.12} dot={false} strokeWidth={displayMode === "both" ? 1 : 2} />}
+              {hasLeft && (displayMode === "smoothed" || displayMode === "both") && <Line type="monotone" name="Left foot / leg" dataKey="leftSmooth" stroke="hsl(var(--primary))" strokeOpacity={visibleSignals.left ? 1 : 0.12} dot={false} strokeWidth={2} />}
+              {hasRight && (displayMode === "raw" || displayMode === "both") && <Line type="monotone" name="Right foot / leg raw" dataKey="rightScore" stroke="#f59e0b" strokeOpacity={visibleSignals.right ? (displayMode === "both" ? 0.32 : 1) : 0.12} dot={false} strokeWidth={displayMode === "both" ? 1 : 2} />}
+              {hasRight && (displayMode === "smoothed" || displayMode === "both") && <Line type="monotone" name="Right foot / leg" dataKey="rightSmooth" stroke="#f59e0b" strokeOpacity={visibleSignals.right ? 1 : 0.12} dot={false} strokeWidth={2} />}
+              {hasLeftForefoot && (displayMode === "raw" || displayMode === "both") && <Line type="monotone" name="Left forefoot raw" dataKey="leftForefootScore" stroke="#2dd4bf" strokeOpacity={visibleSignals.leftForefoot ? 0.45 : 0.1} dot={false} strokeWidth={1} strokeDasharray="4 2" />}
+              {hasLeftForefoot && (displayMode === "smoothed" || displayMode === "both") && <Line type="monotone" name="Left forefoot / toe region" dataKey="leftForefootSmooth" stroke="#2dd4bf" strokeOpacity={visibleSignals.leftForefoot ? 1 : 0.1} dot={false} strokeWidth={1.5} strokeDasharray="4 2" />}
+              {hasRightForefoot && (displayMode === "raw" || displayMode === "both") && <Line type="monotone" name="Right forefoot raw" dataKey="rightForefootScore" stroke="#fb923c" strokeOpacity={visibleSignals.rightForefoot ? 0.45 : 0.1} dot={false} strokeWidth={1} strokeDasharray="4 2" />}
+              {hasRightForefoot && (displayMode === "smoothed" || displayMode === "both") && <Line type="monotone" name="Right forefoot / toe region" dataKey="rightForefootSmooth" stroke="#fb923c" strokeOpacity={visibleSignals.rightForefoot ? 1 : 0.1} dot={false} strokeWidth={1.5} strokeDasharray="4 2" />}
+              {hasHands && (displayMode === "raw" || displayMode === "both") && <Line type="monotone" name="Hands raw" dataKey="handScore" stroke="#a78bfa" strokeOpacity={visibleSignals.hands ? (displayMode === "both" ? 0.32 : 1) : 0.12} dot={false} strokeWidth={displayMode === "both" ? 1 : 2} />}
+              {hasHands && (displayMode === "smoothed" || displayMode === "both") && <Line type="monotone" name="Hands" dataKey="handSmooth" stroke="#a78bfa" strokeOpacity={visibleSignals.hands ? 1 : 0.12} dot={false} strokeWidth={2} />}
+              {usesSingleActivity && (displayMode === "raw" || displayMode === "both") && <Line type="monotone" name="Activity raw" dataKey="score" stroke="hsl(var(--primary))" strokeOpacity={visibleSignals.activity ? (displayMode === "both" ? 0.32 : 1) : 0.12} dot={false} strokeWidth={displayMode === "both" ? 1 : 2} />}
+              {usesSingleActivity && (displayMode === "smoothed" || displayMode === "both") && <Line type="monotone" name="Activity" dataKey="activitySmooth" stroke="hsl(var(--primary))" strokeOpacity={visibleSignals.activity ? 1 : 0.12} dot={false} strokeWidth={2} />}
             </LineChart>
           </ResponsiveContainer>
         </div>
+        {(hasLeft || hasRight || hasHands) && (
+          <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
+            {hasLeft && <Metric label="Left Now" value={playbackPoint?.leftScore ?? "--"} />}
+            {hasRight && <Metric label="Right Now" value={playbackPoint?.rightScore ?? "--"} />}
+            {hasHands && <Metric label="Hands Now" value={playbackPoint?.handScore ?? "--"} />}
+            {hasLeft && hasRight && <Metric label="Balance Now" value={playbackSideLabel} />}
+          </div>
+        )}
         {(savedSummary.asymmetry_summary || savedSummary.hand_movement_summary?.reliability === "moderate") && (
           <div className="grid gap-2 sm:grid-cols-4">
             <Metric label="Session Avg Left" value={savedSummary.left_lower_body_average_activity} />
@@ -202,9 +290,47 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
           </div>
         )}
         {savedSummary.hand_movement_summary?.reliability === "moderate" && (
-          <p className="text-[10px] text-muted-foreground">
-            Session cadence proxy is derived from visible hand-movement rhythm and is not confirmed technique or force. Playback-time cadence requires a newly saved analysis with rolling cadence data.
-          </p>
+          <>
+            {cadenceTimeline.length > 0 ? (
+              <div className="space-y-2 rounded-lg border border-[#a78bfa]/25 bg-[#a78bfa]/[0.05] p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#a78bfa]">Rolling Hand Cadence Proxy</p>
+                  <p className="font-mono text-[11px] font-semibold text-[#c4b5fd]">
+                    {playbackCadence?.cadence != null ? `${playbackCadence.cadence} cycles/min now` : ""}
+                  </p>
+                </div>
+                <div className="h-24 cursor-pointer">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={cadenceTimeline}
+                      margin={{ top: 6, right: 8, bottom: 2, left: -24 }}
+                      onClick={(chartData) => {
+                        if (Number.isFinite(Number(chartData?.activeLabel))) onSeek?.(Number(chartData.activeLabel));
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                      <XAxis dataKey="timeS" type="number" domain={[savedSummary.window_start_s, savedSummary.window_end_s]} tickFormatter={formatTime} stroke="hsl(var(--muted-foreground))" fontSize={10} />
+                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={10} />
+                      <Tooltip content={<MotionTooltip />} />
+                      {Number.isFinite(Number(playbackTime))
+                        && playbackTime >= savedSummary.window_start_s
+                        && playbackTime <= savedSummary.window_end_s && (
+                        <ReferenceLine x={playbackTime} stroke="#f43f5e" strokeWidth={2} />
+                      )}
+                      <Line type="monotone" name="Cadence proxy" dataKey="cadence" stroke="#a78bfa" dot={false} strokeWidth={2} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-lg border border-[#a78bfa]/20 bg-[#a78bfa]/[0.05] px-2.5 py-2 text-[10px] text-muted-foreground">
+                This saved analysis predates rolling cadence storage. Re-run motion analysis and save the result to show cadence aligned with playback.
+              </p>
+            )}
+            <p className="text-[10px] text-muted-foreground">
+              Cadence is derived from visible hand-movement rhythm and is not confirmed technique or force.
+            </p>
+          </>
         )}
       </div>
     );
@@ -437,6 +563,39 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
             </div>
           )}
           <p className="text-[10px] leading-relaxed text-muted-foreground">{lowerBodyPatterns.method_note}</p>
+        </div>
+          )}
+
+          {postureSummary && (
+        <div className="rounded-lg border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Saved Calibrated Foot Appearance Matching</p>
+            <span className="text-[10px] text-muted-foreground">{postureSummary.coverage_pct}% sampled frame coverage</span>
+          </div>
+          {postureSummary.posture_candidates?.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {postureSummary.posture_candidates.slice(0, 10).map((candidate) => (
+                <button
+                  key={`${candidate.posture}-${candidate.time_s}`}
+                  type="button"
+                  onClick={() => onSeek?.(candidate.time_s)}
+                  disabled={!onSeek}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-primary/20 bg-card/60 px-2 py-1 text-[10px] text-foreground transition-colors enabled:hover:border-primary/40 disabled:cursor-default"
+                >
+                  <Play className="h-3 w-3 text-primary" />
+                  <span className="font-mono">{formatTime(candidate.time_s)}</span>
+                  <span>{candidate.posture_phrase}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              {postureSummary.status === "references_needed"
+                ? "Foot-region image samples were captured, but named reference moments were not available for a calibrated posture comparison."
+                : "No sustained calibrated posture matches were saved from this run."}
+            </p>
+          )}
+          <p className="text-[10px] leading-relaxed text-muted-foreground">{postureSummary.method_note}</p>
         </div>
           )}
 

@@ -29,8 +29,9 @@ export default function EMGTimelineChart({
   channelMode = "single",
   events = [],
   savedMarkers = {},
-  onMarkersChange,
   timelineRows = [], // HR data
+  inspectionTime,
+  onInspectionTimeChange,
 }) {
   const [showLeft, setShowLeft] = useState(true);
   const [showRight, setShowRight] = useState(true);
@@ -94,7 +95,6 @@ export default function EMGTimelineChart({
     savedMarkers.recovery_offset_s != null && { key: "recovery", t: savedMarkers.recovery_offset_s, label: "Rec", color: MARKER_COLORS.recovery },
   ].filter(Boolean);
 
-  const yLabel = viewMode === "pct" ? "%" : "Raw";
   const yDomain = viewMode === "pct" ? [0, 100] : ["auto", "auto"];
 
   const CustomTooltip = ({ active, payload, label }) => {
@@ -189,7 +189,16 @@ export default function EMGTimelineChart({
       {/* Chart */}
       <div className="h-44">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -24 }}>
+          <ComposedChart
+            data={chartData}
+            margin={{ top: 4, right: 4, bottom: 0, left: -24 }}
+            onMouseMove={(data) => {
+              if (Number.isFinite(Number(data?.activeLabel))) onInspectionTimeChange?.(Number(data.activeLabel));
+            }}
+            onClick={(data) => {
+              if (Number.isFinite(Number(data?.activeLabel))) onInspectionTimeChange?.(Number(data.activeLabel));
+            }}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
             <XAxis
               dataKey="t"
@@ -217,6 +226,16 @@ export default function EMGTimelineChart({
                 label={{ value: pm.label, fontSize: 7, fill: pm.color, position: "top" }}
               />
             ))}
+
+            {Number.isFinite(Number(inspectionTime)) && (
+              <ReferenceLine
+                yAxisId="emg"
+                x={Number(inspectionTime)}
+                stroke="#f43f5e"
+                strokeWidth={1.5}
+                strokeDasharray="3 2"
+              />
+            )}
 
             {/* Event markers */}
             {showEvents && events.map((ev, i) => (

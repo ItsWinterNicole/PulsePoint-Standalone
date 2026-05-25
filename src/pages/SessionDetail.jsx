@@ -17,6 +17,8 @@ import NearClimaxSessionOverview from "../components/NearClimaxSessionOverview";
 import SessionAIPanel from "../components/SessionAIPanel";
 import SessionEvidencePatternPanel from "../components/SessionEvidencePatternPanel";
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
+import SessionSnapshotHero from "../components/SessionSnapshotHero";
+import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
@@ -88,6 +90,18 @@ function EventNotesPanel({
   helper = "Click a note to highlight its pin.",
   maxHeight = true,
 }) {
+  const [filter, setFilter] = useState("all");
+  const filteredEvents = events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => {
+      const categories = getEventCategories(event);
+      if (filter === "manual") return event.source !== "motion_derived";
+      if (filter === "motion") return event.source === "motion_derived";
+      if (filter === "pause") return categories.some((category) => ["stimulation_paused", "stimulation_resumed", "motion_pause", "motion_resume"].includes(category));
+      if (filter === "phase") return categories.some((category) => ["climax", "pre_climax", "recovery"].includes(category));
+      return true;
+    });
+
   if (!events.length) {
     return (
       <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
@@ -105,8 +119,28 @@ function EventNotesPanel({
         </div>
         <span className="text-xs font-mono text-muted-foreground">{events.length}</span>
       </div>
+      <div className="flex flex-wrap gap-1.5">
+        {[
+          ["all", "All"],
+          ["manual", "Manual"],
+          ["motion", "Motion-derived"],
+          ["pause", "Pause / resume"],
+          ["phase", "Phase"],
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setFilter(value)}
+            className={`rounded-full border px-2 py-1 text-[10px] font-medium transition-colors ${
+              filter === value ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="space-y-1.5">
-        {events.map((event, index) => {
+        {filteredEvents.map(({ event, index }) => {
           const categories = getEventCategories(event);
           const primary = _getCategoryMeta(categories[0]);
           const selected = selectedIndex === index;
@@ -145,6 +179,11 @@ function EventNotesPanel({
             </button>
           );
         })}
+        {!filteredEvents.length && (
+          <p className="rounded-lg border border-border bg-card/50 px-3 py-3 text-sm text-muted-foreground">
+            No event notes match this filter.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -166,6 +205,7 @@ export default function SessionDetail() {
   const [sessionNotes, setSessionNotes] = useState("");
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
+  const [inspectionTime, setInspectionTime] = useState(0);
 
   const nearClimaxEvents = useMemo(() => {
     if (!session) return [];
@@ -179,6 +219,18 @@ export default function SessionDetail() {
       setSelectedNearClimaxIdx(0);
     }
   }, [nearClimaxEvents.length]);
+
+  useEffect(() => {
+    const events = session?.event_timeline || [];
+    if (!events.length || !Number.isFinite(Number(inspectionTime))) return;
+    const nearestIndex = events.reduce((closestIndex, event, index) => (
+      Math.abs(Number(event.time_s) - Number(inspectionTime))
+        < Math.abs(Number(events[closestIndex].time_s) - Number(inspectionTime))
+        ? index
+        : closestIndex
+    ), 0);
+    setSelectedEventIdx(nearestIndex);
+  }, [inspectionTime, session?.event_timeline]);
 
   const highlightRange = useMemo(() => {
     if (selectedNearClimaxIdx == null || !nearClimaxEvents[selectedNearClimaxIdx]) return null;
@@ -367,6 +419,8 @@ export default function SessionDetail() {
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link;
   const sectionLinks = [
+    { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
+    { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
@@ -376,7 +430,6 @@ export default function SessionDetail() {
       { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
     ] : []),
     ...(s.no_climax ? [{ id: "session-ai-companion", label: "No-Climax Analysis", group: "Session Story" }] : []),
-    { id: "session-telemetry", label: "Heart Rate & Markers", group: "Physiology" },
     ...((emgRows.length > 0 || s.emg_enabled) ? [{ id: "session-emg", label: "EMG", group: "Physiology" }] : []),
     ...(hasTimelineSection ? [
       { id: "session-timeline", label: "Timeline Player", group: "Timeline & Events" },
@@ -451,6 +504,77 @@ export default function SessionDetail() {
       <SessionSectionNavigator sections={sectionLinks} onSelect={selectSection} />
 
       <div className="px-2 md:px-4 py-4 space-y-4 pb-24 xl:pr-60">
+        <section id="session-snapshot" className="scroll-mt-24">
+          <SessionSnapshotHero session={s} timelineRows={timelineRows} motionSummary={s.motion_analysis_summary} />
+        </section>
+
+        <SessionTelemetryDashboard
+          session={s}
+          timelineRows={timelineRows}
+          emgRows={emgRows}
+          nearClimaxEvents={nearClimaxEvents}
+          highlightRange={highlightRange}
+          selectedEventIndex={selectedEventIdx}
+          onSelectEventIndex={setSelectedEventIdx}
+          inspectionTime={inspectionTime}
+          onInspectionTimeChange={setInspectionTime}
+          onMarkersChange={async (markers) => {
+            await base44.entities.Session.update(id, markers);
+            setSession((prev) => ({ ...prev, ...markers }));
+          }}
+          onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
+        />
+        {timelineRows.length > 0 && (
+          <details className="rounded-xl border border-border bg-card p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+              Marker Tools & Supporting Physiological Analysis
+            </summary>
+            <div className="mt-3 space-y-3">
+              {!s.no_climax && (
+                <AIPhaseMarkerSuggester
+                  session={s}
+                  timelineRows={timelineRows}
+                  userProfile={userProfile}
+                  onApply={async (updates) => {
+                    await base44.entities.Session.update(id, updates);
+                    setSession((prev) => ({ ...prev, ...updates }));
+                  }}
+                />
+              )}
+              {!s.no_climax && (
+                <NearClimaxEvents
+                  timelineRows={timelineRows}
+                  session={s}
+                  selectedIndex={selectedNearClimaxIdx}
+                  onSelectIndex={setSelectedNearClimaxIdx}
+                  onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: refined }))}
+                  userProfile={userProfile}
+                />
+              )}
+              {!s.no_climax && nearClimaxEvents.length > 0 && (
+                <NearClimaxSessionOverview session={s} nearClimaxEvents={nearClimaxEvents} userProfile={userProfile} />
+              )}
+              <HRZoneAnalysis rows={timelineRows} sessionMaxHR={s.max_hr} userProfile={userProfile} />
+              <HRPhysiologicalAnalysis timelineRows={timelineRows} session={s} />
+            </div>
+          </details>
+        )}
+        {timelineRows.length === 0 && s.hr_timeline?.length > 0 && (
+          <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</h3>
+            <div className="h-32">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={s.hr_timeline}>
+                  <XAxis dataKey="minute" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} domain={["auto", "auto"]} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="hr" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
         {/* Executive Summary */}
         <section id="session-summary" className="scroll-mt-24 space-y-4">
           <SessionExecutiveSummary
@@ -527,7 +651,7 @@ export default function SessionDetail() {
         )}
 
         {/* Heart Rate + Most Recent Side-by-Side */}
-        <div id="session-telemetry" className="scroll-mt-24 bg-card rounded-xl border border-border p-4">
+        {false && <div id="session-telemetry-legacy" className="scroll-mt-24 bg-card rounded-xl border border-border p-4">
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Heart className="w-3.5 h-3.5" /> Heart Rate
@@ -652,7 +776,7 @@ export default function SessionDetail() {
         </div>
 
         </div>
-        </div>
+        </div>}
 
         {/* EMG */}
         {(emgRows.length > 0 || s.emg_enabled) && (
@@ -850,7 +974,7 @@ export default function SessionDetail() {
         {/* Interactive Timeline Player */}
         {(timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || s.motion_analysis_summary) && (
           <section id="session-timeline" className="scroll-mt-24 space-y-4">
-            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+            {false && <div className="rounded-xl border border-border bg-card p-4 space-y-3">
               <div>
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Timeline Heart Rate Trace</h3>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -897,18 +1021,24 @@ export default function SessionDetail() {
                   </Button>
                 </div>
               )}
-            </div>
+            </div>}
+            <TimelineWaypointDetail
+              waypoint={timelineWaypointDetail?.waypoint}
+              currentHR={timelineWaypointDetail?.currentHR}
+            />
             <InteractiveTimelinePlayer
               session={s}
               timelineRows={timelineRows}
               onActiveEventIndexChange={setSelectedEventIdx}
               onActiveWaypointChange={setTimelineWaypointDetail}
+              externalTime={inspectionTime}
+              onTimeChange={setInspectionTime}
             />
           </section>
         )}
 
         {(s.event_timeline || []).length > 0 && (
-          <details id="session-event-notes" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <details open id="session-event-notes" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
               Event Notes ({(s.event_timeline || []).length})
             </summary>
