@@ -23,6 +23,7 @@ import CorrelationMatrix from './pages/CorrelationMatrix';
 import VideoPlayer from './pages/VideoPlayer';
 import SessionReviewPlayer from './pages/SessionReviewPlayer';
 import MotionLab from './pages/MotionLab';
+import Production from './pages/Production';
 import Library from './pages/Library';
 import Analytics from './pages/Analytics';
 import PredictiveModeler from './pages/PredictiveModeler';
@@ -81,6 +82,7 @@ const AuthenticatedApp = () => {
         <Route path="/video" element={<VideoPlayer />} />
         <Route path="/review-player" element={<SessionReviewPlayer />} />
         <Route path="/motion-lab" element={<MotionLab />} />
+        <Route path="/production" element={<Production />} />
         <Route path="/library" element={<Library />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/modeler" element={<PredictiveModeler />} />
