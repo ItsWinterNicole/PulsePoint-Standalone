@@ -622,6 +622,62 @@ function drawPreviewFrame(canvas, video, legPreview, handResult, showLegs, showH
   return true;
 }
 
+// MOTION_LAB_ANALYSIS_DEBUG_OVERLAY_V1
+function drawAnalysisMarkerDots(context, markers, width, height, color, label) {
+  if (!Array.isArray(markers) || !markers.length) return;
+  markers.forEach((marker, index) => {
+    const x = marker.x * width;
+    const y = marker.y * height;
+    context.beginPath();
+    context.fillStyle = color;
+    context.arc(x, y, 7, 0, Math.PI * 2);
+    context.fill();
+    context.lineWidth = 3;
+    context.strokeStyle = "#ffffff";
+    context.stroke();
+    context.fillStyle = color;
+    context.font = "bold 12px sans-serif";
+    context.fillText(`${label}${index + 1}`, x + 10, y - 8);
+  });
+}
+
+function drawAnalysisDebugOverlay(canvas, footMarkerGeometry, leftMarkers, rightMarkers, timeS) {
+  if (!canvas?.width || !canvas?.height) return false;
+  const context = canvas.getContext("2d");
+  if (!context) return false;
+  const width = canvas.width;
+  const height = canvas.height;
+
+  context.save();
+  context.fillStyle = "rgba(2, 6, 23, 0.72)";
+  context.fillRect(10, 10, 305, 78);
+  context.strokeStyle = footMarkerGeometry?.marked_count >= 6 ? "#2dd4bf" : "#f59e0b";
+  context.lineWidth = 2;
+  context.strokeRect(10, 10, 305, 78);
+  context.fillStyle = "#e5e7eb";
+  context.font = "bold 14px sans-serif";
+  context.fillText("Live analysis overlay", 20, 32);
+  context.font = "12px sans-serif";
+  context.fillStyle = "#cbd5e1";
+  context.fillText(`Time: ${formatTime(timeS)} | L dots: ${leftMarkers?.length || 0} | R dots: ${rightMarkers?.length || 0}`, 20, 52);
+  context.fillStyle = footMarkerGeometry?.marked_count >= 6 ? "#5eead4" : "#fbbf24";
+  context.fillText(
+    footMarkerGeometry?.marked_count >= 6
+      ? `Marker geometry: ${footMarkerGeometry.fan_angle_deg ?? "?"} deg fan`
+      : "Marker geometry: waiting for 3 dots per foot",
+    20,
+    72,
+  );
+
+  drawAnalysisMarkerDots(context, leftMarkers, width, height, "#38bdf8", "L");
+  drawAnalysisMarkerDots(context, rightMarkers, width, height, "#fb7185", "R");
+  if (footMarkerGeometry?.landmarks) {
+    drawFootLandmarkOverlay(context, footMarkerGeometry.landmarks, width, height, null, 6);
+  }
+  context.restore();
+  return true;
+}
+
 function drawVideoCrop(video, roi, canvas) {
   const sourceWidth = video.videoWidth || 0;
   const sourceHeight = video.videoHeight || 0;
@@ -2724,6 +2780,11 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setDismissedSuggestionIds([]);
     setAcceptedSuggestionIds([]);
     setExpandedPeakClusters([]);
+    setPreviewEnabled(true);
+    setPreviewLegs(true);
+    setPreviewExpanded(true);
+    previewEnabledRef.current = true;
+    previewLegsRef.current = true;
     previewReadyRef.current = false;
     setPreviewReady(false);
 
@@ -2913,14 +2974,31 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         const rightForefootValue = frameForefootEnabled
           ? regionPixelMotion(regionFrames.rightForefoot, previousRegionFrames.rightForefoot)
           : null;
-        const footMarkerGeometry = mode !== "hands"
+        const markerTrackingActive = mode !== "hands"
           && frameLowerBodyMethod === "regionMotion"
-          && frameConfiguration.roiLayout === "pip"
-          ? buildMarkerFootGeometry(
-            detectReflectiveMarkerPoints(probe, frameRois.leftLowerBody, leftMarkerCanvas),
-            detectReflectiveMarkerPoints(probe, frameRois.rightLowerBody, rightMarkerCanvas),
-          )
+          && frameConfiguration.roiLayout === "pip";
+        const leftMarkerPoints = markerTrackingActive
+          ? detectReflectiveMarkerPoints(probe, frameRois.leftLowerBody, leftMarkerCanvas)
+          : [];
+        const rightMarkerPoints = markerTrackingActive
+          ? detectReflectiveMarkerPoints(probe, frameRois.rightLowerBody, rightMarkerCanvas)
+          : [];
+        const footMarkerGeometry = markerTrackingActive
+          ? buildMarkerFootGeometry(leftMarkerPoints, rightMarkerPoints)
           : null;
+        if (previewEnabledRef.current && markerTrackingActive) {
+          const overlayDrawn = drawAnalysisDebugOverlay(
+            previewCanvasRef.current,
+            footMarkerGeometry,
+            leftMarkerPoints,
+            rightMarkerPoints,
+            timeS,
+          );
+          if (overlayDrawn && !previewReadyRef.current) {
+            previewReadyRef.current = true;
+            setPreviewReady(true);
+          }
+        }
         const handValue = handMotion(hands, previousHands);
         const handVector = dominantHandVector(hands, previousHands);
         if (mode === "combined" || mode === "legs") {
