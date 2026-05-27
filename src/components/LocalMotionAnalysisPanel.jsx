@@ -3094,12 +3094,26 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   };
 
   const ModeIcon = selectedMode.icon;
+
+  // MOTION_LAB_UX_NAV_V4
   const scrollToMotionSection = (id) => {
     if (typeof document === "undefined") return;
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = document.getElementById(id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  const motionLabNavItems = [
+    ["motion-lab-top", "Top"],
+    ["motion-lab-setup", "Setup"],
+    ["motion-lab-regions", "Regions"],
+    ["motion-lab-landmarks", "Landmarks"],
+    ["motion-lab-preview", "Preview"],
+    ["motion-lab-results", "Results"],
+    ["motion-lab-findings", "Findings"],
+    ["motion-lab-trace", "Trace"],
+  ];
 
-  return (
+return (
     <div id="motion-lab-top" className="relative rounded-xl border border-border bg-card p-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
@@ -3119,6 +3133,30 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/[0.08] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
           <ShieldCheck className="h-3 w-3" />
           Local video only
+        </div>
+      </div>
+
+      <div className="sticky top-2 z-30 rounded-xl border border-primary/35 bg-background/95 p-3 shadow-xl shadow-background/40 backdrop-blur supports-[backdrop-filter]:bg-background/85">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">Motion Lab Navigator</p>
+            <p className="text-[11px] text-muted-foreground">Jump around the analysis workspace without losing your place.</p>
+          </div>
+          <span className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-1 text-[9px] font-semibold uppercase tracking-wider text-primary">
+            UX nav v4
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {motionLabNavItems.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => scrollToMotionSection(id)}
+              className="rounded-full border border-border bg-card px-3 py-1.5 text-[11px] font-semibold text-foreground transition-colors hover:border-primary/50 hover:bg-primary/[0.1] hover:text-primary"
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -3185,7 +3223,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       </div>
 
       {setupExpanded && (
-      <div className="space-y-3 rounded-lg border border-border bg-muted/10 p-3">
+      <div id="motion-lab-setup" className="scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Setup</p>
         <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -3247,7 +3285,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       )}
 
       {regionsExpanded && (
-      <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-3">
+      <div id="motion-lab-regions" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Regions</p>
@@ -3807,7 +3845,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       )}
 
       {previewExpanded && (
-      <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-3">
+      <div id="motion-lab-preview" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3">
         <label className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <input
             type="checkbox"
@@ -3868,7 +3906,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       )}
 
       {result && (
-        <div className="space-y-4 border-t border-border pt-4">
+        <div id="motion-lab-results" className="scroll-mt-32 space-y-4 border-t border-border pt-4">
           <div className="rounded-lg border border-primary/25 bg-primary/[0.07] px-3 py-2 text-sm text-foreground">
             <span className="font-semibold text-primary">Current analysis result.</span>{" "}
             This temporary trace reflects the most recent run and replaces the saved summary and saved motion-derived events only after you select <span className="font-medium">Finalize summary and replace saved motion events</span>.
@@ -4317,7 +4355,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             </ul>
           </div>
 
-          <div>
+          <div id="motion-lab-trace" className="scroll-mt-32">
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Derived Motion Trace</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Activity is normalized within this selected window. Click the trace to seek the video; the vertical marker follows playback.
@@ -4558,6 +4596,21 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           </p>
         </div>
       )}
+      <div className="motion-lab-floating-navigator-v4 fixed bottom-4 right-4 z-50 hidden w-40 rounded-2xl border border-primary/35 bg-background/95 p-2 shadow-2xl shadow-background/50 backdrop-blur supports-[backdrop-filter]:bg-background/85 2xl:block">
+        <p className="mb-1.5 px-1 text-[9px] font-bold uppercase tracking-[0.18em] text-primary">Motion Lab</p>
+        <div className="grid gap-1">
+          {motionLabNavItems.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => scrollToMotionSection(id)}
+              className="rounded-lg border border-border bg-card/80 px-2 py-1 text-left text-[10px] font-semibold text-foreground transition-colors hover:border-primary/50 hover:bg-primary/[0.1] hover:text-primary"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
