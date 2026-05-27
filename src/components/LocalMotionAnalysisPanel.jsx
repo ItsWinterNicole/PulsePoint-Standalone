@@ -684,6 +684,190 @@ function regionPixelMotion(current, previous) {
   }
   return total / (current.length * 255);
 }
+function detectReflectiveMarkerPoints(video, roi, canvas) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context || !video.videoWidth || !video.videoHeight || !roi) return [];
+  const width = 72;
+  const height = Math.max(20, Math.min(96, Math.round(width * ((roi.height * video.videoHeight) / (roi.width * video.videoWidth)))));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  context.drawImage(
+    video,
+    roi.x * video.videoWidth,
+    roi.y * video.videoHeight,
+    roi.width * video.videoWidth,
+    roi.height * video.videoHeight,
+    0,
+    0,
+    width,
+    height,
+  );
+  const image = context.getImageData(0, 0, width, height).data;
+  const luminance = new Float32Array(width * height);
+  for (let index = 0, pixel = 0; index < image.length; index += 4, pixel += 1) {
+    luminance[pixel] = (image[index] * 0.299) + (image[index + 1] * 0.587) + (image[index + 2] * 0.114);
+  }
+
+  const brightThreshold = Math.max(205, percentile(Array.from(luminance), 0.985) || 230);
+  const active = new Uint8Array(width * height);
+  for (let index = 0; index < luminance.length; index += 1) {
+    active[index] = luminance[index] >= brightThreshold ? 1 : 0;
+  }
+
+  const visited = new Uint8Array(width * height);
+  const components = [];
+  for (let start = 0; start < active.length; start += 1) {
+    if (!active[start] || visited[start]) continue;
+    const stack = [start];
+    visited[start] = 1;
+    let count = 0;
+    let weightedX = 0;
+    let weightedY = 0;
+    let totalWeight = 0;
+    let peak = 0;
+
+    while (stack.length) {
+      const pixel = stack.pop();
+      const x = pixel % width;
+      const y = Math.floor(pixel / width);
+      const value = luminance[pixel];
+      const weight = Math.max(1, value - brightThreshold + 1);
+      count += 1;
+      weightedX += x * weight;
+      weightedY += y * weight;
+      totalWeight += weight;
+      peak = Math.max(peak, value);
+
+      [pixel - 1, pixel + 1, pixel - width, pixel + width].forEach((neighbor) => {
+        if (neighbor < 0 || neighbor >= active.length || visited[neighbor] || !active[neighbor]) return;
+        const neighborX = neighbor % width;
+        if (Math.abs(neighborX - x) > 1) return;
+        visited[neighbor] = 1;
+        stack.push(neighbor);
+      });
+    }
+
+    if (count >= 2 && count <= Math.max(80, width * height * 0.08) && totalWeight > 0) {
+      components.push({
+        x: roi.x + ((weightedX / totalWeight) / Math.max(1, width - 1)) * roi.width,
+        y: roi.y + ((weightedY / totalWeight) / Math.max(1, height - 1)) * roi.height,
+        area: count,
+        peak,
+        score: peak + Math.min(60, count * 3),
+      });
+    }
+  }
+
+  return components
+    .sort((first, second) => second.score - first.score)
+    .filter((component, index, all) => (
+      all.slice(0, index).every((prior) => pointDistance(component, prior) > 0.018)
+    ))
+    .slice(0, 3)
+    .map(({ x, y, area, peak }) => ({
+      x: Math.round(x * 1000) / 1000,
+      y: Math.round(y * 1000) / 1000,
+      area,
+      peak: Math.round(peak),
+    }));
+}
+
+function markerTripletToFootPoints(points) {
+  if (!Array.isArray(points) || points.length < 3) return null;
+  const ordered = [...points].sort((first, second) => first.y - second.y);
+  return {
+    bigToe: { x: ordered[0].x, y: ordered[0].y },
+    forefoot: { x: ordered[1].x, y: ordered[1].y },
+    heel: { x: ordered[2].x, y: ordered[2].y },
+  };
+}
+
+function buildMarkerFootGeometry(leftMarkers, rightMarkers) {
+  const left = markerTripletToFootPoints(leftMarkers);
+  const right = markerTripletToFootPoints(rightMarkers);
+  if (!left || !right) return null;
+
+  const landmarks = {
+    leftBigToe: left.bigToe,
+    leftForefoot: left.forefoot,
+    leftHeel: left.heel,
+    rightBigToe: right.bigToe,
+    rightForefoot: right.forefoot,
+    rightHeel: right.heel,
+  };
+
+  return {
+    ...computeFootLandmarkGeometry(landmarks),
+    method: "marker_assisted_foot_geometry_timeline",
+    method_note: "Experimental reflective-marker tracking from bright dot-like blobs inside the left/right foot ROIs. Assumes three visible markers per foot ordered toe-to-heel by vertical position. Use as observational trend support only; verify against video.",
+    landmarks: roundedFootLandmarks(landmarks),
+  };
+}
+
+function averageGeometryValue(frames, key) {
+  return Math.round((mean(frames.map((frame) => Number(frame[key]))) || 0) * 1000) / 1000;
+}
+
+function geometryRange(frames, key) {
+  const values = frames.map((frame) => Number(frame[key])).filter(Number.isFinite);
+  if (!values.length) return null;
+  return {
+    min: Math.round(Math.min(...values) * 1000) / 1000,
+    max: Math.round(Math.max(...values) * 1000) / 1000,
+  };
+}
+
+function buildFootGeometryTrackingSummary(samples, sampleRate) {
+  const frames = samples
+    .filter((sample) => sample.footMarkerGeometry?.marked_count >= 6)
+    .map((sample) => ({
+      time_s: Math.round(sample.timeS * 10) / 10,
+      fan_angle_deg: sample.footMarkerGeometry.fan_angle_deg,
+      toe_gap_normalized: sample.footMarkerGeometry.toe_gap_normalized,
+      heel_gap_normalized: sample.footMarkerGeometry.heel_gap_normalized,
+      left_axis_deg: sample.footMarkerGeometry.left_axis_deg,
+      right_axis_deg: sample.footMarkerGeometry.right_axis_deg,
+      left_planted_proxy: sample.footMarkerGeometry.left_planted_proxy,
+      right_planted_proxy: sample.footMarkerGeometry.right_planted_proxy,
+      region_segment_id: sample.regionSegmentId || undefined,
+      region_segment_label: sample.regionSegmentLabel || undefined,
+    }));
+
+  const coveragePct = samples.length ? Math.round((frames.length / samples.length) * 100) : 0;
+
+  if (!frames.length) {
+    return {
+      status: "no_marker_geometry_detected",
+      method: "marker_assisted_foot_geometry_timeline",
+      coverage_pct: 0,
+      sample_count: 0,
+      method_note: "No continuous reflective-marker foot geometry was detected. Manual landmark geometry may still be available as a single reference frame.",
+      timeline: [],
+    };
+  }
+
+  const stride = Math.max(1, Math.ceil(frames.length / 600));
+  const timeline = frames.filter((_, index) => index % stride === 0 || index === frames.length - 1);
+
+  return {
+    status: coveragePct >= 55 ? "marker_tracking_available" : "limited_marker_tracking",
+    method: "marker_assisted_foot_geometry_timeline",
+    coverage_pct: coveragePct,
+    sample_count: frames.length,
+    sample_rate_fps: sampleRate,
+    average_fan_angle_deg: averageGeometryValue(frames, "fan_angle_deg"),
+    average_toe_gap_normalized: averageGeometryValue(frames, "toe_gap_normalized"),
+    average_heel_gap_normalized: averageGeometryValue(frames, "heel_gap_normalized"),
+    fan_angle_range_deg: geometryRange(frames, "fan_angle_deg"),
+    toe_gap_range_normalized: geometryRange(frames, "toe_gap_normalized"),
+    heel_gap_range_normalized: geometryRange(frames, "heel_gap_normalized"),
+    interpretation_hint: "Use this as continuous observational foot-position trend support. Describe how foot spread, fanning, heel separation, toe gap, foot-axis symmetry, and planted/neutral posture change over time rather than treating one saved frame as whole-session truth.",
+    method_note: "Experimental marker-assisted tracking from bright reflective dots in the foot ROIs. Requires stable lighting and three visible markers per foot. Confirm important moments against video.",
+    timeline,
+  };
+}
 
 function appearanceSignature(pixels) {
   if (!pixels?.length) return null;
@@ -1890,6 +2074,9 @@ function buildFindings(result) {
   if (result.postureGeometry?.status === "calibrated_matching_available" && result.postureGeometry.posture_candidates.length > 0) {
     findings.push(`${result.postureGeometry.posture_candidates.length} calibrated visual foot-posture candidate${result.postureGeometry.posture_candidates.length === 1 ? " was" : "s were"} identified from user-marked reference appearances; these remain observational proxies.`);
   }
+  if (result.footGeometryTracking?.status === "marker_tracking_available" || result.footGeometryTracking?.status === "limited_marker_tracking") {
+    findings.push(`Marker-assisted foot geometry was tracked across ${result.footGeometryTracking.sample_count} sampled frames (${result.footGeometryTracking.coverage_pct}% coverage). Use this as a continuous visual trend for foot spread, fanning, heel separation, toe gap, and planted/neutral posture, not as force or intent.`);
+  }
   findings.push(`There were ${result.moments.length} high-activity moments flagged for direct video review.`);
   return findings;
 }
@@ -1906,6 +2093,13 @@ function buildDerivedTimeline(result, maximumPoints = 900) {
       left_forefoot_activity: result.hasForefoot ? sample.leftForefootScore : undefined,
       right_forefoot_activity: result.hasForefoot ? sample.rightForefootScore : undefined,
       hand_activity: result.hasHands ? (result.hasLegs ? sample.handScore : sample.score) : undefined,
+      foot_fan_angle_deg: sample.footMarkerGeometry?.fan_angle_deg,
+      foot_toe_gap_normalized: sample.footMarkerGeometry?.toe_gap_normalized,
+      foot_heel_gap_normalized: sample.footMarkerGeometry?.heel_gap_normalized,
+      foot_left_axis_deg: sample.footMarkerGeometry?.left_axis_deg,
+      foot_right_axis_deg: sample.footMarkerGeometry?.right_axis_deg,
+      foot_left_planted_proxy: sample.footMarkerGeometry?.left_planted_proxy,
+      foot_right_planted_proxy: sample.footMarkerGeometry?.right_planted_proxy,
       region_segment_id: sample.regionSegmentId || undefined,
       region_segment_label: sample.regionSegmentLabel || undefined,
       region_segment_boundary: sample.regionBoundary || undefined,
@@ -1967,6 +2161,7 @@ function buildSavedSummary(result) {
     hand_behavior_summary: result.hasHands ? result.handBehavior : undefined,
     hand_behavior_reference_times_s: result.hasHands && result.handBehavior && !serializedSegments.length ? result.handBehaviorReferenceTimes : undefined,
     hand_cadence_timeline: result.hasHands ? buildHandCadenceTimeline(result) : undefined,
+    foot_geometry_tracking_summary: result.hasLegs ? result.footGeometryTracking : undefined,
     findings: result.findings,
     derived_timeline: buildDerivedTimeline(result),
     review_peaks: result.moments.map((moment) => ({
@@ -2521,6 +2716,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const rightMotionCanvas = document.createElement("canvas");
     const leftForefootMotionCanvas = document.createElement("canvas");
     const rightForefootMotionCanvas = document.createElement("canvas");
+    const leftMarkerCanvas = document.createElement("canvas");
+    const rightMarkerCanvas = document.createElement("canvas");
     const analysisRois = resolveRois(roiLayout, rois);
     const analysisRegionSegments = orderedRegionSegments.map((segment) => ({
       ...segment,
@@ -2692,6 +2889,14 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         const rightForefootValue = frameForefootEnabled
           ? regionPixelMotion(regionFrames.rightForefoot, previousRegionFrames.rightForefoot)
           : null;
+        const footMarkerGeometry = mode !== "hands"
+          && frameLowerBodyMethod === "regionMotion"
+          && frameConfiguration.roiLayout === "pip"
+          ? buildMarkerFootGeometry(
+            detectReflectiveMarkerPoints(probe, frameRois.leftLowerBody, leftMarkerCanvas),
+            detectReflectiveMarkerPoints(probe, frameRois.rightLowerBody, rightMarkerCanvas),
+          )
+          : null;
         const handValue = handMotion(hands, previousHands);
         const handVector = dominantHandVector(hands, previousHands);
         if (mode === "combined" || mode === "legs") {
@@ -2701,6 +2906,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
             rightMotion: rightValue,
             leftForefootMotion: leftForefootValue,
             rightForefootMotion: rightForefootValue,
+            footMarkerGeometry,
             handMotion: mode === "combined" ? handValue : null,
             handDx: mode === "combined" ? handVector?.dx : null,
             handDy: mode === "combined" ? handVector?.dy : null,
@@ -2793,6 +2999,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         averageActivity: Math.round(mean(detectedSamples.map((sample) => sample.score)) || 0),
         peakActivity: Math.round(Math.max(0, ...detectedSamples.map((sample) => sample.score))),
       };
+      nextResult.footGeometryTracking = hasLegs ? buildFootGeometryTrackingSummary(samples, selectedMode.fps) : null;
       nextResult.asymmetry = hasLegs ? calculateAsymmetry(samples) : null;
       nextResult.lowerBodyPatterns = hasLegs ? calculateLowerBodyPatternSummary(samples, selectedMode.fps) : null;
       nextResult.postureGeometry = hasLegs && analyzePostureAppearance

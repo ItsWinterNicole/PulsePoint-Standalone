@@ -83,6 +83,7 @@ export function hasSavedMotionTelemetry(session) {
     || present(motion.hand_behavior_summary)
     || present(motion.lower_body_pattern_summary)
     || present(motion.lower_body_posture_summary)
+    || present(motion.foot_geometry_tracking_summary)
     || present(motion.manual_foot_landmark_geometry)
     || rows(motion.region_segments).some((segment) => present(segment.manual_foot_landmark_geometry))
     || rows(motion.region_segments).length
@@ -112,6 +113,7 @@ export function getMotionEvidenceFreshnessKey(session) {
       handBehavior: motion.hand_behavior_summary || null,
       lowerBody: motion.lower_body_pattern_summary || null,
       posture: motion.lower_body_posture_summary || null,
+      footGeometryTracking: motion.foot_geometry_tracking_summary || null,
       regionSegments: motion.region_segment_summary || rows(motion.region_segments).map((segment) => ({
         id: segment.id,
         start_time_s: segment.start_time_s,
@@ -173,6 +175,7 @@ export function getMotionEvidenceSummary(session) {
     handBehaviorSummary: motion.hand_behavior_summary || null,
     lowerBodyPatternProxySummary: motion.lower_body_pattern_summary || null,
     footAppearanceCandidateSummary: motion.lower_body_posture_summary || null,
+    footGeometryTrackingSummary: motion.foot_geometry_tracking_summary || null,
     manualFootLandmarks: motion.manual_foot_landmarks || null,
     manualFootLandmarkGeometry: motion.manual_foot_landmark_geometry || null,
     manualFootLandmarkSegmentCount: manualFootLandmarkSegmentRows.length,
@@ -214,6 +217,13 @@ export function getMotionEvidenceDigest(session) {
   if (evidence.asymmetrySummary) {
     const asymmetry = evidence.asymmetrySummary;
     lines.push(`Lower-body asymmetry summary: average index ${asymmetry.averageIndex ?? "unknown"}; ${asymmetry.predominantSide === "balanced" ? "no clear side predominance" : `${asymmetry.predominantSide || "unknown"} predominance${asymmetry.predominantPct != null ? ` in ${asymmetry.predominantPct}% of active paired windows` : ""}`}.`);
+  }
+  if (evidence.footGeometryTrackingSummary?.status === "marker_tracking_available" || evidence.footGeometryTrackingSummary?.status === "limited_marker_tracking") {
+    const tracking = evidence.footGeometryTrackingSummary;
+    lines.push(`Continuous marker-assisted foot geometry tracking is available across the analyzed window (${tracking.coverage_pct ?? "unknown"}% coverage, ${tracking.sample_count ?? "unknown"} sampled frames). Use it to describe how foot spread, fanning, heel separation, toe gap, left/right foot axes, and planted/neutral posture change over time. This is experimental reflective-marker visual tracking and must be verified against video.`);
+    if (tracking.average_fan_angle_deg != null || tracking.average_toe_gap_normalized != null || tracking.average_heel_gap_normalized != null) {
+      lines.push(`Continuous foot-geometry trend summary: average fan angle ${tracking.average_fan_angle_deg ?? "unknown"}°, average toe gap ${tracking.average_toe_gap_normalized ?? "unknown"}, average heel gap ${tracking.average_heel_gap_normalized ?? "unknown"}. Mention observations first and numeric values only as support.`);
+    }
   }
   const standaloneManualGeometry = summarizeManualFootLandmarkGeometry(evidence.manualFootLandmarkGeometry);
   if (standaloneManualGeometry) {

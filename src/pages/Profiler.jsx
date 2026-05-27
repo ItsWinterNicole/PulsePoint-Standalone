@@ -305,6 +305,9 @@ function compactSessionLine(s) {
       motion?.left_forefoot_average_activity != null ? `left forefoot/toe-region ${motion.left_forefoot_average_activity}` : null,
       motion?.right_forefoot_average_activity != null ? `right forefoot/toe-region ${motion.right_forefoot_average_activity}` : null,
       motion?.hand_average_activity != null ? `hands ${motion.hand_average_activity}` : null,
+      motionSummary.footGeometryTrackingSummary?.status === "marker_tracking_available" || motionSummary.footGeometryTrackingSummary?.status === "limited_marker_tracking"
+        ? `continuous foot geometry tracking ${motionSummary.footGeometryTrackingSummary.coverage_pct}% coverage; average fan ${motionSummary.footGeometryTrackingSummary.average_fan_angle_deg ?? "?"}°, toe gap ${motionSummary.footGeometryTrackingSummary.average_toe_gap_normalized ?? "?"}, heel gap ${motionSummary.footGeometryTrackingSummary.average_heel_gap_normalized ?? "?"}; interpret as visual trend evidence for foot spread/fanning over time, not just one saved frame`
+        : null,
       motion?.asymmetry_summary
         ? `asymmetry average index ${motion.asymmetry_summary.averageIndex}, peak ${motion.asymmetry_summary.peakIndex}, ${motion.asymmetry_summary.predominantSide === "balanced" ? "no clear side predominance" : `${motion.asymmetry_summary.predominantSide} predominance in ${motion.asymmetry_summary.predominantPct}% of active paired windows`}`
         : null,
