@@ -4019,6 +4019,21 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                           <Play className="h-3 w-3" />
                           {formatTime(suggestion.timeS)}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => acceptSuggestions([suggestion])}
+                          disabled={!selectedSession || acceptingSuggestions}
+                          className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-45"
+                        >
+                          Promote
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDismissedSuggestionIds((current) => [...new Set([...current, suggestion.id])])}
+                          className="rounded-md border border-border px-2.5 py-1 text-[11px] text-muted-foreground"
+                        >
+                          Dismiss
+                        </button>
                         <span className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-0.5 text-[10px] font-semibold text-primary">
                           {isLowerBody ? "Lower-body finding" : isPause ? "Pause candidate" : "Resumption candidate"}
                         </span>
@@ -4041,21 +4056,6 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                             pre {suggestion.prePauseHandActivityAverage} / post {suggestion.postResumeHandActivityAverage}
                           </span>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => acceptSuggestions([suggestion])}
-                          disabled={!selectedSession || acceptingSuggestions}
-                          className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-45"
-                        >
-                          Promote
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDismissedSuggestionIds((current) => [...new Set([...current, suggestion.id])])}
-                          className="rounded-md border border-border px-2.5 py-1 text-[11px] text-muted-foreground"
-                        >
-                          Dismiss
-                        </button>
                       </div>
                     );
                   })}
