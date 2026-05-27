@@ -533,8 +533,10 @@ export default function MotionLab() {
             </div>
           </aside>
 
-          <section className="space-y-4">
-            {videoSrc ? (
+          <section className="grid gap-4 2xl:grid-cols-[minmax(44rem,1.35fr)_minmax(34rem,0.9fr)]">
+            {/* MOTION_LAB_VIDEO_FIRST_WORKSPACE_V1 */}
+            <div className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
+              {videoSrc ? (
               <div
                 ref={previewRef}
                 className={`rounded-xl border border-border bg-card p-4 space-y-3 ${
@@ -583,7 +585,7 @@ export default function MotionLab() {
                   src={videoSrc}
                   controls
                   playsInline
-                  className={`${previewFloating ? "max-h-[42vh]" : "max-h-[60vh]"} w-full rounded-lg bg-black object-contain`}
+                  className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[calc(100vh-13rem)] max-h-[72vh]"} w-full rounded-lg bg-black object-contain`}
                   onTimeUpdate={(event) => updateFeedWorkspace(feedRole, { videoTime: event.currentTarget.currentTime })}
                   onPlay={() => updateFeedWorkspace(feedRole, { videoPlaying: true })}
                   onPause={() => updateFeedWorkspace(feedRole, { videoPlaying: false })}
@@ -616,7 +618,13 @@ export default function MotionLab() {
               <div className="rounded-xl border border-dashed border-border bg-card p-12 text-center text-sm text-muted-foreground">
                 Load a local video to configure and run derived motion analysis.
               </div>
-            )}
+              )}
+            </div>
+
+            <div className="space-y-4 min-w-0">
+              <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-3 text-xs leading-relaxed text-muted-foreground 2xl:hidden">
+                <span className="font-semibold text-primary">Video-first workspace:</span> on wider screens, the video stays pinned while setup, regions, landmarks, findings, and summaries scroll beside it.
+              </div>
 
             {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
               <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
@@ -644,6 +652,7 @@ export default function MotionLab() {
                 </div>
               );
             })}
+            </div>
           </section>
         </div>
       </div>
