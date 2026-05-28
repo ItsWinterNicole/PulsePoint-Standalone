@@ -3297,7 +3297,7 @@ return (
       )}
 
       {regionsExpanded && (
-      <div id="motion-lab-regions" className="scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3">
+      <div id="motion-lab-regions" className="scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)] xl:items-start xl:gap-4 xl:space-y-0 xl:[&>*]:col-start-2">
         {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V3 */}
         <details className="rounded-lg border border-border bg-card/45 p-3">
           <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-muted/35">

@@ -535,15 +535,29 @@ export default function MotionLab() {
 
           <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(26rem,34rem)]">
             {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
-            <div className="order-1 min-h-[28rem] rounded-xl border border-dashed border-border bg-card/35 p-6 text-sm text-muted-foreground">
-              <div className="flex h-full min-h-[24rem] items-center justify-center rounded-lg border border-border/60 bg-background/35 p-6 text-center">
-                <div className="max-w-md space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Region placement workspace</p>
-                  <p>
-                    Use the right sidebar controls to open or refresh the placement frame. The center lane is reserved for the region editor preview so the configuration controls stay out of the way.
-                  </p>
-                </div>
-              </div>
+            <div className="order-1 min-w-0 space-y-4">
+              {configuredRoles.map((role) => {
+                const workspace = feedWorkspaces[role.value] || {};
+                const active = role.value === feedRole;
+                return (
+                  <div key={`${selectedId || "no-session"}-${role.value}`} className={active ? "" : "hidden"} aria-hidden={!active}>
+                    <LocalMotionAnalysisPanel
+                      videoSrc={workspace.videoSrc || ""}
+                      videoDuration={workspace.videoDuration || 0}
+                      videoTime={workspace.videoTime || 0}
+                      videoPlaying={active ? !!workspace.videoPlaying : false}
+                      selectedSession={selectedSession}
+                      analysisFeedLabel={role.value === "composite" ? null : role.label}
+                      onSeek={(timeS) => {
+                        if (active) seek(timeS);
+                        else updateFeedWorkspace(role.value, { videoTime: Number(timeS) || 0 });
+                      }}
+                      onSaveSummary={(summary, events) => saveSummary(role.value, summary, events)}
+                      onAcceptSuggestions={(events) => acceptSuggestions(role.value, events)}
+                    />
+                  </div>
+                );
+              })}
             </div>
 
             <div className="order-2 space-y-4 2xl:self-start">
@@ -634,29 +648,6 @@ export default function MotionLab() {
             {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
               <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
             )}
-
-            {configuredRoles.map((role) => {
-              const workspace = feedWorkspaces[role.value] || {};
-              const active = role.value === feedRole;
-              return (
-                <div key={`${selectedId || "no-session"}-${role.value}`} className={active ? "" : "hidden"} aria-hidden={!active}>
-                  <LocalMotionAnalysisPanel
-                    videoSrc={workspace.videoSrc || ""}
-                    videoDuration={workspace.videoDuration || 0}
-                    videoTime={workspace.videoTime || 0}
-                    videoPlaying={active ? !!workspace.videoPlaying : false}
-                    selectedSession={selectedSession}
-                    analysisFeedLabel={role.value === "composite" ? null : role.label}
-                    onSeek={(timeS) => {
-                      if (active) seek(timeS);
-                      else updateFeedWorkspace(role.value, { videoTime: Number(timeS) || 0 });
-                    }}
-                    onSaveSummary={(summary, events) => saveSummary(role.value, summary, events)}
-                    onAcceptSuggestions={(events) => acceptSuggestions(role.value, events)}
-                  />
-                </div>
-              );
-            })}
             </div>
           </section>
         </div>
