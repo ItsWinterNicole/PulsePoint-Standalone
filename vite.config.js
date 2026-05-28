@@ -12,15 +12,9 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 8765,
+    port: 5174,
     strictPort: true,
-    allowedHosts: [
-      'benm-desktop.tail98777.ts.net',
-      'benm-desktop',
-      '100.65.16.104',
-      'localhost',
-      '127.0.0.1',
-    ],
+    allowedHosts: true,
     proxy: {
       '/api': 'http://localhost:8787',
       '/uploads': 'http://localhost:8787',
