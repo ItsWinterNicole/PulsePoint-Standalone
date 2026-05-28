@@ -3363,7 +3363,8 @@ return (
       )}
 
       {regionsExpanded && (
-      <div id="motion-lab-regions" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3">
+      <div id="motion-lab-regions" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-start xl:gap-3 xl:space-y-0 [&>*]:xl:col-start-2">
+        {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V2 */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Regions</p>
@@ -3782,8 +3783,7 @@ return (
         </div>
 
         {roiFrameReady && (
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-start">
-            {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V1 */}
+          <div className="contents">
             <div className="space-y-2 rounded-lg border border-border bg-muted/10 p-3 xl:col-start-2 xl:row-start-1">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Region Editor Position</p>
@@ -3901,7 +3901,7 @@ return (
                 <p className="text-[11px] leading-relaxed text-muted-foreground">Zoom/pan only changes this placement view. Saved landmarks stay normalized to the source video frame, so geometry remains stable across preview zoom levels.</p>
               </div>
             )}
-            <div className="overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-3">
+            <div className="overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-[40]">
               <div
                 style={{
                   transform: `translate(${roiPreviewPan.x}px, ${roiPreviewPan.y}px) scale(${roiPreviewZoom})`,
@@ -3916,7 +3916,7 @@ return (
               </div>
             </div>
             <p className="text-[11px] text-muted-foreground xl:col-start-1">
-              These colored rectangles are the exact crop regions used for the next analysis. Click a rectangle to select it; white corner handles resize the selected region. Anatomical left/right assignment is shown above. The editor canvas is now the primary workspace; scrubber and landmark controls stay docked to the side.
+              These colored rectangles are the exact crop regions used for the next analysis. This paused-frame editor is the main workspace; all setup, calibration, scrubber, and landmark controls are docked in the settings rail.
             </p>
           </div>
         )}
