@@ -533,9 +533,20 @@ export default function MotionLab() {
             </div>
           </aside>
 
-          <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(22rem,28rem)]">
+          <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(26rem,34rem)]">
             {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
-            <div className="order-2 space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
+            <div className="order-1 min-h-[28rem] rounded-xl border border-dashed border-border bg-card/35 p-6 text-sm text-muted-foreground">
+              <div className="flex h-full min-h-[24rem] items-center justify-center rounded-lg border border-border/60 bg-background/35 p-6 text-center">
+                <div className="max-w-md space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Region placement workspace</p>
+                  <p>
+                    Use the right sidebar controls to open or refresh the placement frame. The center lane is reserved for the region editor preview so the configuration controls stay out of the way.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="order-2 space-y-4 2xl:self-start">
               {videoSrc ? (
               <div
                 ref={previewRef}
@@ -619,12 +630,6 @@ export default function MotionLab() {
                 Load a local video to configure and run derived motion analysis.
               </div>
               )}
-            </div>
-
-            <div className="order-1 space-y-4 min-w-0">
-              <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-3 text-xs leading-relaxed text-muted-foreground">
-                <span className="font-semibold text-primary">Editor-first workspace:</span> the Local Motion Analysis panel is now the primary workspace. Region editing, manual landmarks, and analysis preview stay in the main column; the regular video is only a compact reference/seeking player.
-              </div>
 
             {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
               <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />

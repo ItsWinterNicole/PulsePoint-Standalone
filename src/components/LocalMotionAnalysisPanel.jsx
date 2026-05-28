@@ -1983,30 +1983,6 @@ function PatternProxyMetric({ label, count }) {
         </span>
       </div>
       <p className={`mt-1 font-mono text-base font-semibold ${severity.numberClassName}`}>{count}</p>
-      <div className="motion-lab-floating-navigator fixed bottom-4 right-4 z-40 hidden max-w-[11rem] rounded-2xl border border-primary/25 bg-card/95 p-2 shadow-2xl shadow-background/40 backdrop-blur supports-[backdrop-filter]:bg-card/85 xl:block">
-        <p className="mb-1.5 px-1 text-[9px] font-semibold uppercase tracking-wider text-primary">Motion Lab Nav</p>
-        <div className="grid gap-1">
-          {[
-            ["motion-lab-top", "Top"],
-            ["motion-lab-setup", "Setup"],
-            ["motion-lab-regions", "Regions"],
-            ["motion-lab-landmarks", "Landmarks"],
-            ["motion-lab-preview", "Preview"],
-            ["motion-lab-results", "Results"],
-            ["motion-lab-findings", "Findings"],
-            ["motion-lab-trace", "Trace"],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => scrollToMotionSection(id)}
-              className="rounded-lg border border-border/70 bg-muted/20 px-2 py-1 text-left text-[10px] font-medium text-foreground transition-colors hover:border-primary/45 hover:bg-primary/[0.1] hover:text-primary"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -3173,24 +3149,6 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
   const ModeIcon = selectedMode.icon;
 
-  // MOTION_LAB_UX_NAV_V4
-  const scrollToMotionSection = (id) => {
-    if (typeof document === "undefined") return;
-    const target = document.getElementById(id);
-    if (!target) return;
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-  const motionLabNavItems = [
-    ["motion-lab-top", "Top"],
-    ["motion-lab-setup", "Setup"],
-    ["motion-lab-regions", "Regions"],
-    ["motion-lab-landmarks", "Landmarks"],
-    ["motion-lab-preview", "Preview"],
-    ["motion-lab-results", "Results"],
-    ["motion-lab-findings", "Findings"],
-    ["motion-lab-trace", "Trace"],
-  ];
-
 return (
     <div id="motion-lab-top" className="relative rounded-xl border border-border bg-card p-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3211,30 +3169,6 @@ return (
         <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/[0.08] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
           <ShieldCheck className="h-3 w-3" />
           Local video only
-        </div>
-      </div>
-
-      <div className="sticky top-2 z-30 rounded-xl border border-primary/35 bg-background/95 p-3 shadow-xl shadow-background/40 backdrop-blur supports-[backdrop-filter]:bg-background/85">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">Motion Lab Navigator</p>
-            <p className="text-[11px] text-muted-foreground">Jump around the analysis workspace without losing your place.</p>
-          </div>
-          <span className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-1 text-[9px] font-semibold uppercase tracking-wider text-primary">
-            UX nav v4
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {motionLabNavItems.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => scrollToMotionSection(id)}
-              className="rounded-full border border-border bg-card px-3 py-1.5 text-[11px] font-semibold text-foreground transition-colors hover:border-primary/50 hover:bg-primary/[0.1] hover:text-primary"
-            >
-              {label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -3363,42 +3297,48 @@ return (
       )}
 
       {regionsExpanded && (
-      <div id="motion-lab-regions" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-start xl:gap-3 xl:space-y-0 xl:[&>*]:col-start-2">
+      <div id="motion-lab-regions" className="scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3">
         {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V3 */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Regions</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        <details className="rounded-lg border border-border bg-card/45 p-3">
+          <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-muted/35">
+            Analysis Regions & View Mode
+          </summary>
+          <div className="mt-3 space-y-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
               For your soles-facing upper-left inset, your anatomical left foot normally appears on screen right. Primary foot regions are enough for tracking; optional forefoot / toe-region boxes can be added when useful.
             </p>
+            <div className="inline-flex rounded-lg border border-border bg-card p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setRoiLayout("pip");
+                  setRois(copyRois(PIP_ROI_PRESET));
+                  setForefootEnabled(false);
+                  setLeftRightOrientation("anatomical_left_on_screen_right");
+                  setActiveRoi("leftLowerBody");
+                }}
+                disabled={running}
+                className={`rounded-md px-3 py-2 font-semibold transition-colors ${roiLayout === "pip" ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted/40"}`}
+              >
+                Upper-left inset
+              </button>
+              <button
+                type="button"
+                onClick={() => setRoiLayout("full")}
+                disabled={running}
+                className={`rounded-md px-3 py-2 font-semibold transition-colors ${roiLayout === "full" ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted/40"}`}
+              >
+                Full frame
+              </button>
+            </div>
           </div>
-          <div className="inline-flex rounded-lg border border-border bg-card p-1 text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                setRoiLayout("pip");
-                setRois(copyRois(PIP_ROI_PRESET));
-                setForefootEnabled(false);
-                setLeftRightOrientation("anatomical_left_on_screen_right");
-                setActiveRoi("leftLowerBody");
-              }}
-              disabled={running}
-              className={`rounded-md px-3 py-2 font-semibold transition-colors ${roiLayout === "pip" ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted/40"}`}
-            >
-              Upper-left inset
-            </button>
-            <button
-              type="button"
-              onClick={() => setRoiLayout("full")}
-              disabled={running}
-              className={`rounded-md px-3 py-2 font-semibold transition-colors ${roiLayout === "full" ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted/40"}`}
-            >
-              Full frame
-            </button>
-          </div>
-        </div>
+        </details>
 
-        <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+        <details className="rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+          <summary className="cursor-pointer list-none rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/[0.1]">
+            Position Changes / Region Segments
+          </summary>
+          <div className="mt-3 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Region Segments / Position Changes</p>
@@ -3548,10 +3488,15 @@ return (
               </p>
             </>
           )}
-        </div>
+          </div>
+        </details>
 
         {roiLayout === "pip" ? (
-          <>
+          <details className="rounded-lg border border-border bg-card/45 p-3">
+            <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
+              Tracking Rectangle Controls
+            </summary>
+            <div className="mt-3 space-y-3">
             <div className="space-y-2 xl:col-start-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Click a region to edit</p>
               <div className="flex flex-wrap items-center gap-2">
@@ -3745,9 +3690,14 @@ return (
                 </>
               )}
             </div>
-          </>
+            </div>
+          </details>
         ) : (
-          <>
+          <details className="rounded-lg border border-border bg-card/45 p-3">
+            <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
+              Full-Frame Tracking Controls
+            </summary>
+            <div className="mt-3 space-y-3">
             <p className="text-[11px] text-muted-foreground">
               Full-frame mode sends the complete video image to each enabled tracker. Use this for a single-camera view without an inset layout.
             </p>
@@ -3763,10 +3713,15 @@ return (
                 running={running}
               />
             )}
-          </>
+            </div>
+          </details>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 xl:col-start-2">
+        <details className="rounded-lg border border-border bg-card/45 p-3">
+          <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
+            Open / Refresh Placement Frame
+          </summary>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => captureRoiSetupFrame(videoTime)}
@@ -3780,11 +3735,16 @@ return (
               ? roiLayout === "pip" ? "Click any rectangle to select it, drag inside to move it, use white corner handles to resize, or drag elsewhere to redraw the selected region." : "The full frame will be analyzed."
               : "Load a local video, then capture a frame to adjust the regions."}
           </span>
-        </div>
+          </div>
+        </details>
 
         {roiFrameReady && (
           <div className="contents">
-            <div className="space-y-2 rounded-lg border border-border bg-muted/10 p-3 xl:col-start-2 xl:row-start-1">
+            <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
+              <summary className="cursor-pointer list-none rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/[0.1]">
+                Region Editor Position
+              </summary>
+              <div className="mt-3 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Region Editor Position</p>
                 <span className="font-mono text-sm font-semibold text-foreground">{formatTime(roiSetupTime)}</span>
@@ -3834,9 +3794,14 @@ return (
                 )}
                 <span className="text-[11px] text-muted-foreground">Scrub here to find postures without leaving the rectangle editor.</span>
               </div>
-            </div>
+              </div>
+            </details>
             {mode !== "hands" && (
-              <div className="space-y-3 rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3 xl:col-start-2 xl:row-start-2">
+              <details className="rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3 xl:col-start-2">
+                <summary className="cursor-pointer list-none rounded-md border border-[#38bdf8]/25 bg-[#38bdf8]/[0.08] px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-[#7dd3fc] transition-colors hover:bg-[#38bdf8]/[0.12]">
+                  Manual Foot Landmark Calibration
+                </summary>
+                <div className="mt-3 space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#7dd3fc]">Manual foot landmark calibration</p>
@@ -3899,9 +3864,10 @@ return (
                   <button type="button" onClick={() => setFootLandmarks(emptyFootLandmarks())} disabled={running} className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive disabled:opacity-45">Clear landmarks</button>
                 </div>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">Zoom/pan only changes this placement view. Saved landmarks stay normalized to the source video frame, so geometry remains stable across preview zoom levels.</p>
-              </div>
+                </div>
+              </details>
             )}
-            <div className="overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-[80]">
+            <div className="region-editor-preview overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-[80]">
               <div
                 style={{
                   transform: `translate(${roiPreviewPan.x}px, ${roiPreviewPan.y}px) scale(${roiPreviewZoom})`,
@@ -3915,7 +3881,7 @@ return (
                 />
               </div>
             </div>
-            <p className="text-[11px] text-muted-foreground xl:col-start-1 xl:row-start-[81]">
+            <p className="text-[11px] text-muted-foreground xl:col-start-2">
               These colored rectangles are the exact crop regions used for the next analysis. This paused-frame editor is the main workspace; all setup, calibration, scrubber, and landmark controls are docked in the settings rail.
             </p>
           </div>
@@ -4675,21 +4641,6 @@ return (
           </p>
         </div>
       )}
-      <div className="motion-lab-floating-navigator-v4 fixed bottom-4 right-4 z-50 hidden w-40 rounded-2xl border border-primary/35 bg-background/95 p-2 shadow-2xl shadow-background/50 backdrop-blur supports-[backdrop-filter]:bg-background/85 2xl:block">
-        <p className="mb-1.5 px-1 text-[9px] font-bold uppercase tracking-[0.18em] text-primary">Motion Lab</p>
-        <div className="grid gap-1">
-          {motionLabNavItems.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => scrollToMotionSection(id)}
-              className="rounded-lg border border-border bg-card/80 px-2 py-1 text-left text-[10px] font-semibold text-foreground transition-colors hover:border-primary/50 hover:bg-primary/[0.1] hover:text-primary"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

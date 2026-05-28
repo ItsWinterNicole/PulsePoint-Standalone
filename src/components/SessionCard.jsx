@@ -31,6 +31,7 @@ import moment from "moment";
 import { gradeFromPct } from "@/utils/sessionScore";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { getSessionLatestUpdateAt } from "@/utils/sessionFreshness";
+import { repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 
 const num = (value) => {
   const parsed = Number(value);
@@ -63,7 +64,7 @@ function buildSignalLine(session) {
   if (hasDiscomfort(session)) parts.push("comfort flag");
   if (session.primary_limiting_factor) parts.push(`limit: ${session.primary_limiting_factor}`);
   if (session.no_climax && num(session.arousal_depth) >= 7) parts.push("high arousal without climax");
-  if (!parts.length && session.ai_analysis?.summary) return session.ai_analysis.summary.split(/\n+/)[0]?.slice(0, 150);
+  if (!parts.length && session.ai_analysis?.summary) return repairCharacterSplitParagraph(session.ai_analysis.summary).split(/\n+/)[0]?.slice(0, 150);
   return parts.slice(0, 3).join(" · ");
 }
 
@@ -97,7 +98,7 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
   // Use only persisted AI score for consistency across pages
   const scorePct = session.ai_analysis?.ai_score;
   const gradeInfo = scorePct != null ? gradeFromPct(scorePct) : null;
-  const aiSummary = session.ai_analysis?.summary;
+  const aiSummary = repairCharacterSplitParagraph(session.ai_analysis?.summary);
   const hasEMG = session.emg_enabled ||
     session.emg_general_notes || session.emg_left_placement_notes || session.emg_right_placement_notes ||
     (session.emg_placement_photos || []).length > 0;

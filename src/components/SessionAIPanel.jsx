@@ -9,6 +9,7 @@ import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/
 import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
+import { repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -130,43 +131,6 @@ function isNewerCompletedJob(job, savedResult) {
   return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
 }
 
-function repairCharacterSplitParagraph(text) {
-  if (typeof text !== "string") return text;
-
-  const lines = text.split(/\r?\n/);
-  const nonEmpty = lines.map((line) => line.trim()).filter(Boolean);
-  const singleCharLines = nonEmpty.filter((line) => line.length === 1).length;
-  const shortLines = nonEmpty.filter((line) => line.length <= 2).length;
-  const looksCharacterSplit =
-    nonEmpty.length >= 40 &&
-    singleCharLines / nonEmpty.length >= 0.65 &&
-    shortLines / nonEmpty.length >= 0.85;
-
-  if (!looksCharacterSplit) return text;
-
-  return nonEmpty
-    .join("")
-    .replace(/\s+/g, " ")
-    .replace(/([.!?])([A-Z])/g, "$1 $2")
-    .trim();
-}
-
-function repairAITextBlocks(value) {
-  if (typeof value === "string") return repairCharacterSplitParagraph(value);
-
-  if (Array.isArray(value)) {
-    return value.map((item) => repairAITextBlocks(item));
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, repairAITextBlocks(item)])
-    );
-  }
-
-  return value;
-}
-
 function normalizeSessionAnalysis(res) {
   const raw = typeof res === "string" ? JSON.parse(res) : res;
   const parsed = raw?.response ?? raw;
@@ -242,12 +206,12 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
-  const [result, setResult] = useState(session[analysisField] ?? null);
+  const [result, setResult] = useState(repairAITextBlocks(session[analysisField] ?? null));
   const [error, setError] = useState("");
   const resultStale = isSessionAIContentStale(result, session);
 
   useEffect(() => {
-    setResult(session[analysisField] ?? null);
+    setResult(repairAITextBlocks(session[analysisField] ?? null));
   }, [analysisField, session]);
 
   useEffect(() => {

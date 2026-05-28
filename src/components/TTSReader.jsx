@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Play, Pause, Square, Download, Settings, Copy, Check } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
@@ -18,6 +18,7 @@ import { buildAudioExportFilename } from "@/utils/exportFilenames";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
@@ -286,6 +287,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const updateIntervalRef = useRef(null); // track update interval to clear it
   const renderProgressTimerRef = useRef(null);
   const copyContentRef = useRef(null);
+  const readableParagraphs = useMemo(
+    () => (Array.isArray(paragraphs) ? paragraphs : []).map(repairCharacterSplitParagraph),
+    [paragraphs]
+  );
 
   useEffect(() => {
     try {
@@ -540,9 +545,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const updateWordHighlight = () => {
     const paraIdx = currentParaRef.current;
-    if (paraIdx < 0 || paraIdx >= paragraphs.length) return;
+    if (paraIdx < 0 || paraIdx >= readableParagraphs.length) return;
     
-    const text = paragraphs[paraIdx];
+    const text = readableParagraphs[paraIdx];
     const words = text.split(/\s+/).filter(Boolean);
     if (!words.length) return;
     
@@ -577,7 +582,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
-    remainingParasRef.current = buildSpeechChunks(paragraphs, paraIdx);
+    remainingParasRef.current = buildSpeechChunks(readableParagraphs, paraIdx);
     setCP(paraIdx);
     setS("playing");
     setBufferingPara(paraIdx);
@@ -955,7 +960,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       renderProgressTimerRef.current = null;
     }
     try {
-      const allChunks = buildSpeechChunks(paragraphs, 0);
+      const allChunks = buildSpeechChunks(readableParagraphs, 0);
       setDownloadProgress({ current: 0, total: allChunks.length });
       setRequestStatus({ type: "fetching", msg: `Rendering premium audio on server (${allChunks.length} chunks)…` });
       const displayTitle = getDownloadDisplayTitle();
@@ -1145,7 +1150,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       )}
 
       {/* Resume from saved position */}
-      {sessionId && currentPara === -1 && state === "idle" && savedIdx >= 0 && savedIdx < paragraphs.length && (
+      {sessionId && currentPara === -1 && state === "idle" && savedIdx >= 0 && savedIdx < readableParagraphs.length && (
         <button
           onClick={() => startFrom(savedIdx)}
           className="mb-2 text-xs px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 font-medium transition-colors"
@@ -1156,7 +1161,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
       {/* Paragraphs */}
       <div ref={copyContentRef} className="space-y-1">
-      {paragraphs.map((text, paraIdx) => {
+      {readableParagraphs.map((text, paraIdx) => {
         const displayText = fmtSecondsInText(text);
         const isPlaying = currentPara === paraIdx && state === "playing";
         const isBuffering = bufferingPara === paraIdx && state !== "idle" && state !== "paused";
