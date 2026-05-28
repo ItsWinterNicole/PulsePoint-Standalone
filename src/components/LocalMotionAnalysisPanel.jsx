@@ -2267,7 +2267,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions }) {
+export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions, splitWorkspaceLayout = false }) {
   const stopRequestedRef = useRef(false);
   const previewCanvasRef = useRef(null);
   const previewEnabledRef = useRef(false);
@@ -3150,8 +3150,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const ModeIcon = selectedMode.icon;
 
 return (
-    <div id="motion-lab-top" className="relative rounded-xl border border-border bg-card p-4 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div id="motion-lab-top" className={splitWorkspaceLayout ? "contents" : "relative rounded-xl border border-border bg-card p-4 space-y-4"}>
+      <div className={`flex flex-wrap items-start justify-between gap-3 ${splitWorkspaceLayout ? "rounded-xl border border-border bg-card p-4 2xl:col-start-2" : ""}`}>
         <div className="flex min-w-0 items-start gap-3">
           <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
           <div>
@@ -3172,7 +3172,7 @@ return (
         </div>
       </div>
 
-      <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
+      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -3235,7 +3235,7 @@ return (
       </div>
 
       {setupExpanded && (
-      <div id="motion-lab-setup" className="scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3">
+      <div id="motion-lab-setup" className={`scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
         <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Setup</p>
         <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -3297,9 +3297,9 @@ return (
       )}
 
       {regionsExpanded && (
-      <div id="motion-lab-regions" className="scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)] xl:items-start xl:gap-4 xl:space-y-0 xl:[&>*]:col-start-2">
+      <div id="motion-lab-regions" className={splitWorkspaceLayout ? "contents" : "scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)] xl:items-start xl:gap-4 xl:space-y-0 xl:[&>*]:col-start-2"}>
         {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V3 */}
-        <details className="rounded-lg border border-border bg-card/45 p-3">
+        <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
           <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-muted/35">
             Analysis Regions & View Mode
           </summary>
@@ -3334,7 +3334,7 @@ return (
           </div>
         </details>
 
-        <details className="rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+        <details className="rounded-lg border border-primary/20 bg-primary/[0.04] p-3 xl:col-start-2">
           <summary className="cursor-pointer list-none rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/[0.1]">
             Position Changes / Region Segments
           </summary>
@@ -3492,7 +3492,7 @@ return (
         </details>
 
         {roiLayout === "pip" ? (
-          <details className="rounded-lg border border-border bg-card/45 p-3">
+          <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
             <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
               Tracking Rectangle Controls
             </summary>
@@ -3693,7 +3693,7 @@ return (
             </div>
           </details>
         ) : (
-          <details className="rounded-lg border border-border bg-card/45 p-3">
+          <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
             <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
               Full-Frame Tracking Controls
             </summary>
@@ -3717,7 +3717,7 @@ return (
           </details>
         )}
 
-        <details className="rounded-lg border border-border bg-card/45 p-3">
+        <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
           <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
             Open / Refresh Placement Frame
           </summary>
@@ -3890,7 +3890,7 @@ return (
       )}
 
       {previewExpanded && (
-      <div id="motion-lab-preview" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3">
+      <div id="motion-lab-preview" className={`scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
         <label className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <input
             type="checkbox"
@@ -3951,7 +3951,7 @@ return (
       )}
 
       {result && (
-        <div id="motion-lab-results" className="scroll-mt-32 space-y-4 border-t border-border pt-4">
+        <div id="motion-lab-results" className={`scroll-mt-32 space-y-4 border-t border-border pt-4 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
           <div className="rounded-lg border border-primary/25 bg-primary/[0.07] px-3 py-2 text-sm text-foreground">
             <span className="font-semibold text-primary">Current analysis result.</span>{" "}
             This temporary trace reflects the most recent run and replaces the saved summary and saved motion-derived events only after you select <span className="font-medium">Finalize summary and replace saved motion events</span>.

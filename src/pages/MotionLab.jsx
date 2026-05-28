@@ -535,31 +535,6 @@ export default function MotionLab() {
 
           <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(26rem,34rem)]">
             {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
-            <div className="order-1 min-w-0 space-y-4">
-              {configuredRoles.map((role) => {
-                const workspace = feedWorkspaces[role.value] || {};
-                const active = role.value === feedRole;
-                return (
-                  <div key={`${selectedId || "no-session"}-${role.value}`} className={active ? "" : "hidden"} aria-hidden={!active}>
-                    <LocalMotionAnalysisPanel
-                      videoSrc={workspace.videoSrc || ""}
-                      videoDuration={workspace.videoDuration || 0}
-                      videoTime={workspace.videoTime || 0}
-                      videoPlaying={active ? !!workspace.videoPlaying : false}
-                      selectedSession={selectedSession}
-                      analysisFeedLabel={role.value === "composite" ? null : role.label}
-                      onSeek={(timeS) => {
-                        if (active) seek(timeS);
-                        else updateFeedWorkspace(role.value, { videoTime: Number(timeS) || 0 });
-                      }}
-                      onSaveSummary={(summary, events) => saveSummary(role.value, summary, events)}
-                      onAcceptSuggestions={(events) => acceptSuggestions(role.value, events)}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-
             <div className="order-2 space-y-4 2xl:self-start">
               {videoSrc ? (
               <div
@@ -648,6 +623,32 @@ export default function MotionLab() {
             {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
               <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
             )}
+            </div>
+
+            <div className="contents">
+              {configuredRoles.map((role) => {
+                const workspace = feedWorkspaces[role.value] || {};
+                const active = role.value === feedRole;
+                return (
+                  <div key={`${selectedId || "no-session"}-${role.value}`} className={active ? "contents" : "hidden"} aria-hidden={!active}>
+                    <LocalMotionAnalysisPanel
+                      videoSrc={workspace.videoSrc || ""}
+                      videoDuration={workspace.videoDuration || 0}
+                      videoTime={workspace.videoTime || 0}
+                      videoPlaying={active ? !!workspace.videoPlaying : false}
+                      selectedSession={selectedSession}
+                      analysisFeedLabel={role.value === "composite" ? null : role.label}
+                      splitWorkspaceLayout
+                      onSeek={(timeS) => {
+                        if (active) seek(timeS);
+                        else updateFeedWorkspace(role.value, { videoTime: Number(timeS) || 0 });
+                      }}
+                      onSaveSummary={(summary, events) => saveSummary(role.value, summary, events)}
+                      onAcceptSuggestions={(events) => acceptSuggestions(role.value, events)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </section>
         </div>
