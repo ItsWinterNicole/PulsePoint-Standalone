@@ -4167,7 +4167,8 @@ return (
       )}
 
       {result && (
-        <div id="motion-lab-results" className={`scroll-mt-32 space-y-4 border-t border-border pt-4 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
+        // MOTION_LAB_RESULTS_MAIN_WORKSPACE_V1
+        <div id="motion-lab-results" className={`min-w-0 scroll-mt-32 space-y-4 border-t border-border pt-4 ${splitWorkspaceLayout ? "2xl:col-start-1 2xl:order-3" : ""}`}>
           <div className="rounded-lg border border-primary/25 bg-primary/[0.07] px-3 py-2 text-sm text-foreground">
             <span className="font-semibold text-primary">Current analysis result.</span>{" "}
             This temporary trace reflects the most recent run and replaces the saved summary and saved motion-derived events only after you select <span className="font-medium">Finalize summary and replace saved motion events</span>.
