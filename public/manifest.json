@@ -1,15 +1,24 @@
 {
-  "name": "PulsePoint",
+  "name": "PulsePoint Standalone",
   "short_name": "PulsePoint",
-  "description": "Private local physiology and session analytics.",
-  "start_url": "/",
+  "description": "Private local physiology, session review, Motion Lab, AI analysis, and audio summaries.",
+  "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
-  "orientation": "portrait",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
   "background_color": "#090d14",
   "theme_color": "#10161f",
-  "categories": ["health", "lifestyle", "productivity"],
+  "categories": [
+    "health",
+    "lifestyle",
+    "productivity",
+    "utilities"
+  ],
   "icons": [
     {
       "src": "/icons/pulsepoint-icon.svg",
@@ -34,6 +43,84 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "id": "/?source=pwa",
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 420
+  },
+  "launch_handler": {
+    "client_mode": [
+      "navigate-existing",
+      "auto"
+    ]
+  },
+  "shortcuts": [
+    {
+      "name": "New Session",
+      "short_name": "New",
+      "description": "Create a new PulsePoint session.",
+      "url": "/new?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/pulsepoint-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Live Capture",
+      "short_name": "Capture",
+      "description": "Open live physiology capture.",
+      "url": "/capture?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/pulsepoint-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Motion Lab",
+      "short_name": "Motion",
+      "description": "Open Motion Lab for local movement evidence review.",
+      "url": "/motion-lab?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/pulsepoint-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Body Exploration",
+      "short_name": "Explore",
+      "description": "Open body exploration sessions.",
+      "url": "/exploration?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/pulsepoint-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Audio Library",
+      "short_name": "Audio",
+      "description": "Open generated audio summaries and exports.",
+      "url": "/library?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/pulsepoint-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }
