@@ -3227,12 +3227,13 @@ return (
         </div>
       </div>
 
-      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2 2xl:row-start-1 2xl:order-2 2xl:mt-[15.5rem]" : ""}`}>
+      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2 2xl:row-start-1 2xl:order-2" : ""}`}>
+        {/* MOTION_LAB_LIVE_PREVIEW_TOP_AND_RAIL_TEXT_V1 */}
         {splitWorkspaceLayout && (
           <div className="rounded-lg border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Region placement workflow</p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              The center frame is the working surface. Pick a settings category below; its controls appear under the placement frame.
+              The center frame is the working surface. Pick a settings category below; its controls stay in this right-side settings rail.
             </p>
           </div>
         )}
@@ -3326,7 +3327,7 @@ return (
             </div>
             {videoSrc && (
             <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-              Pick a settings category here; its controls open below the placement frame.
+              Pick a settings category here; its controls open in this right-side rail.
             </p>
             )}
           </div>
@@ -3398,7 +3399,7 @@ return (
       {showMainAnalysisPreview && (
         <div
           id="motion-lab-processing-preview"
-          className="xl:col-start-1 2xl:order-1 flex min-w-0 flex-col gap-2 rounded-lg border border-primary/30 bg-primary/[0.04] p-2"
+          className="xl:col-start-1 xl:row-start-1 xl:order-first 2xl:order-1 flex min-w-0 flex-col gap-2 rounded-lg border border-primary/30 bg-primary/[0.04] p-2"
         >
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div>
