@@ -251,3 +251,57 @@
     min-height: 2.7rem;
   }
 }
+
+
+/* AI_OUTPUT_MOBILE_WIDTH_GUARD_V1
+   Prevent AI/TTS output from collapsing into a one-character-wide column inside
+   nested flex/grid/card layouts, especially on mobile and with larger font modes. */
+@layer components {
+  .ai-output-width-guard,
+  .ai-output-width-guard *,
+  .ai-output-copy-surface,
+  .ai-output-paragraph-shell,
+  .ai-output-paragraph {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .ai-output-width-guard,
+  .ai-output-copy-surface,
+  .ai-output-paragraph-shell,
+  .ai-output-paragraph {
+    width: 100%;
+  }
+
+  .ai-output-paragraph,
+  .ai-output-paragraph-shell p,
+  .ai-output-paragraph-shell div,
+  .ai-output-copy-surface p,
+  .ai-output-copy-surface li {
+    overflow-wrap: normal;
+    word-break: normal;
+    white-space: normal;
+    text-wrap: pretty;
+  }
+
+  .ai-output-paragraph-shell > *,
+  .ai-output-copy-surface > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .ai-output-paragraph span {
+    white-space: normal;
+    word-break: normal;
+  }
+
+  @media (max-width: 640px) {
+    .ai-output-width-guard,
+    .ai-output-copy-surface,
+    .ai-output-paragraph-shell,
+    .ai-output-paragraph {
+      display: block;
+      width: 100%;
+    }
+  }
+}

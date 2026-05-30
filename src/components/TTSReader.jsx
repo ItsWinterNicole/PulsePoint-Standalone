@@ -1035,7 +1035,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   return (
     <>
-    <div className="space-y-1">
+    <div className="ai-output-width-guard space-y-1 min-w-0 w-full max-w-full">
       {/* Controls */}
       <div className="flex items-center gap-1 mb-2 flex-wrap">
         <button
@@ -1160,7 +1160,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       )}
 
       {/* Paragraphs */}
-      <div ref={copyContentRef} className="space-y-1">
+      <div ref={copyContentRef} className="ai-output-copy-surface space-y-1 min-w-0 w-full max-w-full">
       {readableParagraphs.map((text, paraIdx) => {
         const displayText = fmtSecondsInText(text);
         const isPlaying = currentPara === paraIdx && state === "playing";
@@ -1208,7 +1208,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
                         wordRefs.current.delete(key);
                       }
                     }}
-                    className={isHighlighted ? "bg-primary text-primary-foreground font-bold px-1 rounded inline-block transition-all" : "inline-block"}
+                    className={isHighlighted ? "bg-primary text-primary-foreground font-bold px-1 rounded inline transition-all" : "inline"}
                   >
                     {word}
                   </span>
