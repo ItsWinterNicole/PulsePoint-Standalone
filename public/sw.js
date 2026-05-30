@@ -1,6 +1,6 @@
 // PWA_FULL_SEND_V1
 // PWA_NO_FOCUS_RELOAD_V1
-const CACHE_NAME = "pulsepoint-shell-v4";
+const CACHE_NAME = "pulsepoint-shell-v5";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -62,16 +62,22 @@ self.addEventListener("fetch", (event) => {
   if (isSensitiveOrDynamicRequest(url) || isDevelopmentAsset(url)) return;
 
   if (request.mode === "navigate") {
+    const networkRefresh = fetch(request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+        }
+        return response;
+      })
+      .catch(() => null);
+
+    event.waitUntil(networkRefresh);
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match("/") || Response.error())
+      caches.match("/").then((cached) => {
+        if (cached) return cached;
+        return networkRefresh.then((response) => response || Response.error());
+      })
     );
     return;
   }

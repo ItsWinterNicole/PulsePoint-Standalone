@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import PageHeader from "@/components/PageHeader";
+import LiveFootLandmarkTracker from "@/components/LiveFootLandmarkTracker";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -845,6 +846,20 @@ export default function LiveCapture() {
     return sessionId;
   }, [ensureSession, liveSession]);
 
+  const handleFootTrackingSnapshot = useCallback(async (summary) => {
+    if (!summary || !liveSession?.activeSessionId) return;
+    const patch = {
+      live_foot_tracking: summary,
+      live_foot_tracking_updated_at: summary.updated_at || new Date().toISOString(),
+    };
+    try {
+      await base44.entities.Session.update(liveSession.activeSessionId, patch);
+      setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
+    } catch (err) {
+      console.warn("Unable to save live foot tracking summary", err);
+    }
+  }, [liveSession?.activeSessionId]);
+
   const captureEmgCalibrationReference = useCallback(async (step) => {
     const reading = summarizeEmgCalibrationReading(telemetryHistory, latestEmgRef.current);
     if (!reading.left && !reading.right) {
@@ -1598,6 +1613,15 @@ export default function LiveCapture() {
       </div>}
 
       {!focusView && !mainTelemetryView && voiceAnnotationPanel}
+
+      {!focusView && !mainTelemetryView && (
+        <LiveFootLandmarkTracker
+          sessionId={liveSession?.activeSessionId}
+          recordingActive={recordingActive}
+          getSessionTimeS={getCurrentSessionTime}
+          onTrackingSnapshot={handleFootTrackingSnapshot}
+        />
+      )}
 
       {!focusView && captureMode !== "media" && (
         <div className="rounded-xl border border-border bg-card">

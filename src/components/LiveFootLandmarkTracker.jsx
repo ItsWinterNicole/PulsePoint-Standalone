@@ -1,0 +1,894 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Camera, Crosshair, Download, Pause, Play, RotateCcw, ShieldCheck, Square, UploadCloud } from "lucide-react";
+
+const DEFAULT_LABELS = [
+  { key: "left_toe", label: "Left big toe", color: "#2dd4bf" },
+  { key: "right_toe", label: "Right big toe", color: "#fb7185" },
+  { key: "left_forefoot", label: "Left forefoot", color: "#a78bfa" },
+  { key: "right_forefoot", label: "Right forefoot", color: "#fbbf24" },
+  { key: "left_heel", label: "Left heel", color: "#60a5fa" },
+  { key: "right_heel", label: "Right heel", color: "#f97316" },
+];
+
+const SETTINGS_STORAGE_KEY = "pulsepoint.liveFootLandmarkTracker.settings.v1";
+const POINTS_STORAGE_KEY = "pulsepoint.liveFootLandmarkTracker.points.v1";
+const ROW_LIMIT = 1500;
+
+const DEFAULT_SETTINGS = {
+  threshold: 185,
+  minArea: 6,
+  maxArea: 7000,
+  searchRadius: 120,
+  lostTolerance: 24,
+  reacquireAfter: 8,
+  mirror: false,
+  showCandidates: false,
+};
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function readStoredJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function colorFor(label) {
+  return DEFAULT_LABELS.find((item) => item.key === label)?.color || "#e2e8f0";
+}
+
+function brightness(data, width, x, y) {
+  const px = clamp(Math.round(x), 0, width - 1);
+  const py = Math.max(0, Math.round(y));
+  const index = (py * width + px) * 4;
+  return Math.max(data[index], data[index + 1], data[index + 2]);
+}
+
+function pointDistance(a, b) {
+  return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
+}
+
+function detectBrightBlobs(image, settings, rect) {
+  const width = image.width;
+  const height = image.height;
+  const x0 = clamp(Math.floor(rect.x), 0, width);
+  const y0 = clamp(Math.floor(rect.y), 0, height);
+  const x1 = clamp(Math.ceil(rect.x + rect.w), 0, width);
+  const y1 = clamp(Math.ceil(rect.y + rect.h), 0, height);
+  const mapWidth = x1 - x0;
+  const mapHeight = y1 - y0;
+  if (mapWidth <= 0 || mapHeight <= 0) return [];
+
+  const mask = new Uint8Array(mapWidth * mapHeight);
+  const seen = new Uint8Array(mapWidth * mapHeight);
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const value = brightness(image.data, width, x, y);
+      mask[(y - y0) * mapWidth + (x - x0)] = value >= settings.threshold ? 1 : 0;
+    }
+  }
+
+  const blobs = [];
+  for (let y = 0; y < mapHeight; y += 1) {
+    for (let x = 0; x < mapWidth; x += 1) {
+      const startIndex = y * mapWidth + x;
+      if (!mask[startIndex] || seen[startIndex]) continue;
+
+      const queue = [[x, y]];
+      let head = 0;
+      let count = 0;
+      let sumX = 0;
+      let sumY = 0;
+      let maxBright = 0;
+      let sumBright = 0;
+      let minX = x;
+      let maxX = x;
+      let minY = y;
+      let maxY = y;
+      seen[startIndex] = 1;
+
+      while (head < queue.length) {
+        const [qx, qy] = queue[head];
+        head += 1;
+        const globalX = x0 + qx;
+        const globalY = y0 + qy;
+        const value = brightness(image.data, width, globalX, globalY);
+        count += 1;
+        sumX += qx;
+        sumY += qy;
+        sumBright += value;
+        maxBright = Math.max(maxBright, value);
+        minX = Math.min(minX, qx);
+        maxX = Math.max(maxX, qx);
+        minY = Math.min(minY, qy);
+        maxY = Math.max(maxY, qy);
+
+        [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+          const nx = qx + dx;
+          const ny = qy + dy;
+          if (nx < 0 || ny < 0 || nx >= mapWidth || ny >= mapHeight) return;
+          const nextIndex = ny * mapWidth + nx;
+          if (!mask[nextIndex] || seen[nextIndex]) return;
+          seen[nextIndex] = 1;
+          queue.push([nx, ny]);
+        });
+      }
+
+      if (count >= settings.minArea && count <= settings.maxArea) {
+        const blobWidth = maxX - minX + 1;
+        const blobHeight = maxY - minY + 1;
+        const fill = count / Math.max(1, blobWidth * blobHeight);
+        blobs.push({
+          x: x0 + sumX / count,
+          y: y0 + sumY / count,
+          area: count,
+          brightness: maxBright,
+          meanBrightness: sumBright / count,
+          width: blobWidth,
+          height: blobHeight,
+          fill,
+        });
+      }
+    }
+  }
+
+  return blobs
+    .sort((a, b) => b.brightness - a.brightness || b.area - a.area)
+    .slice(0, 90);
+}
+
+function makeLearnedPoint(label, blob, image, fallback) {
+  const x = blob?.x ?? fallback.x;
+  const y = blob?.y ?? fallback.y;
+  const bright = blob?.brightness ?? brightness(image.data, image.width, x, y);
+  const area = blob?.area || 24;
+  return {
+    label,
+    x,
+    y,
+    previousX: x,
+    previousY: y,
+    lastGoodX: x,
+    lastGoodY: y,
+    vx: 0,
+    vy: 0,
+    area,
+    baseArea: area,
+    baseBrightness: bright,
+    brightness: bright,
+    confidence: blob ? 1 : 0.65,
+    lost: false,
+    lostFrames: 0,
+    mode: blob ? "learned_blob" : "learned_click",
+    movedPx: 0,
+    searchRadius: 0,
+  };
+}
+
+function scoreCandidate(blob, point, targetX, targetY, claimed) {
+  if (claimed.some((item) => Math.hypot(blob.x - item.x, blob.y - item.y) < 10)) return Number.POSITIVE_INFINITY;
+  const distance = Math.hypot(blob.x - targetX, blob.y - targetY);
+  const baseArea = point.baseArea || point.area || 24;
+  const areaRatio = Math.max(0.05, (blob.area || baseArea) / Math.max(1, baseArea));
+  const areaPenalty = Math.abs(Math.log(areaRatio)) * 30;
+  const brightnessPenalty = Math.max(0, (point.baseBrightness || 190) - (blob.brightness || 0)) * 0.26;
+  const fillPenalty = blob.fill ? Math.abs(0.7 - blob.fill) * 12 : 4;
+  const anchorDistance = point.lastGoodX != null ? Math.hypot(blob.x - point.lastGoodX, blob.y - point.lastGoodY) : 0;
+  const anchorPenalty = Math.max(0, anchorDistance - 420) * 0.65;
+  const jumpPenalty = !point.lost && distance > 260 ? 90 : 0;
+  return distance + areaPenalty + brightnessPenalty + fillPenalty + anchorPenalty + jumpPenalty;
+}
+
+function pickBestBlob(image, point, targetX, targetY, radius, settings, claimed, strict = false) {
+  const blobs = detectBrightBlobs(image, settings, {
+    x: targetX - radius,
+    y: targetY - radius,
+    w: radius * 2,
+    h: radius * 2,
+  });
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  blobs.forEach((blob) => {
+    const score = scoreCandidate(blob, point, targetX, targetY, claimed);
+    if (score < bestScore) {
+      best = blob;
+      bestScore = score;
+    }
+  });
+  const maxScore = strict ? Math.max(80, radius * 0.72) : Math.max(110, radius * 0.95);
+  return best && bestScore < maxScore ? { ...best, score: bestScore, mode: "blob" } : null;
+}
+
+function pickFullFrameBlob(image, point, settings, claimed) {
+  const blobs = detectBrightBlobs(image, settings, { x: 0, y: 0, w: image.width, h: image.height });
+  const anchorX = point.lastGoodX ?? point.x;
+  const anchorY = point.lastGoodY ?? point.y;
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  blobs.forEach((blob) => {
+    if (Math.hypot(blob.x - anchorX, blob.y - anchorY) > 520) return;
+    const score = scoreCandidate(blob, point, anchorX, anchorY, claimed);
+    if (score < bestScore) {
+      best = blob;
+      bestScore = score;
+    }
+  });
+  return best && bestScore < 175 ? { ...best, score: bestScore, mode: "wide_reacquire" } : null;
+}
+
+function findNearbyPeak(image, point, radius, settings) {
+  const anchorX = point.lastGoodX ?? point.x;
+  const anchorY = point.lastGoodY ?? point.y;
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let y = Math.max(0, Math.floor(anchorY - radius)); y < Math.min(image.height, Math.ceil(anchorY + radius)); y += 2) {
+    for (let x = Math.max(0, Math.floor(anchorX - radius)); x < Math.min(image.width, Math.ceil(anchorX + radius)); x += 2) {
+      const distance = Math.hypot(x - anchorX, y - anchorY);
+      if (distance > radius) continue;
+      const value = brightness(image.data, image.width, x, y);
+      const score = value - distance * 0.18;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y, area: 0, brightness: value, meanBrightness: value, mode: "peak_hold" };
+      }
+    }
+  }
+  return best && best.brightness > Math.max(110, settings.threshold - 50) ? best : null;
+}
+
+function updatePointWithBlob(point, blob) {
+  const next = { ...point };
+  const vx = blob.x - next.x;
+  const vy = blob.y - next.y;
+  next.previousX = next.x;
+  next.previousY = next.y;
+  next.x = blob.x;
+  next.y = blob.y;
+  next.area = blob.area || 0;
+  next.brightness = blob.brightness || 0;
+  next.movedPx = Math.hypot(next.x - next.previousX, next.y - next.previousY);
+  next.mode = blob.mode || "blob";
+  next.searchRadius = blob.searchRadius || next.searchRadius || 0;
+  if (next.mode === "peak_hold") {
+    next.vx = (next.vx || 0) * 0.15;
+    next.vy = (next.vy || 0) * 0.15;
+    next.confidence = 0.48;
+    next.lostFrames = Math.max(0, (next.lostFrames || 0) - 1);
+    next.lost = false;
+    return next;
+  }
+  next.vx = (next.vx || 0) * 0.25 + vx * 0.75;
+  next.vy = (next.vy || 0) * 0.25 + vy * 0.75;
+  next.lastGoodX = blob.x;
+  next.lastGoodY = blob.y;
+  next.confidence = next.mode.includes("reacquire") ? 0.88 : 1;
+  next.lostFrames = 0;
+  next.lost = false;
+  return next;
+}
+
+function coastPoint(point, settings) {
+  const lostFrames = (point.lostFrames || 0) + 1;
+  return {
+    ...point,
+    previousX: point.x,
+    previousY: point.y,
+    x: point.lastGoodX ?? point.x,
+    y: point.lastGoodY ?? point.y,
+    vx: (point.vx || 0) * 0.35,
+    vy: (point.vy || 0) * 0.35,
+    confidence: Math.max(0, 1 - lostFrames / settings.lostTolerance),
+    lostFrames,
+    lost: lostFrames >= settings.lostTolerance,
+    movedPx: 0,
+    mode: lostFrames >= settings.lostTolerance ? "lost" : "coast",
+  };
+}
+
+function formatSeconds(value) {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function buildSummary(points, settings, sessionTimeS) {
+  const labels = {};
+  points.forEach((point) => {
+    labels[point.label] = {
+      x_norm: Number.isFinite(point.xNorm) ? Number(point.xNorm.toFixed(5)) : null,
+      y_norm: Number.isFinite(point.yNorm) ? Number(point.yNorm.toFixed(5)) : null,
+      confidence: Number((point.confidence || 0).toFixed(3)),
+      lost: Boolean(point.lost),
+      mode: point.mode || "",
+      moved_px: Number((point.movedPx || 0).toFixed(2)),
+      brightness: Math.round(point.brightness || 0),
+    };
+  });
+  return {
+    source: "live_capture_landmark_tracker",
+    updated_at: new Date().toISOString(),
+    session_time_s: Math.max(0, Math.round(Number(sessionTimeS) || 0)),
+    expected_count: DEFAULT_LABELS.length,
+    tracked_count: points.filter((point) => !point.lost).length,
+    lost_count: points.filter((point) => point.lost).length,
+    average_confidence: Number((points.reduce((sum, point) => sum + (point.confidence || 0), 0) / Math.max(1, points.length)).toFixed(3)),
+    landmark_labels: labels,
+    settings: {
+      threshold: settings.threshold,
+      min_area: settings.minArea,
+      max_area: settings.maxArea,
+      search_radius_px: settings.searchRadius,
+      lost_tolerance_frames: settings.lostTolerance,
+      reacquire_after_frames: settings.reacquireAfter,
+      mirror: settings.mirror,
+    },
+    note: "Compact live foot marker tracking summary only. Raw video, raw frames, and raw landmarks are not persisted.",
+  };
+}
+
+export default function LiveFootLandmarkTracker({ sessionId, recordingActive, getSessionTimeS, onTrackingSnapshot }) {
+  const videoRef = useRef(null);
+  const overlayRef = useRef(null);
+  const clickRef = useRef(null);
+  const offscreenRef = useRef(null);
+  const animationRef = useRef(null);
+  const streamRef = useRef(null);
+  const objectUrlRef = useRef("");
+  const pointsRef = useRef([]);
+  const settingsRef = useRef(DEFAULT_SETTINGS);
+  const lastEmitRef = useRef(0);
+  const lastCsvRef = useRef(0);
+
+  const [open, setOpen] = useState(true);
+  const [status, setStatus] = useState("Ready");
+  const [selectedLabel, setSelectedLabel] = useState("left_toe");
+  const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...readStoredJson(SETTINGS_STORAGE_KEY, {}) }));
+  const [points, setPoints] = useState(() => readStoredJson(POINTS_STORAGE_KEY, []));
+  const [cameraActive, setCameraActive] = useState(false);
+  const [videoLoaded, setVideoLoaded] = useState(false);
+  const [trackingFrozen, setTrackingFrozen] = useState(false);
+  const [csvRows, setCsvRows] = useState([]);
+  const [recordCsv, setRecordCsv] = useState(false);
+  const [candidateCount, setCandidateCount] = useState(0);
+
+  const trackedCount = points.filter((point) => !point.lost).length;
+  const lostCount = points.filter((point) => point.lost).length;
+  const allDefaultPointsSet = useMemo(() => DEFAULT_LABELS.every((item) => points.some((point) => point.label === item.key)), [points]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    pointsRef.current = points;
+    localStorage.setItem(POINTS_STORAGE_KEY, JSON.stringify(points));
+  }, [points]);
+
+  const stopSource = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = "";
+    }
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.srcObject = null;
+      video.load();
+    }
+    setCameraActive(false);
+    setVideoLoaded(false);
+  }, []);
+
+  useEffect(() => () => {
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    stopSource();
+  }, [stopSource]);
+
+  const updateSetting = (key, value) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const getCanvasRect = useCallback(() => {
+    const canvas = overlayRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video?.videoWidth) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(rect.width / video.videoWidth, rect.height / video.videoHeight);
+    const videoWidth = video.videoWidth * scale;
+    const videoHeight = video.videoHeight * scale;
+    return {
+      displayWidth: rect.width,
+      displayHeight: rect.height,
+      videoWidth: video.videoWidth,
+      videoHeight: video.videoHeight,
+      scale,
+      dx: (rect.width - videoWidth) / 2,
+      dy: (rect.height - videoHeight) / 2,
+    };
+  }, []);
+
+  const videoToScreen = useCallback((point) => {
+    const rect = getCanvasRect();
+    const mirror = settingsRef.current.mirror;
+    if (!rect) return { x: 0, y: 0 };
+    const x = mirror ? rect.videoWidth - point.x : point.x;
+    return { x: rect.dx + x * rect.scale, y: rect.dy + point.y * rect.scale };
+  }, [getCanvasRect]);
+
+  const screenToVideo = useCallback((x, y) => {
+    const rect = getCanvasRect();
+    const mirror = settingsRef.current.mirror;
+    if (!rect) return null;
+    if (x < rect.dx || y < rect.dy || x > rect.dx + rect.videoWidth * rect.scale || y > rect.dy + rect.videoHeight * rect.scale) return null;
+    let vx = (x - rect.dx) / rect.scale;
+    const vy = (y - rect.dy) / rect.scale;
+    if (mirror) vx = rect.videoWidth - vx;
+    return { x: clamp(vx, 0, rect.videoWidth), y: clamp(vy, 0, rect.videoHeight) };
+  }, [getCanvasRect]);
+
+  const getFrame = useCallback(() => {
+    const video = videoRef.current;
+    if (!video?.videoWidth) return null;
+    const canvas = offscreenRef.current || document.createElement("canvas");
+    offscreenRef.current = canvas;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const findNearestBlob = useCallback((image, point) => {
+    const blobs = detectBrightBlobs(image, settingsRef.current, { x: 0, y: 0, w: image.width, h: image.height });
+    setCandidateCount(settingsRef.current.showCandidates ? blobs.length : 0);
+    let best = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    blobs.forEach((blob) => {
+      const distance = Math.hypot(blob.x - point.x, blob.y - point.y);
+      if (distance < bestDistance) {
+        best = blob;
+        bestDistance = distance;
+      }
+    });
+    return best && bestDistance < 130 ? best : null;
+  }, []);
+
+  const trackPoints = useCallback((image) => {
+    if (trackingFrozen) return pointsRef.current;
+    const settingsNow = settingsRef.current;
+    const claimed = [];
+    const nextPoints = pointsRef.current
+      .slice()
+      .sort((a, b) => (a.lostFrames || 0) - (b.lostFrames || 0))
+      .map((point) => {
+        const missedFrames = point.lostFrames || 0;
+        const speed = Math.hypot(point.vx || 0, point.vy || 0);
+        const anchorX = point.lastGoodX ?? point.x;
+        const anchorY = point.lastGoodY ?? point.y;
+        const predictedX = point.lost ? anchorX : point.x + (point.vx || 0) * 0.55;
+        const predictedY = point.lost ? anchorY : point.y + (point.vy || 0) * 0.55;
+        const radius = Math.min(520, settingsNow.searchRadius + speed * 1.6 + missedFrames * 18);
+        let found = null;
+
+        if (missedFrames > 0) {
+          const anchorRadius = Math.min(460, 90 + missedFrames * 28);
+          found = pickBestBlob(image, point, anchorX, anchorY, anchorRadius, settingsNow, claimed, true);
+          if (found) found.mode = "last_good_reacquire";
+        }
+        if (!found && missedFrames === 0) found = pickBestBlob(image, point, predictedX, predictedY, radius, settingsNow, claimed);
+        if (!found) {
+          found = pickBestBlob(image, point, anchorX, anchorY, Math.min(560, radius + 70 + missedFrames * 10), settingsNow, claimed, true);
+          if (found) found.mode = missedFrames > 0 ? "anchor_reacquire" : "blob";
+        }
+        if (!found && missedFrames >= settingsNow.reacquireAfter) found = pickFullFrameBlob(image, point, settingsNow, claimed);
+        if (!found && missedFrames < Math.max(3, Math.floor(settingsNow.lostTolerance * 0.35))) {
+          found = findNearbyPeak(image, point, Math.min(180, radius * 0.55), settingsNow);
+        }
+
+        if (!found) return coastPoint({ ...point, searchRadius: radius }, settingsNow);
+        found.searchRadius = radius;
+        const updated = updatePointWithBlob(point, found);
+        if (found.mode !== "peak_hold") claimed.push({ x: updated.x, y: updated.y });
+        return updated;
+      })
+      .map((point) => ({
+        ...point,
+        xNorm: image.width ? point.x / image.width : null,
+        yNorm: image.height ? point.y / image.height : null,
+      }));
+
+    const ordered = DEFAULT_LABELS
+      .map((item) => nextPoints.find((point) => point.label === item.key))
+      .filter(Boolean);
+    const custom = nextPoints.filter((point) => !DEFAULT_LABELS.some((item) => item.key === point.label));
+    return [...ordered, ...custom];
+  }, [trackingFrozen]);
+
+  const drawOverlay = useCallback((image) => {
+    const overlay = overlayRef.current;
+    const click = clickRef.current;
+    if (!overlay || !click) return;
+    const rect = overlay.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    [overlay, click].forEach((canvas) => {
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+    });
+    const ctx = overlay.getContext("2d");
+    const clickCtx = click.getContext("2d");
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    clickCtx.clearRect(0, 0, rect.width, rect.height);
+    ctx.font = "12px system-ui";
+    ctx.lineWidth = 2.5;
+
+    if (settingsRef.current.showCandidates && image) {
+      const candidates = detectBrightBlobs(image, settingsRef.current, { x: 0, y: 0, w: image.width, h: image.height });
+      setCandidateCount(candidates.length);
+      candidates.slice(0, 80).forEach((candidate) => {
+        const point = videoToScreen(candidate);
+        ctx.strokeStyle = "rgba(255,255,255,.42)";
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+    }
+
+    pointsRef.current.forEach((point) => {
+      const screen = videoToScreen(point);
+      const color = point.lost ? "#ef4444" : point.mode?.includes("reacquire") ? "#f59e0b" : colorFor(point.label);
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, 13, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillText(`${point.label.replaceAll("_", " ")} ${point.lost ? "lost" : point.mode || ""}`, screen.x + 15, screen.y - 12);
+      ctx.strokeStyle = `${color}55`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, (point.searchRadius || settingsRef.current.searchRadius) * (getCanvasRect()?.scale || 1), 0, Math.PI * 2);
+      ctx.stroke();
+    });
+  }, [getCanvasRect, videoToScreen]);
+
+  const recordCsvRow = useCallback((pointsNow, sessionTimeS) => {
+    const row = { time_s: Number(sessionTimeS || 0).toFixed(3) };
+    pointsNow.forEach((point) => {
+      row[`${point.label}_x`] = point.lost ? "" : (point.x || 0).toFixed(2);
+      row[`${point.label}_y`] = point.lost ? "" : (point.y || 0).toFixed(2);
+      row[`${point.label}_confidence`] = (point.confidence || 0).toFixed(3);
+      row[`${point.label}_lost`] = point.lost ? "1" : "0";
+      row[`${point.label}_mode`] = point.mode || "";
+      row[`${point.label}_moved_px`] = (point.movedPx || 0).toFixed(2);
+    });
+    setCsvRows((prev) => [...prev.slice(-(ROW_LIMIT - 1)), row]);
+  }, []);
+
+  const loop = useCallback(() => {
+    const image = getFrame();
+    if (image) {
+      const nextPoints = trackPoints(image);
+      pointsRef.current = nextPoints;
+      setPoints(nextPoints);
+      drawOverlay(image);
+      const now = Date.now();
+      const sessionTimeS = typeof getSessionTimeS === "function" ? getSessionTimeS() : 0;
+      if (recordCsv && now - lastCsvRef.current > 500) {
+        lastCsvRef.current = now;
+        recordCsvRow(nextPoints, sessionTimeS);
+      }
+      if (onTrackingSnapshot && sessionId && now - lastEmitRef.current > 5000) {
+        lastEmitRef.current = now;
+        onTrackingSnapshot(buildSummary(nextPoints, settingsRef.current, sessionTimeS));
+      }
+    } else {
+      drawOverlay(null);
+    }
+    animationRef.current = requestAnimationFrame(loop);
+  }, [drawOverlay, getFrame, getSessionTimeS, onTrackingSnapshot, recordCsv, recordCsvRow, sessionId, trackPoints]);
+
+  useEffect(() => {
+    animationRef.current = requestAnimationFrame(loop);
+    return () => {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    };
+  }, [loop]);
+
+  const startCamera = async () => {
+    stopSource();
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    streamRef.current = stream;
+    const video = videoRef.current;
+    video.srcObject = stream;
+    await video.play();
+    setCameraActive(true);
+    setVideoLoaded(true);
+    setStatus("Camera live");
+  };
+
+  const loadVideo = async (file) => {
+    if (!file) return;
+    stopSource();
+    const url = URL.createObjectURL(file);
+    objectUrlRef.current = url;
+    const video = videoRef.current;
+    video.src = url;
+    video.loop = true;
+    await video.play();
+    setVideoLoaded(true);
+    setStatus(file.name);
+  };
+
+  const handleClick = (event) => {
+    const image = getFrame();
+    const canvas = clickRef.current;
+    if (!image || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const point = screenToVideo(event.clientX - rect.left, event.clientY - rect.top);
+    if (!point) {
+      setStatus("Click inside the video frame to place the marker.");
+      return;
+    }
+    const blob = findNearestBlob(image, point);
+    const learned = makeLearnedPoint(selectedLabel, blob, image, point);
+    learned.xNorm = image.width ? learned.x / image.width : null;
+    learned.yNorm = image.height ? learned.y / image.height : null;
+    const next = [...pointsRef.current.filter((item) => item.label !== selectedLabel), learned];
+    const ordered = DEFAULT_LABELS.map((item) => next.find((pointItem) => pointItem.label === item.key)).filter(Boolean);
+    pointsRef.current = ordered;
+    setPoints(ordered);
+    setStatus(`${DEFAULT_LABELS.find((item) => item.key === selectedLabel)?.label || selectedLabel} learned`);
+  };
+
+  const clearSelected = () => {
+    const next = points.filter((point) => point.label !== selectedLabel);
+    pointsRef.current = next;
+    setPoints(next);
+  };
+
+  const clearAll = () => {
+    pointsRef.current = [];
+    setPoints([]);
+    setCsvRows([]);
+  };
+
+  const downloadCsv = () => {
+    if (!csvRows.length) return;
+    const fields = Array.from(new Set(csvRows.flatMap((row) => Object.keys(row)))).sort((a, b) => {
+      if (a === "time_s") return -1;
+      if (b === "time_s") return 1;
+      return a.localeCompare(b);
+    });
+    const esc = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const text = [fields.join(","), ...csvRows.map((row) => fields.map((field) => esc(row[field])).join(","))].join("\n");
+    const blob = new Blob([text], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `pulsepoint-live-foot-landmarks-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  return (
+    <section className="rounded-xl border border-primary/25 bg-card">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-start gap-3 p-4 text-left"
+        aria-expanded={open}
+      >
+        <Crosshair className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Live Foot Landmark Tracker</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Learn the silver marker dots on big toes, forefeet, and heels, then keep tracking with fast last-good-position reacquire.
+          </p>
+        </div>
+        <span className="ml-auto rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {open ? "Hide" : "Show"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="space-y-4 border-t border-border p-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <div className="space-y-3">
+              <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-black">
+                <video
+                  ref={videoRef}
+                  muted
+                  playsInline
+                  className="absolute inset-0 h-full w-full object-contain"
+                  style={{ transform: settings.mirror ? "scaleX(-1)" : "none" }}
+                />
+                <canvas ref={overlayRef} className="absolute inset-0 h-full w-full" />
+                <canvas
+                  ref={clickRef}
+                  onClick={handleClick}
+                  className="absolute inset-0 h-full w-full cursor-crosshair"
+                  aria-label="Live foot landmark placement canvas"
+                />
+                {!videoLoaded && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-6 text-center">
+                    <div>
+                      <Crosshair className="mx-auto mb-3 h-8 w-8 text-primary" />
+                      <p className="font-semibold text-foreground">Load a camera or video to place landmark dots.</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Click a marker button, then click the black-bordered silver dot in the large preview.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tracked</p>
+                  <p className="mt-1 text-2xl font-bold text-primary">{trackedCount}/{points.length || DEFAULT_LABELS.length}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Lost</p>
+                  <p className="mt-1 text-2xl font-bold text-chart-3">{lostCount}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Saved Summary</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {sessionId ? (recordingActive ? "Live session" : "Session ready") : "No live session"}
+                  </p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">Raw video and frames are not persisted.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border bg-muted/20 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Source</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                  <button type="button" onClick={startCamera} className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15">
+                    <Camera className="h-4 w-4 text-primary" />
+                    Start camera
+                  </button>
+                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50">
+                    <UploadCloud className="h-4 w-4 text-primary" />
+                    Load video
+                    <input type="file" accept="video/*" className="hidden" onChange={(event) => loadVideo(event.target.files?.[0])} />
+                  </label>
+                  <button type="button" onClick={() => videoRef.current?.play()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50">
+                    <Play className="h-4 w-4 text-primary" />
+                    Play
+                  </button>
+                  <button type="button" onClick={() => videoRef.current?.pause()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50">
+                    <Pause className="h-4 w-4 text-primary" />
+                    Pause
+                  </button>
+                  <button type="button" onClick={stopSource} className="inline-flex items-center justify-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-destructive/15">
+                    <Square className="h-4 w-4 text-destructive" />
+                    Stop source
+                  </button>
+                  <button type="button" onClick={() => setTrackingFrozen((value) => !value)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50">
+                    <ShieldCheck className="h-4 w-4 text-primary" />
+                    {trackingFrozen ? "Resume tracking" : "Freeze tracking"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">{status}</p>
+              </div>
+
+              <div className="rounded-xl border border-primary/20 bg-primary/[0.06] p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Click To Mark</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                  {DEFAULT_LABELS.map((item) => {
+                    const point = points.find((candidate) => candidate.label === item.key);
+                    const active = selectedLabel === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setSelectedLabel(item.key)}
+                        className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold transition-colors ${
+                          active
+                            ? "border-primary bg-primary/15 text-foreground"
+                            : point?.lost
+                              ? "border-chart-3/50 bg-chart-3/10 text-foreground"
+                              : point
+                                ? "border-green-400/40 bg-green-400/10 text-foreground"
+                                : "border-border bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                        }`}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                          {item.label}
+                        </span>
+                        <span className="mt-1 block text-[10px] font-medium text-muted-foreground">
+                          {point ? (point.lost ? "Lost, reacquiring" : `${point.mode || "tracking"} · ${Math.round((point.confidence || 0) * 100)}%`) : "Not marked"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <button type="button" onClick={clearSelected} className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50">
+                    Clear selected
+                  </button>
+                  <button type="button" onClick={clearAll} className="inline-flex items-center justify-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-destructive/15">
+                    <RotateCcw className="h-4 w-4 text-destructive" />
+                    Clear all
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-muted/20 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Detection</p>
+                <div className="mt-3 space-y-3">
+                  {[
+                    ["threshold", "Threshold", 0, 255, 1],
+                    ["minArea", "Min area", 1, 500, 1],
+                    ["maxArea", "Max area", 100, 30000, 100],
+                    ["searchRadius", "Search radius", 20, 500, 5],
+                    ["lostTolerance", "Lost tolerance", 1, 100, 1],
+                    ["reacquireAfter", "Reacquire after", 0, 60, 1],
+                  ].map(([key, label, min, max, step]) => (
+                    <label key={key} className="block text-xs text-muted-foreground">
+                      <span className="flex justify-between gap-3">
+                        <span className="font-semibold uppercase tracking-wider">{label}</span>
+                        <span>{settings[key]}</span>
+                      </span>
+                      <input
+                        type="range"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={settings[key]}
+                        onChange={(event) => updateSetting(key, Number(event.target.value))}
+                        className="mt-1 w-full accent-primary"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={settings.mirror} onChange={(event) => updateSetting("mirror", event.target.checked)} className="h-4 w-4 accent-primary" />
+                    Mirror preview/tracking
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={settings.showCandidates} onChange={(event) => updateSetting("showCandidates", event.target.checked)} className="h-4 w-4 accent-primary" />
+                    Show debug candidates ({candidateCount})
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-muted/20 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local CSV</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <button type="button" onClick={() => setRecordCsv((value) => !value)} className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15">
+                    {recordCsv ? "Stop CSV" : "Start CSV"}
+                  </button>
+                  <button type="button" onClick={downloadCsv} disabled={!csvRows.length} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50 disabled:opacity-50">
+                    <Download className="h-4 w-4 text-primary" />
+                    Download
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">{csvRows.length} local row{csvRows.length === 1 ? "" : "s"} buffered. This is a manual export only.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">How to use:</span> place black-bordered silver dots on both big toes, forefeet, and heels. Select a marker button, click the dot in the big preview, then let the tracker follow it. If a dot disappears briefly, the tracker holds the last reliable neighborhood and tries to reacquire there before widening the search.
+            {allDefaultPointsSet ? <span className="ml-2 text-green-300">All six default foot markers are learned.</span> : null}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
