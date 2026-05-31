@@ -10,13 +10,19 @@ export function repairCharacterSplitParagraph(text) {
     singleCharLines / nonEmpty.length >= 0.65 &&
     shortLines / nonEmpty.length >= 0.85;
 
-  if (!looksCharacterSplit) return text;
+  if (!looksCharacterSplit) return repairDecimalSpacing(text);
 
   return nonEmpty
     .join("")
     .replace(/\s+/g, " ")
+    .replace(/(\d+)\.\s+(\d+)/g, "$1.$2")
     .replace(/([.!?])([A-Z])/g, "$1 $2")
     .trim();
+}
+
+export function repairDecimalSpacing(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/(\d+)\.\s+(\d+)(?=\s*(?:mm|cm|in|inch|inches|kg|lb|lbs|bpm|%|°|\b))/gi, "$1.$2");
 }
 
 export function repairAITextBlocks(value) {

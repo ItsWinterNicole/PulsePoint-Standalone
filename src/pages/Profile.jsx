@@ -294,6 +294,59 @@ function parseFindingBullets(text) {
     .filter(Boolean);
 }
 
+function toSecondPersonFinding(text, firstName = "") {
+  let value = String(text || "").trim();
+  const name = String(firstName || "").trim();
+  if (name) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    value = value
+      .replace(new RegExp(`\\b${escaped}[’']s\\b`, "gi"), "your")
+      .replace(new RegExp(`\\b${escaped}\\s+is\\b`, "gi"), "you are")
+      .replace(new RegExp(`\\b${escaped}\\s+has\\b`, "gi"), "you have")
+      .replace(new RegExp(`\\b${escaped}\\s+was\\b`, "gi"), "you were")
+      .replace(new RegExp(`\\b${escaped}\\s+reports\\b`, "gi"), "you report")
+      .replace(new RegExp(`\\b${escaped}\\s+describes\\b`, "gi"), "you describe")
+      .replace(new RegExp(`\\b${escaped}\\s+experiences\\b`, "gi"), "you experience")
+      .replace(new RegExp(`\\b${escaped}\\s+identifies\\b`, "gi"), "you identify")
+      .replace(new RegExp(`\\b${escaped}\\b`, "gi"), "you");
+  }
+
+  return value
+    .replace(/\bthe user[’']s\b/gi, "your")
+    .replace(/\bthe user\s+is\b/gi, "you are")
+    .replace(/\bthe user\s+has\b/gi, "you have")
+    .replace(/\bthe user\s+reports\b/gi, "you report")
+    .replace(/\bthe user\s+describes\b/gi, "you describe")
+    .replace(/\bthe user\b/gi, "you")
+    .replace(/\bhis or her\b/gi, "your")
+    .replace(/\bhis\/her\b/gi, "your")
+    .replace(/\bhis\b/gi, "your")
+    .replace(/\bher\b/gi, "your")
+    .replace(/\bhe has\b/gi, "you have")
+    .replace(/\bshe has\b/gi, "you have")
+    .replace(/\bhe is\b/gi, "you are")
+    .replace(/\bshe is\b/gi, "you are")
+    .replace(/\bhe\b/gi, "you")
+    .replace(/\bshe\b/gi, "you")
+    .replace(/\bhimself\b/gi, "yourself")
+    .replace(/\bherself\b/gi, "yourself")
+    .replace(/\bhim\b/gi, "you")
+    .replace(/\s+/g, " ")
+    .replace(/^your\b/, "Your")
+    .replace(/^you\b/, "You")
+    .trim();
+}
+
+function sourceLabelForProfileQaEntry(entry) {
+  if (entry.source === "imported_profile_notes") return "Imported";
+  if (entry.source === "profile_sarah_image_review") {
+    return entry.persistence_status === "review_candidate" || entry.needs_review
+      ? "Sarah review"
+      : "Sarah image review";
+  }
+  return "Auto-saved";
+}
+
 function parseProfileQaFindingsFromText(text) {
   const source = String(text || "");
   const matches = [...source.matchAll(/\[AI Interview\s*[—-]\s*([^\]]+)\]\s*([\s\S]*?)(?=\n\s*\[AI Interview\s*[—-]|\s*$)/g)];
@@ -380,10 +433,11 @@ function formatProfileQaTimestamp(entry) {
   }).format(new Date(parsed));
 }
 
-function buildProfileQaFindingCards(entries) {
+function buildProfileQaFindingCards(entries, firstName = "") {
   const seen = new Map();
   normalizeProfileQaFindings(entries).forEach((entry) => {
-    entry.findings.forEach((finding, index) => {
+    entry.findings.forEach((rawFinding, index) => {
+      const finding = toSecondPersonFinding(rawFinding, firstName);
       const key = normalizeFindingKey(finding);
       if (!key) return;
       const existing = seen.get(key);
@@ -402,13 +456,7 @@ function buildProfileQaFindingCards(entries) {
         needs_review: entry.needs_review,
         persistence_status: entry.persistence_status,
         image_count: entry.image_count,
-        sourceLabel: entry.source === "imported_profile_notes"
-          ? "Imported"
-          : entry.source === "profile_sarah_image_review"
-            ? entry.persistence_status === "review_candidate" || entry.needs_review
-              ? "Sarah review"
-              : "Sarah image review"
-            : "Auto-saved",
+        sourceLabel: sourceLabelForProfileQaEntry(entry),
         duplicateCount: 0,
         sources: [entry.id],
       });
@@ -419,6 +467,96 @@ function buildProfileQaFindingCards(entries) {
     const bTime = Date.parse(b.saved_at || b.date) || 0;
     return bTime - aTime;
   });
+}
+
+function buildRecentProfileQaFindings(entries, firstName = "", limit = 3) {
+  return normalizeProfileQaFindings(entries)
+    .flatMap((entry) => entry.findings.map((rawFinding, index) => ({
+      id: `${entry.id || "profile-qa"}-recent-${index}`,
+      finding: toSecondPersonFinding(rawFinding, firstName),
+      date: entry.date,
+      saved_at: entry.saved_at,
+      timestamp: formatProfileQaTimestamp(entry),
+      source: entry.source,
+      needs_review: entry.needs_review,
+      persistence_status: entry.persistence_status,
+      image_count: entry.image_count,
+      sourceLabel: sourceLabelForProfileQaEntry(entry),
+      entryId: entry.id,
+      order: index,
+    })))
+    .sort((a, b) => {
+      const aTime = Date.parse(a.saved_at || a.date) || 0;
+      const bTime = Date.parse(b.saved_at || b.date) || 0;
+      if (aTime !== bTime) return bTime - aTime;
+      return a.order - b.order;
+    })
+    .slice(0, limit);
+}
+
+function simpleHash(text) {
+  let hash = 0;
+  const source = String(text || "");
+  for (let i = 0; i < source.length; i++) {
+    hash = ((hash << 5) - hash) + source.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function extractImageReviewFindingCandidates(text, firstName = "") {
+  const source = String(text || "").replace(/\s+/g, " ").trim();
+  if (!source) return [];
+  const terms = /\b(visible|image|photo|anatom|foreskin|glans|frenulum|meatus|urethra|shaft|skin|retracted|catheter|foley|sleeve|device|marker|sticker|fit|position|angle|lighting|occlusion|review|observable|observed)\b/i;
+  const sentences = source
+    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) || [];
+  const candidates = sentences.filter((sentence) => terms.test(sentence)).slice(0, 4);
+  const fallback = candidates.length ? candidates : sentences.slice(0, 3);
+  return fallback
+    .map((sentence) => toSecondPersonFinding(sentence, firstName))
+    .filter(Boolean);
+}
+
+function backfillImageReviewFindingsFromChat(messages = [], existingEntries = [], firstName = "") {
+  if (!Array.isArray(messages) || !messages.length) return [];
+  const existingIds = new Set(existingEntries.map((entry) => entry.id).filter(Boolean));
+  const existingKeys = new Set(
+    existingEntries.flatMap((entry) => (entry.findings || []).map((finding) => normalizeFindingKey(toSecondPersonFinding(finding, firstName))))
+  );
+  const backfilled = [];
+  const now = Date.now();
+
+  messages.forEach((message, index) => {
+    if (message?.role !== "user" || !Array.isArray(message.imageAttachments) || !message.imageAttachments.length) return;
+    const replyIndex = messages.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate?.role !== "user" && String(candidate?.text || "").trim());
+    if (replyIndex < 0) return;
+    const reply = messages[replyIndex];
+    const findings = extractImageReviewFindingCandidates(reply.text, firstName);
+    const uniqueFindings = findings.filter((finding) => {
+      const key = normalizeFindingKey(finding);
+      return key && !existingKeys.has(key);
+    });
+    if (!uniqueFindings.length) return;
+
+    const id = `chat-image-review-${replyIndex}-${simpleHash(reply.text)}`;
+    if (existingIds.has(id)) return;
+    uniqueFindings.forEach((finding) => existingKeys.add(normalizeFindingKey(finding)));
+    backfilled.push({
+      id,
+      date: new Date(now - Math.max(0, messages.length - replyIndex) * 1000).toISOString().slice(0, 10),
+      source: "profile_sarah_image_review",
+      saved_at: new Date(now - Math.max(0, messages.length - replyIndex) * 1000).toISOString(),
+      needs_review: true,
+      persistence_status: "review_candidate",
+      structured_findings: [],
+      image_count: message.imageAttachments.length,
+      findings: uniqueFindings,
+    });
+  });
+
+  return backfilled;
 }
 
 export default function Profile() {
@@ -436,6 +574,11 @@ export default function Profile() {
     base44.auth.me().then((u) => {
       const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
       const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
+      const savedChatMessages = u.profile_chat_messages || [];
+      const imageReviewBackfills = backfillImageReviewFindingsFromChat(savedChatMessages, importedQaFindings, u.first_name);
+      const qaFindingsWithBackfills = imageReviewBackfills.length
+        ? normalizeProfileQaFindings([...imageReviewBackfills, ...importedQaFindings])
+        : importedQaFindings;
       setUser(u);
       setForm({
         first_name: u.first_name ?? "",
@@ -452,12 +595,15 @@ export default function Profile() {
         preferred_stimulation: u.preferred_stimulation ?? [],
         refractory_pattern: u.refractory_pattern ?? null,
         arousal_notes: richTextToCanonicalText(u.arousal_notes ?? ""),
-        profile_qa_findings: importedQaFindings,
+        profile_qa_findings: qaFindingsWithBackfills,
         anatomical_mechanical_profile: normalizeMechanicalProfile(u.anatomical_mechanical_profile),
       });
-      setChatMessages(u.profile_chat_messages || []);
-      if (!savedQaFindings.length && importedQaFindings.length) {
+      setChatMessages(savedChatMessages);
+      if (!savedQaFindings.length && importedQaFindings.length && !imageReviewBackfills.length) {
         base44.auth.updateMe({ profile_qa_findings: importedQaFindings }).catch(() => {});
+      }
+      if (imageReviewBackfills.length) {
+        base44.auth.updateMe({ profile_qa_findings: qaFindingsWithBackfills }).catch(() => {});
       }
     });
   }, []);
@@ -517,12 +663,14 @@ export default function Profile() {
   const estimatedMaxHR = form.age ? 220 - form.age : null;
   const effectiveMaxHR = form.max_hr || estimatedMaxHR;
   const profileQaFindings = normalizeProfileQaFindings(form.profile_qa_findings);
-  const profileQaFindingCards = buildProfileQaFindingCards(profileQaFindings);
+  const profileQaFindingCards = buildProfileQaFindingCards(profileQaFindings, form.first_name);
+  const recentProfileQaFindings = buildRecentProfileQaFindings(profileQaFindings, form.first_name, 3);
   const latestQaFinding = profileQaFindings[0] || null;
 
   const saveProfileQaFinding = async (findingsText, meta = {}) => {
     const entry = makeProfileQaEntry(findingsText, meta);
     if (!entry.findings.length) return;
+    entry.findings = entry.findings.map((finding) => toSecondPersonFinding(finding, form.first_name));
     const merged = normalizeProfileQaFindings([entry, ...(form.profile_qa_findings || [])]);
     setForm((f) => ({ ...f, profile_qa_findings: merged }));
     await base44.auth.updateMe({ profile_qa_findings: merged });
@@ -1005,7 +1153,7 @@ export default function Profile() {
         savedMessages={chatMessages}
         savedNotes={form.arousal_notes}
         latestSavedFinding={latestQaFinding}
-        recentSavedFindings={profileQaFindingCards.slice(0, 3)}
+        recentSavedFindings={recentProfileQaFindings}
         onSaveMessages={async (msgs) => {
           setChatMessages(msgs);
           await base44.auth.updateMe({ profile_chat_messages: msgs });

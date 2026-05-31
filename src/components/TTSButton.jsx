@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { Play, Pause, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
+import { repairDecimalSpacing } from "@/utils/aiTextRepair";
 
 const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
@@ -349,7 +350,7 @@ export function formatTimeAsWords(time) {
 
 // Clean text for natural speech
 export function cleanTextForSpeech(text) {
-  return text
+  return repairDecimalSpacing(text)
     .replace(/•/g, ". ")
     .replace(/·/g, ". ")
     .replace(/–|—/g, ", ")

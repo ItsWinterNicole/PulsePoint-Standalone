@@ -440,7 +440,7 @@ export default function AIChat({
     const groundingContext = buildAIGroundingContext(userProfile);
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them.\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
+      prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
     });
     return typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
   };
@@ -579,6 +579,7 @@ You are Sarah inside PulsePoint. The user may provide explicit adult anatomical 
 - Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.
 - Focus on anatomy, physiology, device fit, marker/sticker placement, catheter/sleeve/e-stim/suction interaction, posture/positioning, and evidence-aware profile/session updates.
 - Use direct second-person language and be respectful, warm, and precise.
+- In chatResponse and every findingText, use "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".
 - If you make any concrete visible observation that may matter later, include it in findings. Use persistTo "profile", "session", or "both" for durable evidence; use persistTo "none" with needsUserConfirmation true for cautious review candidates.
 - Leave findings empty only if the image is unusable or has no useful observable information.
 

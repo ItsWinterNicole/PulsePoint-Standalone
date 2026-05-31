@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Play, Pause, Square, Download, Settings, Copy, Check } from "lucide-react";
+import { Play, Pause, Square, Download, Settings, Copy, Check, Minimize2, Maximize2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   cleanTextForSpeech,
@@ -18,7 +18,7 @@ import { buildAudioExportFilename } from "@/utils/exportFilenames";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
+import { repairCharacterSplitParagraph, repairDecimalSpacing } from "@/utils/aiTextRepair";
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
   if (signal?.aborted) {
@@ -237,6 +237,7 @@ async function callTTSWithRetries(payload, attempts = 7, signal) {
 
 const getChunkText = (chunk) => (typeof chunk === "string" ? chunk : chunk?.text || "");
 const getChunkContext = (chunk) => (typeof chunk === "string" ? "" : chunk?.previousContext || "");
+const getChunkStatusKey = (chunk) => `${getChunkContext(chunk)}|${getChunkText(chunk)}`;
 
 function readAscii(bytes, offset, length) {
   let out = "";
@@ -330,6 +331,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [completedRender, setCompletedRender] = useState(null);
   const [lastDownloadRecord, setLastDownloadRecord] = useState(null);
   const [savedServerExport, setSavedServerExport] = useState(null);
+  const [audioCacheStatus, setAudioCacheStatus] = useState({ ready: 0, total: 0, fetching: 0 });
+  const [cacheStatusMinimized, setCacheStatusMinimized] = useState(false);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
   const [copied, setCopied] = useState(false);
 
@@ -344,12 +347,18 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const runtimeRef = useRef(getTTSRuntime(ttsSettings));
   const playbackAbortRef = useRef(null);
   const prefetchAbortRef = useRef(null);
+  const wakeLockRef = useRef(null);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
   // Prefetch cache: chunk text → decoded AudioBuffer (keyed by gen+chunk for staleness)
   const prefetchCacheRef = useRef(new Map()); // key: `${gen}:${chunk}` → Promise<AudioBuffer>
+  const cacheReadyRef = useRef(new Set());
+  const cacheFetchingRef = useRef(new Set());
+  const cacheTotalRef = useRef(0);
   const playbackTimeRef = useRef(0); // track playback time in seconds
   const wordRefs = useRef(new Map()); // map of word element refs for auto-scroll
+  const paragraphRefs = useRef(new Map());
+  const lastAutoScrollKeyRef = useRef("");
   const updateIntervalRef = useRef(null); // track update interval to clear it
   const renderProgressTimerRef = useRef(null);
   const copyContentRef = useRef(null);
@@ -401,6 +410,25 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   }, []);
 
   const setS = (s) => { stateRef.current = s; setState(s); };
+  const publishAudioCacheStatus = () => {
+    setAudioCacheStatus({
+      ready: Math.min(cacheReadyRef.current.size, cacheTotalRef.current),
+      total: cacheTotalRef.current,
+      fetching: cacheFetchingRef.current.size,
+    });
+  };
+  const markCacheFetching = (key, fetching) => {
+    if (!key) return;
+    if (fetching) cacheFetchingRef.current.add(key);
+    else cacheFetchingRef.current.delete(key);
+    publishAudioCacheStatus();
+  };
+  const markCacheReady = (key) => {
+    if (!key || cacheReadyRef.current.has(key)) return;
+    cacheReadyRef.current.add(key);
+    cacheFetchingRef.current.delete(key);
+    publishAudioCacheStatus();
+  };
   const setCP = (i, { resetPlayback = true } = {}) => {
     currentParaRef.current = i;
     setCurrentPara(i);
@@ -441,6 +469,24 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
   };
 
+  const releaseWakeLock = async () => {
+    const wakeLock = wakeLockRef.current;
+    wakeLockRef.current = null;
+    try { await wakeLock?.release?.(); } catch {}
+  };
+
+  const requestWakeLock = async () => {
+    if (!("wakeLock" in navigator) || document.hidden || wakeLockRef.current) return;
+    try {
+      wakeLockRef.current = await navigator.wakeLock.request("screen");
+      wakeLockRef.current.addEventListener?.("release", () => {
+        wakeLockRef.current = null;
+      });
+    } catch {
+      // Auto-scroll still provides a visible playback nudge on browsers without wake lock support.
+    }
+  };
+
   const stop = ({ clearStatus = true } = {}) => {
     genRef.current++; // invalidate any in-flight async chain
     abortPlaybackFetch();
@@ -450,6 +496,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
     prefetchCacheRef.current.clear();
+    cacheReadyRef.current = new Set();
+    cacheFetchingRef.current = new Set();
+    cacheTotalRef.current = 0;
+    publishAudioCacheStatus();
     if (updateIntervalRef.current) {
       clearInterval(updateIntervalRef.current);
       updateIntervalRef.current = null;
@@ -458,6 +508,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       clearInterval(renderProgressTimerRef.current);
       renderProgressTimerRef.current = null;
     }
+    releaseWakeLock();
     setBufferingPara(-1);
     if (clearStatus) setRequestStatus(null);
     setS("idle");
@@ -479,6 +530,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       window.removeEventListener("blur", cancelPrefetchOnFocusLoss);
     };
   }, []);
+
+  useEffect(() => {
+    if (state === "playing") {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+    return () => {
+      releaseWakeLock();
+    };
+  }, [state]);
 
   const playNextChunk = async (gen) => {
     if (gen !== genRef.current) return; // stale call — a new startFrom has taken over
@@ -511,12 +573,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const fetchDecoded = async (chunk, gen, { speculative = false } = {}) => {
     const chunkText = getChunkText(chunk);
     const previousContext = getChunkContext(chunk);
+    const statusKey = getChunkStatusKey(chunk);
     const cacheKey = `${gen}:${previousContext}:${chunkText}`;
     if (prefetchCacheRef.current.has(cacheKey)) {
       return prefetchCacheRef.current.get(cacheKey);
     }
     const promise = (async () => {
       try {
+        markCacheFetching(statusKey, true);
         // Check IndexedDB persistent cache first
         const runtime = runtimeRef.current;
         const instructions = buildTTSInstructions(runtime.instructions, previousContext);
@@ -551,8 +615,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           }
         }
 
+        markCacheReady(statusKey);
         return mp3Buffer.slice(0);
       } catch (err) {
+        markCacheFetching(statusKey, false);
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
         if (isAbortError(err) || gen !== genRef.current) throw err;
         setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
@@ -647,7 +713,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         return;
       }
       playbackTimeRef.current = Math.max(0, audio.currentTime || 0);
-      updateWordHighlight();
+      updateWordHighlight(audio.duration);
     }, 50);
     
     try {
@@ -665,7 +731,24 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     prefetchNext(gen);
   };
 
-  const updateWordHighlight = () => {
+  const scrollActiveReadingArea = (paraIdx, wordIdx = -1, sentenceIdx = -1) => {
+    const scrollKey = `${paraIdx}:${wordIdx}:${sentenceIdx}`;
+    if (scrollKey === lastAutoScrollKeyRef.current) return;
+    lastAutoScrollKeyRef.current = scrollKey;
+
+    requestAnimationFrame(() => {
+      const wordKey = `word-${paraIdx}-${wordIdx}`;
+      const target = wordRefs.current.get(wordKey) || paragraphRefs.current.get(paraIdx);
+      if (!target) return;
+      try {
+        target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+      } catch {
+        try { target.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" }); } catch {}
+      }
+    });
+  };
+
+  const updateWordHighlight = (audioDuration = 0) => {
     const chunk = currentChunkRef.current;
     const chunkText = getChunkText(chunk);
     if (!chunkText) return;
@@ -673,8 +756,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const words = chunkText.split(/\s+/).filter(Boolean);
     if (!words.length) return;
     
-    // Estimate word index based on playback time (~120 WPM = 2 words/sec)
-    const estimatedWordIdx = Math.floor(playbackTimeRef.current * 2);
+    const duration = Number.isFinite(audioDuration) && audioDuration > 0 ? audioDuration : 0;
+    const playbackProgress = duration ? Math.min(0.995, Math.max(0, playbackTimeRef.current / duration)) : null;
+    const estimatedWordIdx = playbackProgress == null
+      ? Math.floor(playbackTimeRef.current * 2.8)
+      : Math.floor(playbackProgress * words.length);
     const boundedIdx = Math.max(0, Math.min(estimatedWordIdx, words.length - 1));
     const part = chunk?.parts?.find((item) => boundedIdx >= item.startWord && boundedIdx <= item.endWord);
     const paraIdx = part?.paraIdx ?? currentParaRef.current;
@@ -686,19 +772,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     if (paraIdx !== currentParaRef.current) setCP(paraIdx, { resetPlayback: false });
     setCurrentWordIdx(paraWordIdx);
     setCurrentSentenceIdx(sentenceIdx);
-    
-    // Auto-scroll using requestAnimationFrame for better mobile performance
-    requestAnimationFrame(() => {
-      const wordKey = `word-${paraIdx}-${paraWordIdx}`;
-      const wordEl = wordRefs.current.get(wordKey);
-      if (wordEl) {
-        try {
-          wordEl.scrollIntoView({ behavior: "auto", block: "center" });
-        } catch {
-          // Silently handle scroll errors
-        }
-      }
-    });
+    scrollActiveReadingArea(paraIdx, paraWordIdx, sentenceIdx);
   };
 
   const startFrom = async (paraIdx, sentenceIdx = 0) => {
@@ -714,7 +788,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
-    remainingParasRef.current = buildSpeechChunks(readableParagraphs, paraIdx, sentenceIdx);
+    const speechChunks = buildSpeechChunks(readableParagraphs, paraIdx, sentenceIdx);
+    remainingParasRef.current = speechChunks;
+    cacheReadyRef.current = new Set();
+    cacheFetchingRef.current = new Set();
+    cacheTotalRef.current = speechChunks.length;
+    publishAudioCacheStatus();
+    setCacheStatusMinimized(false);
     setCP(paraIdx);
     setCurrentSentenceIdx(sentenceIdx > 0 ? sentenceIdx : -1);
     setS("playing");
@@ -1055,6 +1135,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     completedRender.sourceGeneratedAt !== sourceGeneratedAt
   );
   const showFloatingFetchStatus = requestStatus?.type === "fetching" && !downloading;
+  const cachePercent = audioCacheStatus.total
+    ? Math.round((audioCacheStatus.ready / audioCacheStatus.total) * 100)
+    : 0;
+  const showAudioCacheMonitor = isActive && audioCacheStatus.total > 0;
 
   const downloadAudio = async () => {
     if (savedServerExport?.file_url) {
@@ -1169,11 +1253,39 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   return (
     <>
-    {showFloatingFetchStatus && (
+    {showAudioCacheMonitor && cacheStatusMinimized && (
+      <button
+        type="button"
+        onClick={() => setCacheStatusMinimized(false)}
+        className="fixed right-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-l-xl border border-primary/25 bg-card/95 px-2 py-3 text-[10px] font-semibold uppercase tracking-wider text-primary shadow-2xl backdrop-blur"
+        title="Show audio cache status"
+      >
+        <Maximize2 className="h-3.5 w-3.5" />
+        {cachePercent}%
+      </button>
+    )}
+    {showAudioCacheMonitor && !cacheStatusMinimized && (
       <div className="fixed bottom-24 left-3 right-3 z-50 rounded-xl border border-primary/25 bg-card/95 px-3 py-2 text-xs text-primary shadow-2xl backdrop-blur sm:left-auto sm:w-80">
-        <div className="flex items-center gap-2">
-          <span className="h-3 w-3 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />
-          <span className="min-w-0 flex-1 truncate">{requestStatus.msg || "Fetching audio..."}</span>
+        <div className="mb-2 flex items-center gap-2">
+          {showFloatingFetchStatus && <span className="h-3 w-3 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />}
+          <span className="min-w-0 flex-1 truncate">
+            {showFloatingFetchStatus ? requestStatus.msg || "Fetching audio..." : "Audio cache ready"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCacheStatusMinimized(true)}
+            className="rounded-md p-1 text-primary/80 hover:bg-primary/10 hover:text-primary"
+            title="Minimize audio cache status"
+          >
+            <Minimize2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-primary/15">
+          <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${cachePercent}%` }} />
+        </div>
+        <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+          <span>{audioCacheStatus.ready} / {audioCacheStatus.total} chunks cached</span>
+          <span>{audioCacheStatus.fetching ? `${audioCacheStatus.fetching} fetching` : "Playback active"}</span>
         </div>
       </div>
     )}
@@ -1294,7 +1406,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       {/* Paragraphs */}
       <div ref={copyContentRef} className="ai-output-copy-surface space-y-1 min-w-0 w-full max-w-full">
       {readableParagraphs.map((text, paraIdx) => {
-        const displayText = fmtSecondsInText(text);
+        const displayText = repairDecimalSpacing(fmtSecondsInText(text));
         const isPlaying = currentPara === paraIdx && state === "playing";
         const isBuffering = bufferingPara === paraIdx && state !== "idle" && state !== "paused";
         const words = displayText.split(/\s+/).filter(Boolean);
@@ -1303,6 +1415,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           return (
             <div
               key={paraIdx}
+              ref={(el) => {
+                if (el) paragraphRefs.current.set(paraIdx, el);
+                else paragraphRefs.current.delete(paraIdx);
+              }}
               className="cursor-pointer"
               onClick={() => startFrom(paraIdx)}
             >
@@ -1314,6 +1430,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         return (
           <p
             key={paraIdx}
+            ref={(el) => {
+              if (el) paragraphRefs.current.set(paraIdx, el);
+              else paragraphRefs.current.delete(paraIdx);
+            }}
             onClick={() => startFrom(paraIdx)}
             className={[
               "text-sm leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 flex items-center gap-2 flex-wrap",
