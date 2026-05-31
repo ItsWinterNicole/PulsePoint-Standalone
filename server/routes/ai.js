@@ -75,7 +75,7 @@ aiRouter.post('/invoke', async (req, res) => {
       return res.status(500).json({ error: 'Missing ANTHROPIC_API_KEY' });
     }
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const { prompt, response_json_schema, model, add_context_from_internet, ...rest } = req.body || {};
+    const { prompt, response_json_schema, model, add_context_from_internet, images = [], ...rest } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
     const wantsJson = !!response_json_schema;
@@ -84,11 +84,31 @@ aiRouter.post('/invoke', async (req, res) => {
       ? `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(response_json_schema, null, 2)}`
       : '';
 
+    const imageBlocks = Array.isArray(images)
+      ? images.slice(0, 5).map((image) => {
+        const mediaType = image?.media_type || image?.mimeType || image?.mime_type;
+        const rawData = String(image?.data || image?.base64 || '').replace(/^data:[^;]+;base64,/, '');
+        if (!mediaType || !rawData) return null;
+        return {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mediaType,
+            data: rawData,
+          },
+        };
+      }).filter(Boolean)
+      : [];
+
+    const content = imageBlocks.length
+      ? [{ type: 'text', text: `${prompt}${jsonInstruction}` }, ...imageBlocks]
+      : `${prompt}${jsonInstruction}`;
+
     const msg = await createMessageWithRetries(anthropic, {
       model: modelName,
       max_tokens: rest.max_tokens || Number(process.env.ANTHROPIC_MAX_TOKENS || 8192),
       temperature: rest.temperature ?? 0.3,
-      messages: [{ role: 'user', content: `${prompt}${jsonInstruction}` }],
+      messages: [{ role: 'user', content }],
     }, rest.attempts || Number(process.env.ANTHROPIC_ATTEMPTS || 3));
 
     const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';

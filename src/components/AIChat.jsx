@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2 } from "lucide-react";
+import { useCallback, useState, useRef, useEffect } from "react";
+import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -24,6 +24,52 @@ const SESSION_CATEGORIES = [
 ];
 
 const PROFILE_MECHANICAL_RULE = `STRUCTURED ANATOMICAL / FUNCTIONAL PROFILE RULE: If populated profile fields provide erect dimensions, glans or foreskin context, meatal or urethral dimensions, accommodation or device-fit observations, or functional response observations, you may use them to deepen A&P interpretation of the person's reported findings when analytically relevant. Connect dimensions to supported stimulation mechanics, fit, pressure distribution, sensitivity, device interaction, or repeated response patterns only when the available findings support that link. Do not force mention of measurements, and do not turn dimensional data into unsupported causal claims.`;
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const MAX_IMAGE_COUNT = 5;
+const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
+
+function makeId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Unable to read image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function stripDataUrl(dataUrl) {
+  return String(dataUrl || "").replace(/^data:[^;]+;base64,/, "");
+}
+
+function normalizeAIImageResult(result) {
+  if (typeof result === "string") return { chatResponse: result, findings: [], limitations: [], followUpQuestions: [] };
+  return {
+    chatResponse: String(result?.chatResponse || result?.response || "").trim(),
+    findings: Array.isArray(result?.findings) ? result.findings : [],
+    limitations: Array.isArray(result?.limitations) ? result.limitations : [],
+    followUpQuestions: Array.isArray(result?.followUpQuestions) ? result.followUpQuestions : [],
+  };
+}
+
+function findingsToBullets(findings = [], targetMode = "profile") {
+  return findings
+    .filter((finding) => {
+      const persistTo = finding?.persistTo || "none";
+      return persistTo === targetMode || persistTo === "both";
+    })
+    .map((finding) => {
+      const title = finding?.title ? `${finding.title}: ` : "";
+      const text = finding?.findingText || finding?.text || "";
+      const confidence = finding?.confidence ? ` (${finding.confidence} confidence${finding?.needsUserConfirmation ? ", review suggested" : ""})` : "";
+      return text ? `• ${title}${text}${confidence}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 export default function AIChat({
   mode = "session",
@@ -32,6 +78,7 @@ export default function AIChat({
   savedMessages,
   savedNotes,
   latestSavedFinding,
+  scopeId,
   onSaveMessages,
   onSaveNotes,
 }) {
@@ -44,25 +91,61 @@ export default function AIChat({
   const [savingFindings, setSavingFindings] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [voiceArmed, setVoiceArmed] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [speakingIdx, setSpeakingIdx] = useState(null);
+  const [selectedImages, setSelectedImages] = useState([]);
+  const [imageError, setImageError] = useState("");
+  const [uploadingImages, setUploadingImages] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const imageInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const micStreamRef = useRef(null);
+  const speechDetectedRef = useRef(false);
+  const silenceStartRef = useRef(null);
+  const voiceArmedRef = useRef(false);
+  const vadFrameRef = useRef(null);
+  const audioContextRef = useRef(null);
   const audioRef = useRef(null);
   const audioUrlCacheRef = useRef(new Map());
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    setMessages(savedMessages || []);
+  }, [savedMessages]);
+
+  const scrollToBottom = useCallback((behavior = "smooth") => {
+    requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior, block: "end" }));
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom("smooth");
+  }, [messages, loading, scrollToBottom]);
+
+  useEffect(() => {
+    if (open || fullScreen) scrollToBottom("auto");
+  }, [open, fullScreen, scrollToBottom]);
+
+  useEffect(() => {
+    if (!voiceArmed || recording || transcribing || loading) return undefined;
+    const timer = window.setTimeout(() => {
+      if (voiceArmedRef.current && !recording && !transcribing && !loading) {
+        startRecording(true).catch(() => disableVoiceMode());
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [loading, recording, transcribing, voiceArmed]);
 
   useEffect(() => () => {
     audioUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
     audioUrlCacheRef.current.clear();
+    if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    audioContextRef.current?.close?.();
   }, []);
 
   useEffect(() => {
@@ -139,6 +222,76 @@ export default function AIChat({
     audioUrlCacheRef.current.clear();
   };
 
+  const handleImageFiles = async (files) => {
+    const incoming = Array.from(files || []);
+    if (!incoming.length) return;
+    setImageError("");
+    const slots = MAX_IMAGE_COUNT - selectedImages.length;
+    if (slots <= 0) {
+      setImageError(`Attach up to ${MAX_IMAGE_COUNT} images per message.`);
+      return;
+    }
+    const accepted = [];
+    for (const file of incoming.slice(0, slots)) {
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        setImageError("Images must be JPG, PNG, or WebP.");
+        continue;
+      }
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        setImageError("Each image must be 8 MB or smaller.");
+        continue;
+      }
+      const dataUrl = await fileToDataUrl(file);
+      accepted.push({
+        id: makeId("pending-image"),
+        file,
+        filename: file.name,
+        mimeType: file.type,
+        sizeBytes: file.size,
+        previewUrl: dataUrl,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    setSelectedImages((prev) => [...prev, ...accepted].slice(0, MAX_IMAGE_COUNT));
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
+  const removeSelectedImage = (id) => {
+    setSelectedImages((prev) => prev.filter((image) => image.id !== id));
+  };
+
+  const uploadSelectedImages = async () => {
+    if (!selectedImages.length) return { metadata: [], aiImages: [] };
+    setUploadingImages(true);
+    const uploaded = [];
+    const aiImages = [];
+    try {
+      for (const image of selectedImages) {
+        const upload = await base44.integrations.Core.UploadFile({ file: image.file });
+        uploaded.push({
+          id: makeId("image"),
+          filename: image.filename,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          storagePath: upload?.file_url || upload?.url || "",
+          previewUrl: upload?.file_url || upload?.url || image.previewUrl,
+          createdAt: image.createdAt,
+          scope: mode,
+          profileId: mode === "profile" ? scopeId || userProfile?.id || null : null,
+          sessionId: mode === "session" ? scopeId || null : null,
+        });
+        aiImages.push({
+          filename: image.filename,
+          media_type: image.mimeType,
+          data: stripDataUrl(image.previewUrl),
+        });
+      }
+      return { metadata: uploaded, aiImages };
+    } finally {
+      setUploadingImages(false);
+    }
+  };
+
   const WHISPER_PROMPT =
     "Session log note. Gentle strokes on the glans penis. Foreskin partially retracted. " +
     "Stimulation paused. Perineum pressure applied. Pelvic floor contraction. " +
@@ -146,8 +299,70 @@ export default function AIChat({
     "Edging — arousal near climax. Frenulum contact. Prostate stimulation. " +
     "Ejaculation. Refractory period. Buildup plateau. Involuntary spasm. Discomfort noted.";
 
-  const startRecording = async () => {
+  const stopVad = () => {
+    if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
+    vadFrameRef.current = null;
+    audioContextRef.current?.close?.().catch(() => {});
+    audioContextRef.current = null;
+  };
+
+  const stopMicStream = () => {
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+  };
+
+  const disableVoiceMode = () => {
+    voiceArmedRef.current = false;
+    setVoiceArmed(false);
+    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+    stopVad();
+    stopMicStream();
+    setRecording(false);
+  };
+
+  const startVad = (stream) => {
+    stopVad();
+    speechDetectedRef.current = false;
+    silenceStartRef.current = null;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const audioContext = new AudioContextClass();
+    audioContextRef.current = audioContext;
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const tick = () => {
+      analyser.getByteTimeDomainData(data);
+      let total = 0;
+      for (let i = 0; i < data.length; i += 1) {
+        const centered = (data[i] - 128) / 128;
+        total += centered * centered;
+      }
+      const rms = Math.sqrt(total / data.length);
+      const now = Date.now();
+      if (rms > 0.035) {
+        speechDetectedRef.current = true;
+        silenceStartRef.current = null;
+      } else if (speechDetectedRef.current) {
+        if (!silenceStartRef.current) silenceStartRef.current = now;
+        if (now - silenceStartRef.current > 2400 && mediaRecorderRef.current?.state === "recording") {
+          mediaRecorderRef.current.stop();
+          return;
+        }
+      }
+      vadFrameRef.current = requestAnimationFrame(tick);
+    };
+    vadFrameRef.current = requestAnimationFrame(tick);
+  };
+
+  const startRecording = async (keepArmed = true) => {
+    if (recording || transcribing || loading) return;
+    voiceArmedRef.current = keepArmed;
+    setVoiceArmed(keepArmed);
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStreamRef.current = stream;
     audioChunksRef.current = [];
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
@@ -156,7 +371,10 @@ export default function AIChat({
     mediaRecorderRef.current = mr;
     mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
     mr.onstop = async () => {
+      stopVad();
       stream.getTracks().forEach((t) => t.stop());
+      if (micStreamRef.current === stream) micStreamRef.current = null;
+      setRecording(false);
       setTranscribing(true);
       const blob = new Blob(audioChunksRef.current, { type: mimeType });
       const ab = await blob.arrayBuffer();
@@ -165,18 +383,31 @@ export default function AIChat({
       for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
       const base64 = btoa(bin);
       const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: mimeType, prompt: WHISPER_PROMPT });
-      const text = res.data?.text?.trim() || "";
-      if (text) setInput((prev) => (prev ? prev + " " + text : text));
+      const rawText = res.data?.text?.trim() || "";
+      const stopRequested = /(?:^|[\s.,!?;:])(stop|end)[\s.!?]*$/i.test(rawText);
+      const text = rawText.replace(/(?:^|[\s.,!?;:])(stop|end)[\s.!?]*$/i, "").trim();
+      if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
       setTranscribing(false);
       setTimeout(() => inputRef.current?.focus(), 100);
+      if (stopRequested) {
+        voiceArmedRef.current = false;
+        setVoiceArmed(false);
+        return;
+      }
+      if (voiceArmedRef.current) {
+        window.setTimeout(() => {
+          if (voiceArmedRef.current && !loading) startRecording(true).catch(() => disableVoiceMode());
+        }, 550);
+      }
     };
     mr.start();
     setRecording(true);
+    startVad(stream);
   };
 
   const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    setRecording(false);
+    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+    else disableVoiceMode();
   };
 
 
@@ -220,16 +451,46 @@ export default function AIChat({
     setTimeout(() => setSavedFeedback(false), 3000);
   };
 
+  const persistStructuredImageFindings = async (findings, finalMessages) => {
+    const bullets = findingsToBullets(findings, mode);
+    if (!bullets) return;
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const merged = mode === "profile" ? bullets : `${savedNotes || ""}\n\n[Sarah Image Review — ${timestamp}]\n${bullets}`;
+    await onSaveNotes?.(merged, {
+      date: timestamp,
+      source: mode === "profile" ? "profile_sarah_image_review" : "session_sarah_image_review",
+      conversation: finalMessages,
+      structured_findings: findings,
+      needs_review: findings.some((finding) => finding?.needsUserConfirmation),
+    });
+    setSavedFeedback(true);
+    setTimeout(() => setSavedFeedback(false), 3000);
+  };
+
   const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = { role: "user", text: input.trim() };
+    if ((!input.trim() && !selectedImages.length) || loading || uploadingImages) return;
+    const text = input.trim();
+    setLoading(true);
+    setImageError("");
+    let imagePayload = { metadata: [], aiImages: [] };
+    try {
+      imagePayload = await uploadSelectedImages();
+    } catch (error) {
+      setLoading(false);
+      setImageError(error.message || "Image upload failed.");
+      return;
+    }
+    const userMsg = { role: "user", text: text || "Please review the attached image(s).", imageAttachments: imagePayload.metadata };
     const updated = [...messages, userMsg];
     setMessages(updated);
     onSaveMessages?.(updated);
     setInput("");
-    setLoading(true);
+    setSelectedImages([]);
 
-    const history = updated.map((m) => `${m.role === "user" ? "User" : "AI"}: ${m.text}`).join("\n");
+    const history = updated.map((m) => {
+      const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
+      return `${m.role === "user" ? "User" : "AI"}: ${m.text}${attachmentLine}`;
+    }).join("\n");
 
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
@@ -289,11 +550,50 @@ ${QUESTION_QUALITY_RULE}
 ${ANATOMY_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
 
+    const imageReviewPrompt = imagePayload.aiImages.length ? `SARAH IMAGE REVIEW MODE:
+You are Sarah inside PulsePoint. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
+- Do not shame, moralize, flirt, rate attractiveness, or write erotic commentary.
+- Separate what is directly visible in the image from what is inferred from profile/session history.
+- Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.
+- Focus on anatomy, physiology, device fit, marker/sticker placement, catheter/sleeve/e-stim/suction interaction, posture/positioning, and evidence-aware profile/session updates.
+- Use direct second-person language and be respectful, warm, and precise.
+
+Return a conversational answer plus structured findings for review/persistence.` : "";
+
+    const imageSchema = {
+      type: "object",
+      properties: {
+        chatResponse: { type: "string" },
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              category: { type: "string", enum: ["anatomy", "device_fit", "positioning", "marker_tracking", "physiology", "session_context", "other"] },
+              findingText: { type: "string" },
+              confidence: { type: "string", enum: ["low", "moderate", "high"] },
+              persistTo: { type: "string", enum: ["profile", "session", "both", "none"] },
+              needsUserConfirmation: { type: "boolean" },
+            },
+            required: ["title", "category", "findingText", "confidence", "persistTo", "needsUserConfirmation"],
+          },
+        },
+        limitations: { type: "array", items: { type: "string" } },
+        followUpQuestions: { type: "array", items: { type: "string" } },
+      },
+      required: ["chatResponse", "findings", "limitations", "followUpQuestions"],
+    };
+
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${systemPrompt}${profileMechanicalContext}\n\n${groundingContext}\n\nSession data:\n${context}\n\nConversation:\n${history}\n\nRespond now as the AI:`,
+      prompt: `${imageReviewPrompt || systemPrompt}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
     });
 
-    const reply = typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
+    const normalized = imagePayload.aiImages.length ? normalizeAIImageResult(res) : null;
+    const reply = imagePayload.aiImages.length
+      ? normalized.chatResponse
+      : typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
     const aiMsg = { role: "assistant", text: reply };
     const finalMessages = [...updated, aiMsg];
     setMessages(finalMessages);
@@ -301,7 +601,9 @@ No affirmations or pleasantries. 2–3 sentences.`;
     setLoading(false);
     const newIdx = finalMessages.length - 1;
     if (ttsEnabled) speakText(reply, newIdx);
-    if (mode === "profile") {
+    if (imagePayload.aiImages.length) {
+      persistStructuredImageFindings(normalized.findings, finalMessages).catch(() => {});
+    } else if (mode === "profile") {
       persistFindings(finalMessages).catch(() => {
         setSavingFindings(false);
       });
@@ -323,8 +625,8 @@ No affirmations or pleasantries. 2–3 sentences.`;
     ? "flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-5"
     : "p-3 space-y-3";
   const threadClass = fullScreen
-    ? "flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto border-t border-border px-1 pt-3 sm:px-3"
-    : "space-y-2 max-h-80 overflow-y-auto pr-1 border-t border-border pt-2";
+    ? "flex min-h-0 flex-1 basis-0 flex-col gap-2 overflow-y-auto border-t border-border px-1 pt-3 sm:px-3"
+    : "min-h-80 max-h-80 space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
   const messageClass = (role) => `group relative rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm ${
     fullScreen ? "max-w-[min(78%,52rem)] sm:text-[15px]" : "max-w-[85%]"
   } ${
@@ -333,11 +635,94 @@ No affirmations or pleasantries. 2–3 sentences.`;
       : "bg-muted/70 text-foreground rounded-bl-md cursor-pointer"
   }`;
   const composerClass = fullScreen
-    ? "sticky bottom-0 mt-auto flex items-end gap-2 border-t border-border bg-background/95 px-1 py-3 sm:px-3"
-    : "flex gap-2 items-end sticky bottom-0 bg-white dark:bg-slate-900 pt-2";
+    ? "sticky bottom-0 mt-auto space-y-2 border-t border-border bg-background/95 px-1 py-3 sm:px-3"
+    : "sticky bottom-0 space-y-2 bg-white pt-2 dark:bg-slate-900";
   const textareaClass = fullScreen
-    ? "min-h-24 flex-1 resize-none rounded-2xl border border-border bg-muted/30 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
-    : "flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 resize-none";
+    ? "min-h-24 w-full resize-none rounded-2xl border border-border bg-muted/30 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
+    : "w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50";
+  const sendDisabled = (!input.trim() && !selectedImages.length) || loading || uploadingImages;
+
+  const renderSelectedImages = () => selectedImages.length ? (
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+      {selectedImages.map((image) => (
+        <div key={image.id} className="relative overflow-hidden rounded-lg border border-border bg-muted/30">
+          <img src={image.previewUrl} alt={image.filename} className="aspect-square w-full object-cover" />
+          <button
+            type="button"
+            onClick={() => removeSelectedImage(image.id)}
+            className="absolute right-1 top-1 rounded-full bg-black/70 p-1 text-white hover:bg-black"
+            title="Remove image"
+          >
+            <X className="h-3 w-3" />
+          </button>
+          <p className="truncate px-1.5 py-1 text-[10px] text-muted-foreground">{image.filename}</p>
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  const renderMessageImages = (attachments = []) => attachments?.length ? (
+    <div className="mb-2 grid grid-cols-2 gap-2">
+      {attachments.map((image) => (
+        <a
+          key={image.id || image.storagePath || image.previewUrl}
+          href={image.previewUrl || image.storagePath}
+          target="_blank"
+          rel="noreferrer"
+          className="block overflow-hidden rounded-lg border border-white/20 bg-black/10"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <img src={image.previewUrl || image.storagePath} alt={image.filename || "Attached image"} className="aspect-square w-full object-cover" />
+          <span className="block truncate px-1.5 py-1 text-[10px] opacity-80">{image.filename || "image"}</span>
+        </a>
+      ))}
+    </div>
+  ) : null;
+
+  const renderAttachButton = () => (
+    <>
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept={ALLOWED_IMAGE_TYPES.join(",")}
+        multiple
+        className="hidden"
+        onChange={(event) => handleImageFiles(event.target.files)}
+      />
+      <button
+        type="button"
+        onClick={() => imageInputRef.current?.click()}
+        disabled={loading || transcribing || uploadingImages || selectedImages.length >= MAX_IMAGE_COUNT}
+        title="Attach images for Sarah"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
+      >
+        <Paperclip className="h-4 w-4" />
+      </button>
+    </>
+  );
+
+  const renderComposerControls = () => (
+    <div className="flex items-center justify-end gap-2">
+      {renderAttachButton()}
+      <button
+        onClick={voiceArmed ? disableVoiceMode : () => startRecording(true)}
+        disabled={loading || transcribing || uploadingImages}
+        title={voiceArmed ? "Stop listening" : "Start listening"}
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all disabled:opacity-40 ${voiceArmed ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+      >
+        {transcribing
+          ? <span className="h-3.5 w-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          : voiceArmed ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+      </button>
+      <button
+        onClick={sendMessage}
+        disabled={sendDisabled}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+      >
+        {uploadingImages ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
+      </button>
+    </div>
+  );
 
   const copyAssistantMessage = async (text, index) => {
     try {
@@ -407,42 +792,30 @@ No affirmations or pleasantries. 2–3 sentences.`;
 
       {open && (
         <div className={bodyClass}>
-          <p className={`text-muted-foreground ${fullScreen ? "mx-auto w-full max-w-4xl text-xs" : "text-[11px]"}`}>
-            {mode === "profile"
-              ? "Start a conversation about your physiology and arousal. Findings save automatically to your profile Q&A."
-              : "Ask anything about this session or share observations. Findings are saved to session notes."}
-          </p>
+          {!fullScreen && (
+            <p className="text-[11px] text-muted-foreground">
+              {mode === "profile"
+                ? "Start a conversation about your physiology and arousal. Findings save automatically to your profile Q&A."
+                : "Ask anything about this session or share observations. Findings are saved to session notes."}
+            </p>
+          )}
 
           {/* Message thread or input prompt */}
           {messages.length === 0 ? (
-            <div className={`${fullScreen ? "mx-auto mt-auto flex w-full max-w-4xl items-end gap-2 pb-4" : "flex gap-2 items-end"}`}>
+            <div className={`${fullScreen ? "mx-auto mt-auto w-full max-w-4xl pb-4" : ""} space-y-2`}>
+              {renderSelectedImages()}
+              {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
-                placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : `Tell the AI something about your ${mode === "profile" ? "physiology" : "session"}…`}
-                disabled={loading || transcribing}
+                placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : `Tell Sarah something about your ${mode === "profile" ? "physiology" : "session"}…`}
+                disabled={loading || transcribing || uploadingImages}
                 rows={3}
                 className={textareaClass}
               />
-              <button
-                onClick={recording ? stopRecording : startRecording}
-                disabled={loading || transcribing}
-                title={recording ? "Stop recording" : "Speak your message"}
-                className={`flex items-center justify-center w-9 h-9 rounded-lg shrink-0 transition-all disabled:opacity-40 ${recording ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
-              >
-                {transcribing
-                  ? <span className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  : recording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-              </button>
-              <button
-                onClick={sendMessage}
-                disabled={!input.trim() || loading}
-                className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 shrink-0 transition-opacity"
-              >
-                <Send className="w-4 h-4" />
-              </button>
+              {renderComposerControls()}
             </div>
           ) : (
             <div className={threadClass}>
@@ -456,6 +829,7 @@ No affirmations or pleasantries. 2–3 sentences.`;
                     onClick={msg.role === "assistant" ? () => speakText(msg.text, i) : undefined}
                     title={msg.role === "assistant" ? (speakingIdx === i ? "Tap to replay from start" : "Tap to hear") : undefined}
                   >
+                    {renderMessageImages(msg.imageAttachments)}
                     {msg.text}
                     {msg.role === "assistant" && (
                       <button
@@ -485,15 +859,19 @@ No affirmations or pleasantries. 2–3 sentences.`;
                 <div className="flex gap-2 items-start">
                   <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
                   <div className="bg-muted/70 rounded-xl rounded-tl-sm px-3 py-2 flex items-center gap-1.5">
+                    {uploadingImages && <ImageIcon className="h-3.5 w-3.5 text-accent" />}
                     <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
                     <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                     <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                    <span className="sr-only">Sarah is analyzing</span>
                   </div>
                 </div>
               )}
               <div ref={bottomRef} />
 
               {/* Input — shown after messages start */}
+              {renderSelectedImages()}
+              {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <div className={composerClass}>
                 <textarea
                     ref={inputRef}
@@ -501,27 +879,11 @@ No affirmations or pleasantries. 2–3 sentences.`;
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
                     placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : "Type or speak your response…"}
-                    disabled={loading || transcribing}
+                    disabled={loading || transcribing || uploadingImages}
                     rows={5}
-                    className={fullScreen ? textareaClass : "flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 resize-none sm:rows-3"}
+                    className={textareaClass}
                   />
-                <button
-                  onClick={recording ? stopRecording : startRecording}
-                  disabled={loading || transcribing}
-                  title={recording ? "Stop recording" : "Speak your response"}
-                  className={`flex items-center justify-center w-9 h-9 rounded-lg shrink-0 transition-all disabled:opacity-40 ${recording ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
-                >
-                  {transcribing
-                    ? <span className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                    : recording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                </button>
-                <button
-                  onClick={sendMessage}
-                  disabled={!input.trim() || loading}
-                  className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 shrink-0 transition-opacity"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
+                {renderComposerControls()}
               </div>
               </div>
               )}

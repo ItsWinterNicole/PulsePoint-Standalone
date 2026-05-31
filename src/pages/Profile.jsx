@@ -342,6 +342,70 @@ function makeProfileQaEntry(findingsText, meta = {}) {
   };
 }
 
+function normalizeFindingKey(finding) {
+  return String(finding || "")
+    .toLowerCase()
+    .replace(/[“”"]/g, "")
+    .replace(/[’']/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\b(the|a|an|and|or|but|that|this)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatProfileQaTimestamp(entry) {
+  const raw = entry?.saved_at || entry?.date;
+  if (!entry?.saved_at && /^\d{4}-\d{2}-\d{2}$/.test(String(raw || ""))) {
+    const [year, month, day] = String(raw).split("-").map(Number);
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(year, month - 1, day));
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return entry?.date || "Undated";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: entry?.saved_at ? "numeric" : undefined,
+    minute: entry?.saved_at ? "2-digit" : undefined,
+  }).format(new Date(parsed));
+}
+
+function buildProfileQaFindingCards(entries) {
+  const seen = new Map();
+  normalizeProfileQaFindings(entries).forEach((entry) => {
+    entry.findings.forEach((finding, index) => {
+      const key = normalizeFindingKey(finding);
+      if (!key) return;
+      const existing = seen.get(key);
+      if (existing) {
+        existing.duplicateCount += 1;
+        existing.sources.push(entry.id);
+        return;
+      }
+      seen.set(key, {
+        id: `${entry.id}-${index}`,
+        finding,
+        date: entry.date,
+        saved_at: entry.saved_at,
+        timestamp: formatProfileQaTimestamp(entry),
+        source: entry.source,
+        sourceLabel: entry.source === "imported_profile_notes"
+          ? "Imported"
+          : entry.source === "profile_sarah_image_review"
+            ? "Sarah image review"
+            : "Auto-saved",
+        duplicateCount: 0,
+        sources: [entry.id],
+      });
+    });
+  });
+  return Array.from(seen.values()).sort((a, b) => {
+    const aTime = Date.parse(a.saved_at || a.date) || 0;
+    const bTime = Date.parse(b.saved_at || b.date) || 0;
+    return bTime - aTime;
+  });
+}
+
 export default function Profile() {
   const [user, setUser] = useState(null);
   const [form, setForm] = useState({});
@@ -438,6 +502,7 @@ export default function Profile() {
   const estimatedMaxHR = form.age ? 220 - form.age : null;
   const effectiveMaxHR = form.max_hr || estimatedMaxHR;
   const profileQaFindings = normalizeProfileQaFindings(form.profile_qa_findings);
+  const profileQaFindingCards = buildProfileQaFindingCards(profileQaFindings);
   const latestQaFinding = profileQaFindings[0] || null;
 
   const saveProfileQaFinding = async (findingsText, meta = {}) => {
@@ -907,6 +972,7 @@ export default function Profile() {
       <AIChat
         mode="profile"
         userProfile={form}
+        scopeId={form.id}
         context={[
           `First name: ${form.first_name?.trim() || "not set"}`,
           `Age: ${form.age ?? "not set"}, Weight: ${form.weight_kg ?? "not set"}kg, Fitness: ${form.fitness_level ?? "not set"}`,
@@ -918,7 +984,7 @@ export default function Profile() {
           `Refractory pattern: ${form.refractory_pattern ?? "not set"}`,
           `Preferred stimulation: ${(form.preferred_stimulation || []).join(", ") || "not set"}`,
           `Arousal notes: ${richTextToPlainText(form.arousal_notes) || "none"}`,
-          `User-verified interview findings (Profile Q&A): ${profileQaFindings.slice(0, 12).map((entry) => `[${entry.date}] ${entry.findings.join(" ")}`).join("\n") || "none"}`,
+          `User-verified interview findings (Profile Q&A): ${profileQaFindingCards.slice(0, 24).map((entry) => `[${entry.date}] ${entry.finding}`).join("\n") || "none"}`,
           `Functional mechanical profile: ${Object.entries(mechanicalProfile).filter(([, value]) => Array.isArray(value) ? value.length : typeof value === "object" ? value?.value != null : value).map(([key, value]) => `${key}: ${typeof value === "object" && !Array.isArray(value) ? `${value.value} ${value.unit}` : Array.isArray(value) ? value.join(", ") : richTextToPlainText(value)}`).join("; ") || "not set"}`,
         ].join("\n")}
         savedMessages={chatMessages}
@@ -950,26 +1016,35 @@ export default function Profile() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
-              {profileQaFindings.length}
+              {profileQaFindingCards.length}
             </span>
             {qaFindingsOpen ? <ChevronUp className="mt-0.5 h-4 w-4 text-muted-foreground" /> : <ChevronDown className="mt-0.5 h-4 w-4 text-muted-foreground" />}
           </div>
         </button>
         {qaFindingsOpen && (
           <div className="max-h-[32rem] space-y-3 overflow-y-auto border-t border-border p-4">
-            {profileQaFindings.length ? profileQaFindings.map((entry) => (
-              <article key={entry.id} className="rounded-lg border border-border bg-muted/20 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs font-semibold text-foreground">AI Interview — {entry.date}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{entry.source === "imported_profile_notes" ? "Imported" : "Auto-saved"}</p>
-                </div>
-                <ul className="mt-2 space-y-1 text-sm leading-relaxed text-muted-foreground">
-                  {entry.findings.map((finding, index) => (
-                    <li key={`${entry.id}-${index}`}>• {finding}</li>
-                  ))}
-                </ul>
-              </article>
-            )) : (
+            {profileQaFindingCards.length ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {profileQaFindingCards.map((entry) => (
+                  <article key={entry.id} className="rounded-lg border border-border bg-muted/20 p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">{entry.timestamp}</p>
+                      <div className="flex items-center gap-1.5">
+                        {entry.duplicateCount > 0 && (
+                          <span className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+                            {entry.duplicateCount + 1} merged
+                          </span>
+                        )}
+                        <span className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                          {entry.sourceLabel}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-sm leading-relaxed text-muted-foreground">{entry.finding}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
               <p className="text-sm text-muted-foreground">No profile Q&A findings saved yet.</p>
             )}
           </div>

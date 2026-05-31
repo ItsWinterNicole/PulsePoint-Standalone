@@ -1177,6 +1177,7 @@ export default function SessionDetail() {
         <AIChat
           mode="session"
           userProfile={userProfile}
+          scopeId={id}
           context={[
             `Session date: ${s.date?.slice(0, 10)}`,
             `Duration: ${s.duration_minutes ?? "?"}min`,
