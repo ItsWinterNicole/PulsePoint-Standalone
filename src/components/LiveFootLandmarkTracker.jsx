@@ -240,21 +240,65 @@ function pickBestBlob(image, point, targetX, targetY, radius, settings, claimed,
   return best && bestScore < maxScore ? { ...best, score: bestScore, mode: "blob" } : null;
 }
 
-function pickFullFrameBlob(image, point, settings, claimed) {
+function pickFullFrameBlob(image, point, settings, claimed, options = {}) {
+  const maxDistance = options.maxDistance ?? 520;
+  const maxScore = options.maxScore ?? 175;
   const blobs = detectBrightBlobs(image, settings, { x: 0, y: 0, w: image.width, h: image.height });
   const anchorX = point.lastGoodX ?? point.x;
   const anchorY = point.lastGoodY ?? point.y;
   let best = null;
   let bestScore = Number.POSITIVE_INFINITY;
   blobs.forEach((blob) => {
-    if (Math.hypot(blob.x - anchorX, blob.y - anchorY) > 520) return;
+    if (Math.hypot(blob.x - anchorX, blob.y - anchorY) > maxDistance) return;
     const score = scoreCandidate(blob, point, anchorX, anchorY, claimed);
     if (score < bestScore) {
       best = blob;
       bestScore = score;
     }
   });
-  return best && bestScore < 175 ? { ...best, score: bestScore, mode: "wide_reacquire" } : null;
+  return best && bestScore < maxScore ? { ...best, score: bestScore, mode: "wide_reacquire" } : null;
+}
+
+function estimateFromCompanion(point, companion, targetCompanion) {
+  if (!companion || !targetCompanion || companion.lost || !Number.isFinite(companion.lastGoodX) || !Number.isFinite(point.lastGoodX)) {
+    return null;
+  }
+  return {
+    x: companion.x + (point.lastGoodX - companion.lastGoodX),
+    y: companion.y + (point.lastGoodY - companion.lastGoodY),
+    weight: targetCompanion,
+  };
+}
+
+function estimateGeometryTarget(point, points, image) {
+  const [side, kind] = String(point.label || "").split("_");
+  if (!side || !kind || !Number.isFinite(point.lastGoodX) || !Number.isFinite(point.lastGoodY)) return null;
+  const byLabel = Object.fromEntries(points.map((item) => [item.label, item]));
+  const toe = byLabel[`${side}_toe`];
+  const forefoot = byLabel[`${side}_forefoot`];
+  const heel = byLabel[`${side}_heel`];
+  const estimates = [];
+
+  if (kind === "heel") {
+    estimates.push(estimateFromCompanion(point, forefoot, 1.2));
+    estimates.push(estimateFromCompanion(point, toe, 0.8));
+  } else if (kind === "toe") {
+    estimates.push(estimateFromCompanion(point, forefoot, 1.2));
+    estimates.push(estimateFromCompanion(point, heel, 0.8));
+  } else if (kind === "forefoot") {
+    estimates.push(estimateFromCompanion(point, toe, 1));
+    estimates.push(estimateFromCompanion(point, heel, 1));
+  }
+
+  const usable = estimates.filter(Boolean);
+  if (!usable.length) return null;
+  const weight = usable.reduce((sum, item) => sum + item.weight, 0);
+  const x = usable.reduce((sum, item) => sum + item.x * item.weight, 0) / weight;
+  const y = usable.reduce((sum, item) => sum + item.y * item.weight, 0) / weight;
+  return {
+    x: clamp(x, 0, image.width),
+    y: clamp(y, 0, image.height),
+  };
 }
 
 function findNearbyPeak(image, point, radius, settings) {
@@ -333,6 +377,32 @@ function formatSeconds(value) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+function angleBetween(a, b, c) {
+  if (!a || !b || !c) return null;
+  const abx = a.x - b.x;
+  const aby = a.y - b.y;
+  const cbx = c.x - b.x;
+  const cby = c.y - b.y;
+  const denom = Math.hypot(abx, aby) * Math.hypot(cbx, cby);
+  if (!denom) return null;
+  const radians = Math.acos(clamp((abx * cbx + aby * cby) / denom, -1, 1));
+  return (radians * 180) / Math.PI;
+}
+
+function describePlanting(value) {
+  if (!Number.isFinite(value)) return "unknown";
+  if (value >= 0.78) return "planted";
+  if (value >= 0.45) return "shifting";
+  return "active";
+}
+
+function describeToeActivity(value) {
+  if (!Number.isFinite(value)) return "unknown";
+  if (value <= 4) return "quiet";
+  if (value <= 14) return "expressive";
+  return "high motion";
+}
+
 function summarizeFootGeometry(points) {
   const byLabel = Object.fromEntries(points.map((point) => [point.label, point]));
   const summarizeSide = (side) => {
@@ -352,6 +422,10 @@ function summarizeFootGeometry(points) {
       ? (Math.atan2(axisEnd.y - axisStart.y, axisEnd.x - axisStart.x) * 180) / Math.PI
       : null;
     const movement = available.reduce((sum, point) => sum + (point.movedPx || 0), 0) / available.length;
+    const plantedProxy = Number(clamp(1 - movement / 28, 0, 1).toFixed(3));
+    const toeMovement = toe && !toe.lost ? toe.movedPx || 0 : null;
+    const toeFan = toe && forefoot && heel && !toe.lost && !forefoot.lost && !heel.lost ? angleBetween(toe, forefoot, heel) : null;
+    const heelStability = heel && !heel.lost ? clamp(1 - (heel.movedPx || 0) / 20, 0, 1) : null;
     return {
       available_markers: available.length,
       confidence: Number((available.reduce((sum, point) => sum + (point.confidence || 0), 0) / available.length).toFixed(3)),
@@ -359,12 +433,23 @@ function summarizeFootGeometry(points) {
       toe_to_heel_px: toe && heel && !toe.lost && !heel.lost ? Number(pointDistance(toe, heel).toFixed(2)) : null,
       forefoot_to_heel_px: forefoot && heel && !forefoot.lost && !heel.lost ? Number(pointDistance(forefoot, heel).toFixed(2)) : null,
       toe_to_forefoot_px: toe && forefoot && !toe.lost && !forefoot.lost ? Number(pointDistance(toe, forefoot).toFixed(2)) : null,
-      planted_proxy: Number(clamp(1 - movement / 28, 0, 1).toFixed(3)),
+      toe_fan_deg: Number.isFinite(toeFan) ? Number(toeFan.toFixed(1)) : null,
+      toe_activity_px: Number.isFinite(toeMovement) ? Number(toeMovement.toFixed(2)) : null,
+      heel_stability_proxy: Number.isFinite(heelStability) ? Number(heelStability.toFixed(3)) : null,
+      planted_proxy: plantedProxy,
+      planting: describePlanting(plantedProxy),
+      toe_activity: describeToeActivity(toeMovement),
     };
   };
+  const activeDistance = (a, b) => a && b && !a.lost && !b.lost ? Number(pointDistance(a, b).toFixed(2)) : null;
   return {
     left: summarizeSide("left"),
     right: summarizeSide("right"),
+    bilateral: {
+      heel_separation_px: activeDistance(byLabel.left_heel, byLabel.right_heel),
+      toe_separation_px: activeDistance(byLabel.left_toe, byLabel.right_toe),
+      forefoot_separation_px: activeDistance(byLabel.left_forefoot, byLabel.right_forefoot),
+    },
   };
 }
 
@@ -406,7 +491,37 @@ function buildSummary(points, settings, sessionTimeS) {
   };
 }
 
-export default function LiveFootLandmarkTracker({ sessionId, recordingActive, getSessionTimeS, onTrackingSnapshot }) {
+function MetricPill({ label, value, tone = "default" }) {
+  const toneClass = tone === "good"
+    ? "border-green-400/30 bg-green-400/10 text-green-200"
+    : tone === "warn"
+      ? "border-chart-3/35 bg-chart-3/10 text-chart-3"
+      : "border-border bg-muted/30 text-foreground";
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${toneClass}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-sm font-semibold">{value ?? "unknown"}</p>
+    </div>
+  );
+}
+
+function FootMetricsPanel({ geometry, trackedCount, lostCount, compact = false }) {
+  const leftPlanting = geometry?.left?.planting || "unknown";
+  const rightPlanting = geometry?.right?.planting || "unknown";
+  const rightHeelTone = geometry?.right?.heel_stability_proxy >= 0.7 ? "good" : lostCount ? "warn" : "default";
+  return (
+    <div className={`grid gap-2 ${compact ? "sm:grid-cols-2 xl:grid-cols-6" : "sm:grid-cols-2 xl:grid-cols-3"}`}>
+      <MetricPill label="Tracked" value={`${trackedCount}/6`} tone={lostCount ? "warn" : "good"} />
+      <MetricPill label="Left plant" value={leftPlanting} tone={leftPlanting === "planted" ? "good" : "default"} />
+      <MetricPill label="Right plant" value={rightPlanting} tone={rightPlanting === "planted" ? "good" : "default"} />
+      <MetricPill label="Heel spread" value={geometry?.bilateral?.heel_separation_px ? `${Math.round(geometry.bilateral.heel_separation_px)} px` : "learning"} />
+      <MetricPill label="Toe motion" value={`${geometry?.left?.toe_activity || "?"} / ${geometry?.right?.toe_activity || "?"}`} />
+      <MetricPill label="Right heel" value={geometry?.right?.heel_stability_proxy != null ? `${Math.round(geometry.right.heel_stability_proxy * 100)}% stable` : "learning"} tone={rightHeelTone} />
+    </div>
+  );
+}
+
+export default function LiveFootLandmarkTracker({ sessionId, recordingActive, getSessionTimeS, onTrackingSnapshot, compact = false }) {
   const videoRef = useRef(null);
   const overlayRef = useRef(null);
   const clickRef = useRef(null);
@@ -434,6 +549,7 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
   const trackedCount = points.filter((point) => !point.lost).length;
   const lostCount = points.filter((point) => point.lost).length;
   const allDefaultPointsSet = useMemo(() => DEFAULT_LABELS.every((item) => points.some((point) => point.label === item.key)), [points]);
+  const footGeometry = useMemo(() => summarizeFootGeometry(points), [points]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -566,7 +682,20 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
           found = pickBestBlob(image, point, anchorX, anchorY, Math.min(560, radius + 70 + missedFrames * 10), settingsNow, claimed, true);
           if (found) found.mode = missedFrames > 0 ? "anchor_reacquire" : "blob";
         }
-        if (!found && missedFrames >= settingsNow.reacquireAfter) found = pickFullFrameBlob(image, point, settingsNow, claimed);
+        if (!found && missedFrames > 0) {
+          const geometryTarget = estimateGeometryTarget(point, pointsRef.current, image);
+          if (geometryTarget) {
+            found = pickBestBlob(image, point, geometryTarget.x, geometryTarget.y, Math.min(520, 110 + missedFrames * 30), settingsNow, claimed, false);
+            if (found) found.mode = "geometry_reacquire";
+          }
+        }
+        if (!found && missedFrames >= settingsNow.reacquireAfter) {
+          const isHeel = String(point.label || "").endsWith("_heel");
+          found = pickFullFrameBlob(image, point, settingsNow, claimed, {
+            maxDistance: isHeel ? 860 : 620,
+            maxScore: isHeel ? 225 : 185,
+          });
+        }
         if (!found && missedFrames < Math.max(3, Math.floor(settingsNow.lostTolerance * 0.35))) {
           found = findNearbyPeak(image, point, Math.min(180, radius * 0.55), settingsNow);
         }
@@ -760,28 +889,41 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  const showFullPanel = open && !compact;
+  const hiddenEngineClass = "fixed -left-[10000px] top-0 h-[180px] w-[320px] overflow-hidden opacity-0 pointer-events-none";
+
   return (
-    <section className="rounded-xl border border-primary/25 bg-card">
+    <section className={`rounded-xl border bg-card ${compact ? "border-primary/20" : "border-primary/25"}`}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-start gap-3 p-4 text-left"
-        aria-expanded={open}
+        aria-expanded={showFullPanel}
       >
         <Crosshair className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wider text-primary">Live Foot Landmark Tracker</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Learn the silver marker dots on big toes, forefeet, and heels, then keep tracking with fast last-good-position reacquire.
+            {compact
+              ? "Tracking stays active while you use this view, with compact derived foot evidence below."
+              : "Learn the silver marker dots on big toes, forefeet, and heels, then keep tracking with fast geometry-aware reacquire."}
           </p>
         </div>
         <span className="ml-auto rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {open ? "Hide" : "Show"}
+          {showFullPanel ? "Hide" : "Show"}
         </span>
       </button>
 
-      {open && (
-        <div className="space-y-4 border-t border-border p-4">
+      {(compact || !open) && (
+        <div className="space-y-3 border-t border-border p-3">
+          <FootMetricsPanel geometry={footGeometry} trackedCount={trackedCount} lostCount={lostCount} compact />
+          <p className="text-xs text-muted-foreground">
+            {videoLoaded ? "Tracking engine is still running." : "Open the tracker setup panel to start a source and learn the markers."}
+          </p>
+        </div>
+      )}
+
+      <div className={showFullPanel ? "space-y-4 border-t border-border p-4" : hiddenEngineClass} aria-hidden={!showFullPanel}>
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="space-y-3">
               <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-black">
@@ -826,6 +968,7 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
                   <p className="mt-1 text-[10px] text-muted-foreground">Raw video and frames are not persisted.</p>
                 </div>
               </div>
+              <FootMetricsPanel geometry={footGeometry} trackedCount={trackedCount} lostCount={lostCount} />
             </div>
 
             <div className="space-y-3">
@@ -965,7 +1108,6 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
             {allDefaultPointsSet ? <span className="ml-2 text-green-300">All six default foot markers are learned.</span> : null}
           </div>
         </div>
-      )}
     </section>
   );
 }

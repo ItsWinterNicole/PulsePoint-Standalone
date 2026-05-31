@@ -1614,12 +1614,13 @@ export default function LiveCapture() {
 
       {!focusView && !mainTelemetryView && voiceAnnotationPanel}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && (
         <LiveFootLandmarkTracker
           sessionId={liveSession?.activeSessionId}
           recordingActive={recordingActive}
           getSessionTimeS={getCurrentSessionTime}
           onTrackingSnapshot={handleFootTrackingSnapshot}
+          compact={mainTelemetryView || captureMode === "media"}
         />
       )}
 
