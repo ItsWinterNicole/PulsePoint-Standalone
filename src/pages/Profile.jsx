@@ -315,6 +315,10 @@ function normalizeProfileQaFindings(value) {
       date: entry.date || entry.created_at?.slice?.(0, 10) || entry.saved_at?.slice?.(0, 10) || "Undated",
       source: entry.source || "profile_ai_interview",
       saved_at: entry.saved_at || entry.created_at || null,
+      needs_review: Boolean(entry.needs_review),
+      persistence_status: entry.persistence_status || "recommended",
+      structured_findings: Array.isArray(entry.structured_findings) ? entry.structured_findings : [],
+      image_count: Number(entry.image_count || 0),
       findings: Array.isArray(entry.findings) ? entry.findings.map((item) => String(item).trim()).filter(Boolean) : parseFindingBullets(entry.findings),
     }))
     .filter((entry) => entry.findings.length)
@@ -338,6 +342,12 @@ function makeProfileQaEntry(findingsText, meta = {}) {
     date: meta.date || now.slice(0, 10),
     source: meta.source || "profile_ai_interview",
     saved_at: now,
+    needs_review: Boolean(meta.needs_review),
+    persistence_status: meta.persistence_status || "recommended",
+    structured_findings: Array.isArray(meta.structured_findings) ? meta.structured_findings : [],
+    image_count: Array.isArray(meta.conversation)
+      ? meta.conversation.reduce((count, message) => count + (Array.isArray(message.imageAttachments) ? message.imageAttachments.length : 0), 0)
+      : 0,
     findings: parseFindingBullets(findingsText),
   };
 }
@@ -389,10 +399,15 @@ function buildProfileQaFindingCards(entries) {
         saved_at: entry.saved_at,
         timestamp: formatProfileQaTimestamp(entry),
         source: entry.source,
+        needs_review: entry.needs_review,
+        persistence_status: entry.persistence_status,
+        image_count: entry.image_count,
         sourceLabel: entry.source === "imported_profile_notes"
           ? "Imported"
           : entry.source === "profile_sarah_image_review"
-            ? "Sarah image review"
+            ? entry.persistence_status === "review_candidate" || entry.needs_review
+              ? "Sarah review"
+              : "Sarah image review"
             : "Auto-saved",
         duplicateCount: 0,
         sources: [entry.id],
@@ -990,6 +1005,7 @@ export default function Profile() {
         savedMessages={chatMessages}
         savedNotes={form.arousal_notes}
         latestSavedFinding={latestQaFinding}
+        recentSavedFindings={profileQaFindingCards.slice(0, 3)}
         onSaveMessages={async (msgs) => {
           setChatMessages(msgs);
           await base44.auth.updateMe({ profile_chat_messages: msgs });
@@ -1033,6 +1049,16 @@ export default function Profile() {
                         {entry.duplicateCount > 0 && (
                           <span className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] text-muted-foreground">
                             {entry.duplicateCount + 1} merged
+                          </span>
+                        )}
+                        {entry.needs_review && (
+                          <span className="rounded-full border border-chart-3/40 bg-chart-3/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-chart-3">
+                            review
+                          </span>
+                        )}
+                        {entry.image_count > 0 && (
+                          <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary">
+                            {entry.image_count} img
                           </span>
                         )}
                         <span className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">

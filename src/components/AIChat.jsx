@@ -55,18 +55,29 @@ function normalizeAIImageResult(result) {
   };
 }
 
+function findingTextToBullet(finding, options = {}) {
+  const title = finding?.title ? `${finding.title}: ` : "";
+  const text = finding?.findingText || finding?.text || "";
+  const confirmation = finding?.needsUserConfirmation || options.reviewCandidate ? ", review suggested" : "";
+  const confidence = finding?.confidence ? ` (${finding.confidence} confidence${confirmation})` : options.reviewCandidate ? " (review suggested)" : "";
+  return text ? `• ${title}${text}${confidence}` : "";
+}
+
 function findingsToBullets(findings = [], targetMode = "profile") {
   return findings
     .filter((finding) => {
       const persistTo = finding?.persistTo || "none";
       return persistTo === targetMode || persistTo === "both";
     })
-    .map((finding) => {
-      const title = finding?.title ? `${finding.title}: ` : "";
-      const text = finding?.findingText || finding?.text || "";
-      const confidence = finding?.confidence ? ` (${finding.confidence} confidence${finding?.needsUserConfirmation ? ", review suggested" : ""})` : "";
-      return text ? `• ${title}${text}${confidence}` : "";
-    })
+    .map((finding) => findingTextToBullet(finding))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function reviewCandidateBullets(findings = []) {
+  return findings
+    .filter((finding) => finding?.findingText || finding?.text)
+    .map((finding) => findingTextToBullet({ ...finding, needsUserConfirmation: true }, { reviewCandidate: true }))
     .filter(Boolean)
     .join("\n");
 }
@@ -78,6 +89,7 @@ export default function AIChat({
   savedMessages,
   savedNotes,
   latestSavedFinding,
+  recentSavedFindings,
   scopeId,
   onSaveMessages,
   onSaveNotes,
@@ -451,8 +463,17 @@ export default function AIChat({
     setTimeout(() => setSavedFeedback(false), 3000);
   };
 
-  const persistStructuredImageFindings = async (findings, finalMessages) => {
-    const bullets = findingsToBullets(findings, mode);
+  const persistStructuredImageFindings = async (findings, finalMessages, chatResponse = "") => {
+    const normalizedFindings = findings.length ? findings : [{
+      title: "Image review summary",
+      category: "other",
+      findingText: `Sarah reviewed the attached image(s), but no separate structured finding was extracted. Review the chat response before promoting details: ${String(chatResponse || "").slice(0, 420)}`,
+      confidence: "low",
+      persistTo: "none",
+      needsUserConfirmation: true,
+    }];
+    const directBullets = findingsToBullets(normalizedFindings, mode);
+    const bullets = directBullets || reviewCandidateBullets(normalizedFindings);
     if (!bullets) return;
     const timestamp = new Date().toISOString().slice(0, 10);
     const merged = mode === "profile" ? bullets : `${savedNotes || ""}\n\n[Sarah Image Review — ${timestamp}]\n${bullets}`;
@@ -460,8 +481,9 @@ export default function AIChat({
       date: timestamp,
       source: mode === "profile" ? "profile_sarah_image_review" : "session_sarah_image_review",
       conversation: finalMessages,
-      structured_findings: findings,
-      needs_review: findings.some((finding) => finding?.needsUserConfirmation),
+      structured_findings: normalizedFindings,
+      needs_review: !directBullets || normalizedFindings.some((finding) => finding?.needsUserConfirmation),
+      persistence_status: directBullets ? "recommended" : "review_candidate",
     });
     setSavedFeedback(true);
     setTimeout(() => setSavedFeedback(false), 3000);
@@ -557,6 +579,8 @@ You are Sarah inside PulsePoint. The user may provide explicit adult anatomical 
 - Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.
 - Focus on anatomy, physiology, device fit, marker/sticker placement, catheter/sleeve/e-stim/suction interaction, posture/positioning, and evidence-aware profile/session updates.
 - Use direct second-person language and be respectful, warm, and precise.
+- If you make any concrete visible observation that may matter later, include it in findings. Use persistTo "profile", "session", or "both" for durable evidence; use persistTo "none" with needsUserConfirmation true for cautious review candidates.
+- Leave findings empty only if the image is unusable or has no useful observable information.
 
 Return a conversational answer plus structured findings for review/persistence.` : "";
 
@@ -602,7 +626,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     const newIdx = finalMessages.length - 1;
     if (ttsEnabled) speakText(reply, newIdx);
     if (imagePayload.aiImages.length) {
-      persistStructuredImageFindings(normalized.findings, finalMessages).catch(() => {});
+      persistStructuredImageFindings(normalized.findings, finalMessages, reply).catch(() => {});
     } else if (mode === "profile") {
       persistFindings(finalMessages).catch(() => {
         setSavingFindings(false);
@@ -888,7 +912,33 @@ Return a conversational answer plus structured findings for review/persistence.`
               </div>
               )}
 
-          {mode === "profile" && latestSavedFinding && !fullScreen && (
+          {mode === "profile" && Array.isArray(recentSavedFindings) && recentSavedFindings.length > 0 && !fullScreen && (
+            <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs">
+              <p className="font-semibold uppercase tracking-wider text-primary">Recently Logged Findings</p>
+              <div className="mt-2 grid gap-2">
+                {recentSavedFindings.slice(0, 3).map((entry) => (
+                  <article key={entry.id} className="rounded-md border border-border/70 bg-background/45 p-2">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">{entry.timestamp || entry.date || "Saved"}</p>
+                      <div className="flex items-center gap-1.5">
+                        {entry.needs_review && (
+                          <span className="rounded-full border border-chart-3/40 bg-chart-3/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-chart-3">
+                            review
+                          </span>
+                        )}
+                        <span className="rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">
+                          {entry.sourceLabel || "saved"}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="line-clamp-2 text-xs leading-relaxed text-foreground">{entry.finding}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {mode === "profile" && latestSavedFinding && !fullScreen && !recentSavedFindings?.length && (
             <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs">
               <p className="font-semibold uppercase tracking-wider text-primary">Most Recent Saved Finding</p>
               <p className="mt-1 text-[10px] text-muted-foreground">{latestSavedFinding.date || "Saved Q&A"}</p>
