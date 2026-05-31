@@ -31,6 +31,17 @@ function addMeasurementLine(lines, label, measurement) {
   addLine(lines, label, `${measurement.value} ${measurement.unit}`);
 }
 
+function buildProfileQaFindingLines(findings = []) {
+  if (!Array.isArray(findings)) return [];
+  return findings
+    .slice(0, 18)
+    .flatMap((entry) => {
+      const bullets = Array.isArray(entry.findings) ? entry.findings : [];
+      return bullets.slice(0, 6).map((finding) => `- ${entry.date || "AI Interview"}: ${cleanText(finding, 500)}`);
+    })
+    .filter((line) => line.trim() !== "-:");
+}
+
 function buildMechanicalProfileContext(profile) {
   if (!profile) return [];
 
@@ -112,6 +123,8 @@ export function buildGlobalProfileContext(userProfile) {
   addLine(lines, "Refractory pattern", userProfile.refractory_pattern, 700);
   addLine(lines, "Arousal notes", userProfile.arousal_notes, 1200);
   addLine(lines, "Profile notes", userProfile.profile_notes || userProfile.notes, 1200);
+  const qaFindingLines = buildProfileQaFindingLines(userProfile.profile_qa_findings);
+  if (qaFindingLines.length) lines.push("Profile Q&A findings:", ...qaFindingLines);
   addLine(lines, "Anatomical context", userProfile.anatomical_context || userProfile.anatomy_notes, 900);
   const mechanicalLines = buildMechanicalProfileContext(userProfile.anatomical_mechanical_profile);
   if (mechanicalLines.length) lines.push("Functional mechanical profile:", ...mechanicalLines);

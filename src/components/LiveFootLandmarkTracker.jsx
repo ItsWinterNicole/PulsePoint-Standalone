@@ -44,14 +44,34 @@ function colorFor(label) {
 }
 
 function brightness(data, width, x, y) {
+  const height = Math.max(1, Math.floor(data.length / Math.max(1, width * 4)));
   const px = clamp(Math.round(x), 0, width - 1);
-  const py = Math.max(0, Math.round(y));
+  const py = clamp(Math.round(y), 0, height - 1);
   const index = (py * width + px) * 4;
   return Math.max(data[index], data[index + 1], data[index + 2]);
 }
 
 function pointDistance(a, b) {
   return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
+}
+
+function averageRingBrightness(image, x, y, radius) {
+  const samples = 16;
+  let total = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const angle = (Math.PI * 2 * i) / samples;
+    total += brightness(image.data, image.width, x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
+  }
+  return total / samples;
+}
+
+function markerProfileForBlob(blob) {
+  const ringContrast = Math.max(0, (blob.meanBrightness || blob.brightness || 0) - (blob.ringBrightness || 0));
+  const roundness = Math.min(blob.width || 1, blob.height || 1) / Math.max(blob.width || 1, blob.height || 1);
+  return {
+    ringContrast,
+    markerScore: clamp((ringContrast / 95) * (0.55 + roundness * 0.45), 0, 1),
+  };
 }
 
 function detectBrightBlobs(image, settings, rect) {
@@ -124,7 +144,7 @@ function detectBrightBlobs(image, settings, rect) {
         const blobWidth = maxX - minX + 1;
         const blobHeight = maxY - minY + 1;
         const fill = count / Math.max(1, blobWidth * blobHeight);
-        blobs.push({
+        const candidate = {
           x: x0 + sumX / count,
           y: y0 + sumY / count,
           area: count,
@@ -133,13 +153,17 @@ function detectBrightBlobs(image, settings, rect) {
           width: blobWidth,
           height: blobHeight,
           fill,
-        });
+        };
+        const ringRadius = Math.max(5, Math.min(34, Math.max(blobWidth, blobHeight) * 0.72 + 4));
+        candidate.ringBrightness = averageRingBrightness(image, candidate.x, candidate.y, ringRadius);
+        Object.assign(candidate, markerProfileForBlob(candidate));
+        blobs.push(candidate);
       }
     }
   }
 
   return blobs
-    .sort((a, b) => b.brightness - a.brightness || b.area - a.area)
+    .sort((a, b) => b.markerScore - a.markerScore || b.brightness - a.brightness || b.area - a.area)
     .slice(0, 90);
 }
 
@@ -148,6 +172,8 @@ function makeLearnedPoint(label, blob, image, fallback) {
   const y = blob?.y ?? fallback.y;
   const bright = blob?.brightness ?? brightness(image.data, image.width, x, y);
   const area = blob?.area || 24;
+  const markerScore = blob?.markerScore ?? 0;
+  const ringContrast = blob?.ringContrast ?? 0;
   return {
     label,
     x,
@@ -160,9 +186,14 @@ function makeLearnedPoint(label, blob, image, fallback) {
     vy: 0,
     area,
     baseArea: area,
+    baseWidth: blob?.width || Math.sqrt(area),
+    baseHeight: blob?.height || Math.sqrt(area),
     baseBrightness: bright,
+    baseMarkerScore: markerScore,
     brightness: bright,
-    confidence: blob ? 1 : 0.65,
+    markerScore,
+    ringContrast,
+    confidence: blob ? 0.82 + markerScore * 0.18 : 0.65,
     lost: false,
     lostFrames: 0,
     mode: blob ? "learned_blob" : "learned_click",
@@ -177,12 +208,15 @@ function scoreCandidate(blob, point, targetX, targetY, claimed) {
   const baseArea = point.baseArea || point.area || 24;
   const areaRatio = Math.max(0.05, (blob.area || baseArea) / Math.max(1, baseArea));
   const areaPenalty = Math.abs(Math.log(areaRatio)) * 30;
+  const widthPenalty = Math.abs(Math.log(Math.max(0.1, (blob.width || point.baseWidth || 1) / Math.max(1, point.baseWidth || blob.width || 1)))) * 8;
+  const heightPenalty = Math.abs(Math.log(Math.max(0.1, (blob.height || point.baseHeight || 1) / Math.max(1, point.baseHeight || blob.height || 1)))) * 8;
   const brightnessPenalty = Math.max(0, (point.baseBrightness || 190) - (blob.brightness || 0)) * 0.26;
   const fillPenalty = blob.fill ? Math.abs(0.7 - blob.fill) * 12 : 4;
+  const markerBonus = Math.max(blob.markerScore || 0, point.baseMarkerScore ? Math.min(blob.markerScore || 0, point.baseMarkerScore + 0.25) : 0) * 28;
   const anchorDistance = point.lastGoodX != null ? Math.hypot(blob.x - point.lastGoodX, blob.y - point.lastGoodY) : 0;
   const anchorPenalty = Math.max(0, anchorDistance - 420) * 0.65;
   const jumpPenalty = !point.lost && distance > 260 ? 90 : 0;
-  return distance + areaPenalty + brightnessPenalty + fillPenalty + anchorPenalty + jumpPenalty;
+  return distance + areaPenalty + widthPenalty + heightPenalty + brightnessPenalty + fillPenalty + anchorPenalty + jumpPenalty - markerBonus;
 }
 
 function pickBestBlob(image, point, targetX, targetY, radius, settings, claimed, strict = false) {
@@ -201,7 +235,8 @@ function pickBestBlob(image, point, targetX, targetY, radius, settings, claimed,
       bestScore = score;
     }
   });
-  const maxScore = strict ? Math.max(80, radius * 0.72) : Math.max(110, radius * 0.95);
+  const markerLift = best?.markerScore ? best.markerScore * 18 : 0;
+  const maxScore = (strict ? Math.max(80, radius * 0.72) : Math.max(110, radius * 0.95)) + markerLift;
   return best && bestScore < maxScore ? { ...best, score: bestScore, mode: "blob" } : null;
 }
 
@@ -252,6 +287,8 @@ function updatePointWithBlob(point, blob) {
   next.y = blob.y;
   next.area = blob.area || 0;
   next.brightness = blob.brightness || 0;
+  next.ringContrast = blob.ringContrast || 0;
+  next.markerScore = blob.markerScore || 0;
   next.movedPx = Math.hypot(next.x - next.previousX, next.y - next.previousY);
   next.mode = blob.mode || "blob";
   next.searchRadius = blob.searchRadius || next.searchRadius || 0;
@@ -267,7 +304,7 @@ function updatePointWithBlob(point, blob) {
   next.vy = (next.vy || 0) * 0.25 + vy * 0.75;
   next.lastGoodX = blob.x;
   next.lastGoodY = blob.y;
-  next.confidence = next.mode.includes("reacquire") ? 0.88 : 1;
+  next.confidence = next.mode.includes("reacquire") ? 0.78 + next.markerScore * 0.18 : 0.82 + next.markerScore * 0.18;
   next.lostFrames = 0;
   next.lost = false;
   return next;
@@ -296,6 +333,41 @@ function formatSeconds(value) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+function summarizeFootGeometry(points) {
+  const byLabel = Object.fromEntries(points.map((point) => [point.label, point]));
+  const summarizeSide = (side) => {
+    const toe = byLabel[`${side}_toe`];
+    const forefoot = byLabel[`${side}_forefoot`];
+    const heel = byLabel[`${side}_heel`];
+    const available = [toe, forefoot, heel].filter((point) => point && !point.lost);
+    if (available.length < 2) {
+      return {
+        available_markers: available.length,
+        confidence: Number((available.reduce((sum, point) => sum + (point.confidence || 0), 0) / Math.max(1, available.length)).toFixed(3)),
+      };
+    }
+    const axisStart = heel && !heel.lost ? heel : forefoot;
+    const axisEnd = toe && !toe.lost ? toe : forefoot;
+    const angleDeg = axisStart && axisEnd
+      ? (Math.atan2(axisEnd.y - axisStart.y, axisEnd.x - axisStart.x) * 180) / Math.PI
+      : null;
+    const movement = available.reduce((sum, point) => sum + (point.movedPx || 0), 0) / available.length;
+    return {
+      available_markers: available.length,
+      confidence: Number((available.reduce((sum, point) => sum + (point.confidence || 0), 0) / available.length).toFixed(3)),
+      foot_angle_deg: Number.isFinite(angleDeg) ? Number(angleDeg.toFixed(1)) : null,
+      toe_to_heel_px: toe && heel && !toe.lost && !heel.lost ? Number(pointDistance(toe, heel).toFixed(2)) : null,
+      forefoot_to_heel_px: forefoot && heel && !forefoot.lost && !heel.lost ? Number(pointDistance(forefoot, heel).toFixed(2)) : null,
+      toe_to_forefoot_px: toe && forefoot && !toe.lost && !forefoot.lost ? Number(pointDistance(toe, forefoot).toFixed(2)) : null,
+      planted_proxy: Number(clamp(1 - movement / 28, 0, 1).toFixed(3)),
+    };
+  };
+  return {
+    left: summarizeSide("left"),
+    right: summarizeSide("right"),
+  };
+}
+
 function buildSummary(points, settings, sessionTimeS) {
   const labels = {};
   points.forEach((point) => {
@@ -307,6 +379,8 @@ function buildSummary(points, settings, sessionTimeS) {
       mode: point.mode || "",
       moved_px: Number((point.movedPx || 0).toFixed(2)),
       brightness: Math.round(point.brightness || 0),
+      marker_score: Number((point.markerScore || 0).toFixed(3)),
+      ring_contrast: Math.round(point.ringContrast || 0),
     };
   });
   return {
@@ -318,6 +392,7 @@ function buildSummary(points, settings, sessionTimeS) {
     lost_count: points.filter((point) => point.lost).length,
     average_confidence: Number((points.reduce((sum, point) => sum + (point.confidence || 0), 0) / Math.max(1, points.length)).toFixed(3)),
     landmark_labels: labels,
+    foot_geometry: summarizeFootGeometry(points),
     settings: {
       threshold: settings.threshold,
       min_area: settings.minArea,
@@ -573,6 +648,8 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
       row[`${point.label}_lost`] = point.lost ? "1" : "0";
       row[`${point.label}_mode`] = point.mode || "";
       row[`${point.label}_moved_px`] = (point.movedPx || 0).toFixed(2);
+      row[`${point.label}_marker_score`] = (point.markerScore || 0).toFixed(3);
+      row[`${point.label}_ring_contrast`] = Math.round(point.ringContrast || 0);
     });
     setCsvRows((prev) => [...prev.slice(-(ROW_LIMIT - 1)), row]);
   }, []);

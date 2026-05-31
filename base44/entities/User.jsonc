@@ -98,7 +98,7 @@
     },
     "arousal_notes": {
       "type": "string",
-      "description": "Free-text notes on arousal patterns, what works, what doesn't, unique characteristics \u2014 also stores AI interview findings"
+      "description": "Free-text notes on arousal patterns, what works, what doesn't, unique characteristics"
     },
     "profile_chat_messages": {
       "type": "array",
@@ -106,6 +106,13 @@
         "type": "object"
       },
       "description": "Persisted AI interview chat messages for the profile page"
+    },
+    "profile_qa_findings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Structured AI Interview findings saved separately from free-text arousal notes"
     },
     "anatomical_mechanical_profile": {
       "type": "object",

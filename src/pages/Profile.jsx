@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
-import { User, Heart, Scan, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Flame, Ruler } from "lucide-react";
+import { User, Heart, Scan, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Flame, Ruler, ClipboardList } from "lucide-react";
 import AIChat from "../components/AIChat";
 import RichTextEditor from "../components/RichTextEditor";
 import { richTextToCanonicalText, richTextToPlainText } from "@/lib/richText";
@@ -287,6 +287,61 @@ const FITNESS_OPTIONS = [
   { value: "athlete", label: "Athlete" },
 ];
 
+function parseFindingBullets(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[\s•*-]+/, "").trim())
+    .filter(Boolean);
+}
+
+function parseProfileQaFindingsFromText(text) {
+  const source = String(text || "");
+  const matches = [...source.matchAll(/\[AI Interview\s*[—-]\s*([^\]]+)\]\s*([\s\S]*?)(?=\n\s*\[AI Interview\s*[—-]|\s*$)/g)];
+  return matches.map((match, index) => ({
+    id: `imported-${String(match[1]).trim()}-${index}`,
+    date: String(match[1]).trim(),
+    source: "imported_profile_notes",
+    findings: parseFindingBullets(match[2]),
+    saved_at: null,
+  })).filter((entry) => entry.findings.length);
+}
+
+function normalizeProfileQaFindings(value) {
+  const entries = Array.isArray(value) ? value : parseProfileQaFindingsFromText(value);
+  const seen = new Set();
+  return entries
+    .map((entry, index) => ({
+      id: entry.id || `profile-qa-${entry.date || "undated"}-${index}`,
+      date: entry.date || entry.created_at?.slice?.(0, 10) || entry.saved_at?.slice?.(0, 10) || "Undated",
+      source: entry.source || "profile_ai_interview",
+      saved_at: entry.saved_at || entry.created_at || null,
+      findings: Array.isArray(entry.findings) ? entry.findings.map((item) => String(item).trim()).filter(Boolean) : parseFindingBullets(entry.findings),
+    }))
+    .filter((entry) => entry.findings.length)
+    .filter((entry) => {
+      const key = `${entry.date}|${entry.findings.join("|").toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const aTime = Date.parse(a.saved_at || a.date) || 0;
+      const bTime = Date.parse(b.saved_at || b.date) || 0;
+      return bTime - aTime;
+    });
+}
+
+function makeProfileQaEntry(findingsText, meta = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: `profile-qa-${now}`,
+    date: meta.date || now.slice(0, 10),
+    source: meta.source || "profile_ai_interview",
+    saved_at: now,
+    findings: parseFindingBullets(findingsText),
+  };
+}
+
 export default function Profile() {
   const [user, setUser] = useState(null);
   const [form, setForm] = useState({});
@@ -296,9 +351,12 @@ export default function Profile() {
   const [computedRecovery, setComputedRecovery] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [mechanicalOpen, setMechanicalOpen] = useState(false);
+  const [qaFindingsOpen, setQaFindingsOpen] = useState(true);
 
   useEffect(() => {
     base44.auth.me().then((u) => {
+      const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
+      const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
       setUser(u);
       setForm({
         first_name: u.first_name ?? "",
@@ -315,9 +373,13 @@ export default function Profile() {
         preferred_stimulation: u.preferred_stimulation ?? [],
         refractory_pattern: u.refractory_pattern ?? null,
         arousal_notes: richTextToCanonicalText(u.arousal_notes ?? ""),
+        profile_qa_findings: importedQaFindings,
         anatomical_mechanical_profile: normalizeMechanicalProfile(u.anatomical_mechanical_profile),
       });
       setChatMessages(u.profile_chat_messages || []);
+      if (!savedQaFindings.length && importedQaFindings.length) {
+        base44.auth.updateMe({ profile_qa_findings: importedQaFindings }).catch(() => {});
+      }
     });
   }, []);
 
@@ -354,6 +416,7 @@ export default function Profile() {
       first_name: String(form.first_name || "").trim() || null,
       medications: richTextToCanonicalText(form.medications),
       arousal_notes: richTextToCanonicalText(form.arousal_notes),
+      profile_qa_findings: normalizeProfileQaFindings(form.profile_qa_findings),
       anatomical_mechanical_profile: normalizeMechanicalProfile(form.anatomical_mechanical_profile),
     };
     await base44.auth.updateMe(canonicalForm);
@@ -374,6 +437,16 @@ export default function Profile() {
   // Derived estimated max HR
   const estimatedMaxHR = form.age ? 220 - form.age : null;
   const effectiveMaxHR = form.max_hr || estimatedMaxHR;
+  const profileQaFindings = normalizeProfileQaFindings(form.profile_qa_findings);
+  const latestQaFinding = profileQaFindings[0] || null;
+
+  const saveProfileQaFinding = async (findingsText, meta = {}) => {
+    const entry = makeProfileQaEntry(findingsText, meta);
+    if (!entry.findings.length) return;
+    const merged = normalizeProfileQaFindings([entry, ...(form.profile_qa_findings || [])]);
+    setForm((f) => ({ ...f, profile_qa_findings: merged }));
+    await base44.auth.updateMe({ profile_qa_findings: merged });
+  };
 
   if (!user) return (
     <div className="flex items-center justify-center h-64">
@@ -845,20 +918,63 @@ export default function Profile() {
           `Refractory pattern: ${form.refractory_pattern ?? "not set"}`,
           `Preferred stimulation: ${(form.preferred_stimulation || []).join(", ") || "not set"}`,
           `Arousal notes: ${richTextToPlainText(form.arousal_notes) || "none"}`,
+          `Profile Q&A findings: ${profileQaFindings.slice(0, 12).map((entry) => `[${entry.date}] ${entry.findings.join(" ")}`).join("\n") || "none"}`,
           `Functional mechanical profile: ${Object.entries(mechanicalProfile).filter(([, value]) => Array.isArray(value) ? value.length : typeof value === "object" ? value?.value != null : value).map(([key, value]) => `${key}: ${typeof value === "object" && !Array.isArray(value) ? `${value.value} ${value.unit}` : Array.isArray(value) ? value.join(", ") : richTextToPlainText(value)}`).join("; ") || "not set"}`,
         ].join("\n")}
         savedMessages={chatMessages}
         savedNotes={form.arousal_notes}
+        latestSavedFinding={latestQaFinding}
         onSaveMessages={async (msgs) => {
           setChatMessages(msgs);
           await base44.auth.updateMe({ profile_chat_messages: msgs });
         }}
-        onSaveNotes={async (merged) => {
-          const canonicalNotes = richTextToCanonicalText(merged);
-          setForm((f) => ({ ...f, arousal_notes: canonicalNotes }));
-          await base44.auth.updateMe({ arousal_notes: canonicalNotes });
+        onSaveNotes={async (findingsText, meta) => {
+          await saveProfileQaFinding(findingsText, meta);
         }}
       />
+
+      <div className="rounded-xl border border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setQaFindingsOpen((open) => !open)}
+          className="flex w-full items-start justify-between gap-4 p-4 text-left"
+          aria-expanded={qaFindingsOpen}
+        >
+          <div>
+            <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+              <ClipboardList className="h-3.5 w-3.5" /> Profile Q&A Findings
+            </h2>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              Saved AI Interview findings live here so the arousal notes stay clean.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+              {profileQaFindings.length}
+            </span>
+            {qaFindingsOpen ? <ChevronUp className="mt-0.5 h-4 w-4 text-muted-foreground" /> : <ChevronDown className="mt-0.5 h-4 w-4 text-muted-foreground" />}
+          </div>
+        </button>
+        {qaFindingsOpen && (
+          <div className="max-h-[32rem] space-y-3 overflow-y-auto border-t border-border p-4">
+            {profileQaFindings.length ? profileQaFindings.map((entry) => (
+              <article key={entry.id} className="rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-foreground">AI Interview — {entry.date}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{entry.source === "imported_profile_notes" ? "Imported" : "Auto-saved"}</p>
+                </div>
+                <ul className="mt-2 space-y-1 text-sm leading-relaxed text-muted-foreground">
+                  {entry.findings.map((finding, index) => (
+                    <li key={`${entry.id}-${index}`}>• {finding}</li>
+                  ))}
+                </ul>
+              </article>
+            )) : (
+              <p className="text-sm text-muted-foreground">No profile Q&A findings saved yet.</p>
+            )}
+          </div>
+        )}
+      </div>
 
       <Button onClick={save} disabled={saving} className="w-full gap-2">
         {saved
