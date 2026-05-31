@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -962,14 +963,22 @@ export default function AIChat({
     const bullets = directBullets || reviewCandidateBullets(normalizedFindings);
     if (!bullets) return;
     const timestamp = new Date().toISOString().slice(0, 10);
-    const merged = mode === "profile" ? bullets : `${savedNotes || ""}\n\n[Sarah Image Review — ${timestamp}]\n${bullets}`;
+    const mediaContext = extractVisualMediaContextFromConversation(finalMessages);
+    const hasVideoFrames = mediaContext.frame_count > 0;
+    const source = mode === "profile"
+      ? hasVideoFrames ? "profile_sarah_video_review" : "profile_sarah_image_review"
+      : hasVideoFrames ? "session_sarah_video_review" : "session_sarah_image_review";
+    const merged = mode === "profile" ? bullets : `${savedNotes || ""}\n\n[Sarah ${hasVideoFrames ? "Video" : "Image"} Review — ${timestamp}]\n${bullets}`;
     await onSaveNotes?.(merged, {
       date: timestamp,
-      source: mode === "profile" ? "profile_sarah_image_review" : "session_sarah_image_review",
+      source,
       conversation: finalMessages,
       structured_findings: normalizedFindings,
       needs_review: !directBullets || normalizedFindings.some((finding) => finding?.needsUserConfirmation),
       persistence_status: directBullets ? "recommended" : "review_candidate",
+      image_count: mediaContext.image_count,
+      frame_count: mediaContext.frame_count,
+      media_context: mediaContext,
     });
     setSavedFeedback(true);
     setTimeout(() => setSavedFeedback(false), 3000);

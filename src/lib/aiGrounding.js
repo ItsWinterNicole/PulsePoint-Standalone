@@ -1,4 +1,5 @@
 import { richTextToPlainText } from "@/lib/richText";
+import { isVisualReviewProfileQaEntry } from "@/lib/profileQa";
 
 export const PERSONALIZED_ANATOMY_OUTPUT_RULE = `
 PERSONALIZED ANATOMY OUTPUT RULE - HIGH PRIORITY:
@@ -8,6 +9,21 @@ PERSONALIZED ANATOMY OUTPUT RULE - HIGH PRIORITY:
 - Generic phrasing with "the" is permitted only for an unmistakably general physiology or anatomy explanation, such as explaining how penile tissue, the urethra, or the pelvic floor generally functions. As soon as the sentence returns to this person's data, observations, or interpretation, switch back to "your."
 - Before returning final output, check every anatomical reference in session-specific findings and revise any detached reference into direct second-person language.
 - Keep this personal language clinically grounded, observational, and natural. Do not make it erotic, euphemistic, or more certain than the evidence allows.
+`;
+
+export const REVIEWED_VISUAL_EVIDENCE_PRIORITY_RULE = `
+REVIEWED VISUAL EVIDENCE PRIORITY RULE - HIGH PRIORITY:
+- Reviewed Sarah analysis of user-provided images, video frames, frame sequences, or clips is high-priority observational evidence across the app.
+- When this evidence describes visible anatomy, erection state, stimulation method, contact zone, grip geometry, device fit, marker/sticker placement, positioning, movement, body response, telemetry overlay, foot/hand behavior, or arousal-state context, prioritize it above stored profile anatomy fields and older freeform notes.
+- Video and frame-sequence analysis has the highest priority for motion-dependent claims, including pacing, stroke path, contact changes, grip mechanics, device movement, posture shifts, foot movement, bracing, toe curl, and timing relative to visible telemetry.
+- Still-image analysis has high priority for static visible claims, including anatomy, morphology, device fit, positioning, visible state, marker placement, and contact location.
+- Q&A that follows a reviewed visual analysis inherits visual-evidence priority when the user confirms, corrects, or clarifies what was visible.
+- User Q&A controls subjective/internal claims such as sensation, intent, discomfort, perception, or context. Reviewed visual evidence controls visible claims unless the user explicitly corrects what was shown.
+- Stored anatomical/mechanical profile details remain useful secondary context, especially for stable measurements, historical tendencies, and details not visible in the media. They should not override clearer, newer, or more specific reviewed visual evidence.
+- Generated profile synthesis is summary context only. It should not override the underlying source evidence when reviewed visual findings, telemetry, event notes, or user-confirmed Q&A are available.
+- If reviewed visual evidence conflicts with stored profile details, explicitly acknowledge the discrepancy and prefer the reviewed visual evidence for the visible claim.
+- Do not overgeneralize from one image or clip into a permanent anatomical trait or universal response pattern unless repeated reviewed visual evidence or user-confirmed Q&A supports it.
+- Keep the rule domain-specific: current-session telemetry/events still control timing and numeric claims; reviewed visual evidence controls visible anatomy, stimulation mechanics, movement, contact, device fit, marker placement, and visible arousal/body-state claims.
 `;
 
 function hasValue(value) {
@@ -31,13 +47,21 @@ function addMeasurementLine(lines, label, measurement) {
   addLine(lines, label, `${measurement.value} ${measurement.unit}`);
 }
 
-function buildProfileQaFindingLines(findings = []) {
+function buildProfileQaFindingLines(findings = [], { visualOnly = false } = {}) {
   if (!Array.isArray(findings)) return [];
   return findings
+    .filter((entry) => visualOnly ? isVisualReviewProfileQaEntry(entry) : !isVisualReviewProfileQaEntry(entry))
     .slice(0, 18)
     .flatMap((entry) => {
       const bullets = Array.isArray(entry.findings) ? entry.findings : [];
-      return bullets.slice(0, 6).map((finding) => `- ${entry.date || "AI Interview"}: ${cleanText(finding, 500)}`);
+      return bullets.slice(0, 6).map((finding) => {
+        const structured = Array.isArray(entry.structured_findings) && entry.structured_findings.length
+          ? entry.structured_findings.find((item) => cleanText(item.findingText || item.text, 500) === cleanText(finding, 500))
+          : null;
+        const confidence = structured?.confidence ? `; ${structured.confidence} confidence` : "";
+        const media = entry.frame_count ? `; ${entry.frame_count} sampled video frames` : entry.image_count ? `; ${entry.image_count} image${entry.image_count === 1 ? "" : "s"}` : "";
+        return `- ${entry.date || "AI Interview"}${confidence}${media}: ${cleanText(finding, 500)}`;
+      });
     })
     .filter((line) => line.trim() !== "-:");
 }
@@ -123,6 +147,8 @@ export function buildGlobalProfileContext(userProfile) {
   addLine(lines, "Refractory pattern", userProfile.refractory_pattern, 700);
   addLine(lines, "Arousal notes", userProfile.arousal_notes, 1200);
   addLine(lines, "Profile notes", userProfile.profile_notes || userProfile.notes, 1200);
+  const visualFindingLines = buildProfileQaFindingLines(userProfile.profile_qa_findings, { visualOnly: true });
+  if (visualFindingLines.length) lines.push("Reviewed Sarah visual evidence (profile/anatomy/media):", ...visualFindingLines);
   const qaFindingLines = buildProfileQaFindingLines(userProfile.profile_qa_findings);
   if (qaFindingLines.length) lines.push("User-verified interview findings (Profile Q&A):", ...qaFindingLines);
   addLine(lines, "Anatomical context", userProfile.anatomical_context || userProfile.anatomy_notes, 900);
@@ -151,6 +177,7 @@ ${profileContext || "- No saved profile context was available. Rely only on the 
 GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Treat the profile as background context, not as a replacement for the current session facts.
 - Treat User-verified interview findings (Profile Q&A) as structured first-person interview evidence. They are stronger than loose profile notes because they were distilled from direct Q&A, but they remain below current-session telemetry, event notes, journal text, and direct session facts when those sources conflict.
+- Treat Reviewed Sarah visual evidence as a distinct high-priority observational layer for visible claims. It is stronger than older profile fields and freeform notes when it directly describes visible anatomy, technique, fit, contact, body state, marker placement, movement, or frame-sequence context.
 - Use repeated or convergent Profile Q&A findings to support higher-confidence longitudinal interpretation, especially when they align with telemetry, behavior, journals, or saved profile fields.
 - Compare current observations against the profile when useful, especially deviations from the person's known build style, sensitivity, recovery, and preferred stimulation.
 - Separate observed facts from interpretation. Anchor every meaningful claim in heart-rate data, event notes, journal text, subjective metrics, or saved profile notes.
@@ -183,6 +210,8 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Meatal morphology may be considered only when interpreting device fit, movement perception, sealing behavior, stimulation mechanics, or repeated observed functional patterns.
 - Do not use morphology for unsupported causal physiological claims or speculative conclusions.
 - Do not turn ambiguous pauses, slowdowns, or non-climax sessions into psychological conclusions.
+
+${REVIEWED_VISUAL_EVIDENCE_PRIORITY_RULE}
 
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}`;
 }

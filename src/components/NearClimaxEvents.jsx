@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 
 function fmtSec(s) {
   if (s == null) return "—";
@@ -209,12 +210,14 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
       ? `- Arousal style: ${userProfile.arousal_response_style || "—"}\n- Typical build duration: ${userProfile.typical_build_duration || "—"}\n- Climax sensitivity: ${userProfile.climax_sensitivity || "—"}\n- Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") || "—"}\n- Arousal notes: ${userProfile.arousal_notes || "none"}`
       : "";
     const groundingContext = buildAIGroundingContext(userProfile);
+    const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological analyst reviewing heart rate data from a sexual arousal session. Your task is to identify and interpret "near-climax events" — sustained HR elevations (8+ bpm rise, held for at least 20 seconds, then resolved) that represent genuine arousal spikes in the build phase.
 
 ${groundingContext}
+${reviewedVisualEvidence}
 
 ${profileContext ? `USER AROUSAL PROFILE (read this first — it defines how this person responds physiologically and shapes how you interpret every event):\n${profileContext}\n` : ""}
 CRITICAL LABELING RULES — STRICTLY ENFORCED:

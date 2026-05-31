@@ -7,6 +7,7 @@ import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
+import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
@@ -460,6 +461,7 @@ Use this arousal profile to personalize analysis: compare the observed build arc
     const firstNameToneCue = !isTechnical ? buildOptionalFirstNameToneCue(userProfile) : "";
     const structuredSessionContext = structuredSessionContextForAI(session);
     const warmMotionEvidence = buildWarmMotionEvidence(session);
+    const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
 
     const journalContext = sessionJournal ? `
 
@@ -496,6 +498,7 @@ ${isTechnical ? groundingContext : ""}
 ${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
 ${AI_SESSION_TYPE_GROUNDING_V1}
 ${BODY_STATE_INTERPRETIVE_STYLE_V1}
+${reviewedVisualEvidence}
 ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
@@ -605,6 +608,7 @@ ${JSON.stringify({
   unusual_sensations: session.unusual_sensations,
   refractory_notes: session.refractory_notes,
   notes: session.notes,
+  reviewed_visual_evidence: reviewedVisualEvidence || undefined,
   hr: hrSummary ? {
     timeline_derived_avg: hrSummary.hr_avg,
     timeline_derived_max: hrSummary.hr_max,

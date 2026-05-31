@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 
 function getCategoryMeta(value) {
@@ -162,12 +163,14 @@ export default function SessionTimelineNarrative({ session, timelineRows, userPr
       : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are an expert session analyst. Write a rich, long-form TIMELINE AND AROUSAL NARRATIVE of this session. This is not a physiology lecture — it is a moment-by-moment story of how arousal unfolded, driven primarily by heart rate data and event timing.
 
 ${groundingContext}
+${reviewedVisualEvidence}
 
 PRIMARY FOCUS:
 1. Walk through the session chronologically — what was happening at each key moment based on HR + events
@@ -225,6 +228,7 @@ ${JSON.stringify({
   estim_notes: session.estim_notes,
   unusual_sensations: session.unusual_sensations,
   notes: session.notes,
+  reviewed_visual_evidence: reviewedVisualEvidence || undefined,
   phase_markers_s: { pre_climax: session.pre_climax_offset_s, climax: session.climax_offset_s, recovery: session.recovery_offset_s },
   hr_at_climax: session.hr_at_climax,
   hr_avg_pre_to_climax: session.hr_avg_pre_to_climax,

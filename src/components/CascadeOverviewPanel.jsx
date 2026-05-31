@@ -5,6 +5,7 @@ import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, Chevr
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -277,6 +278,7 @@ ${JSON.stringify({
     Use this arousal profile to contextualize the cascade — compare the observed build arc, phase durations, and recovery against the user's known response style. Note deviations and what factors may have caused them.` : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
 
     const estimScreenshots = [
       ...(session.estim_screenshots || []),
@@ -290,6 +292,7 @@ ${JSON.stringify({
       prompt: `You are a physiological research assistant and anatomist specializing in sexual response. Analyze the climax cascade arc of this single session in depth, integrating HR data, EMG data (if present), anatomy, and event timing. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${reviewedVisualEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 PHYSIOLOGICAL & ANATOMICAL LENS — CONDITIONAL USE ONLY:

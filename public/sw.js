@@ -1,6 +1,6 @@
 // PWA_FULL_SEND_V1
 // PWA_NO_FOCUS_RELOAD_V1
-const CACHE_NAME = "pulsepoint-shell-v5";
+const CACHE_NAME = "pulsepoint-shell-v6";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -38,12 +38,14 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+  // Do not call clients.claim() here. Claiming an already-open PWA can fire a
+  // controllerchange while audio is playing, and older app bundles may respond
+  // by refreshing the page when Android/Chrome resumes the app.
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys
         .filter((key) => key.startsWith("pulsepoint-shell-") && key !== CACHE_NAME)
         .map((key) => caches.delete(key))))
-      .then(() => self.clients.claim())
   );
 });
 

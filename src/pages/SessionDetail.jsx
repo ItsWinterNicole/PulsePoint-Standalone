@@ -33,6 +33,7 @@ import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
+import { buildSessionVisualEvidenceDigest, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 
@@ -1174,6 +1175,9 @@ export default function SessionDetail() {
         <details id="session-interview" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
           <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Ask the AI</summary>
           <div className="mt-3">
+        <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+          Attach images or a short local video clip for Sarah to review visible technique, device fit, anatomy, marker placement, telemetry overlays, or body movement for this session.
+        </p>
         <AIChat
           mode="session"
           userProfile={userProfile}
@@ -1194,6 +1198,7 @@ export default function SessionDetail() {
             s.unusual_sensations ? `Unusual sensations: ${s.unusual_sensations}` : null,
             (s.discomfort_entries || []).length ? `Discomfort: ${s.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
             (s.event_timeline || []).length ? `Events: ${s.event_timeline.map(e => { const m = Math.floor(e.time_s / 60); const sec = Math.round(e.time_s % 60); return `[${m}:${sec.toString().padStart(2,"0")}] ${e.note}`; }).join(" | ")}` : null,
+            buildSessionVisualEvidenceDigest(s),
             s.notes ? `Session notes: ${s.notes}` : null,
           ].filter(Boolean).join("\n")}
           savedMessages={chatMessages}
@@ -1203,9 +1208,27 @@ export default function SessionDetail() {
             const updated = { ...(s.ai_analysis || {}), _chat_messages: msgs };
             await base44.entities.Session.update(id, { ai_analysis: updated });
           }}
-          onSaveNotes={async (merged) => {
+          onSaveNotes={async (merged, meta = {}) => {
             setSessionNotes(merged);
-            await base44.entities.Session.update(id, { notes: merged });
+            const patch = { notes: merged };
+            if (isVisualReviewSource(meta.source)) {
+              const visualEntry = makeSessionVisualEvidenceEntry(meta, merged);
+              const visualFindings = normalizeSessionVisualEvidence([
+                visualEntry,
+                ...(s.ai_analysis?._visual_findings || []),
+              ]);
+              patch.ai_analysis = {
+                ...(s.ai_analysis || {}),
+                _chat_messages: Array.isArray(meta.conversation) ? meta.conversation : chatMessages,
+                _visual_findings: visualFindings,
+              };
+              setSession((prev) => ({
+                ...prev,
+                notes: merged,
+                ai_analysis: { ...(prev?.ai_analysis || {}), _visual_findings: visualFindings },
+              }));
+            }
+            await base44.entities.Session.update(id, patch);
           }}
         />
           </div>

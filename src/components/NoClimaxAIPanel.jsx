@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 
 function getCategoryMeta(value) {
@@ -129,6 +130,7 @@ export default function NoClimaxAIPanel({ session, timelineRows, userProfile }) 
       : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
 
     const timeOfDay = (() => {
       if (!session.start_time) return undefined;
@@ -146,6 +148,7 @@ export default function NoClimaxAIPanel({ session, timelineRows, userProfile }) 
       prompt: `You are an expert sexual arousal physiologist and narrative writer. Analyze this INCOMPLETE session — it did NOT result in climax. Write a rich, story-driven analysis as if narrating a fascinating physiological journey. Do NOT treat this as a failed session — it is a valuable dataset. Write directly to the person using "you" and "your" throughout, like a knowledgeable friend reviewing their experience.
 
 ${groundingContext}
+${reviewedVisualEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 STYLE — CRITICAL (this output is read aloud via text-to-speech):
@@ -194,6 +197,7 @@ ${JSON.stringify({
   discomfort_entries: session.discomfort_entries?.length > 0 ? session.discomfort_entries : undefined,
   unusual_sensations: session.unusual_sensations,
   notes: session.notes,
+  reviewed_visual_evidence: reviewedVisualEvidence || undefined,
   hr_data: hrSummary,
 }, null, 2)}`,
       response_json_schema: {

@@ -50,12 +50,25 @@ export function toSecondPersonFinding(text, firstName = "") {
 
 function sourceLabelForProfileQaEntry(entry) {
   if (entry.source === "imported_profile_notes") return "Imported";
-  if (entry.source === "profile_sarah_image_review") {
+  if (isVisualReviewProfileQaEntry(entry)) {
     return entry.persistence_status === "review_candidate" || entry.needs_review
-      ? "Sarah review"
-      : "Sarah image review";
+      ? "Sarah visual review"
+      : entry.source?.includes("video")
+        ? "Sarah video review"
+        : "Sarah image review";
   }
   return "Auto-saved";
+}
+
+export function isVisualReviewProfileQaEntry(entry) {
+  return [
+    "profile_sarah_image_review",
+    "profile_sarah_video_review",
+    "profile_sarah_visual_review",
+    "session_sarah_image_review",
+    "session_sarah_video_review",
+    "session_sarah_visual_review",
+  ].includes(String(entry?.source || ""));
 }
 
 export function parseProfileQaFindingsFromText(text) {
@@ -83,6 +96,8 @@ export function normalizeProfileQaFindings(value) {
       persistence_status: entry.persistence_status || "recommended",
       structured_findings: Array.isArray(entry.structured_findings) ? entry.structured_findings : [],
       image_count: Number(entry.image_count || 0),
+      frame_count: Number(entry.frame_count || 0),
+      media_context: entry.media_context || null,
       findings: Array.isArray(entry.findings) ? entry.findings.map((item) => String(item).trim()).filter(Boolean) : parseFindingBullets(entry.findings),
     }))
     .filter((entry) => entry.findings.length)
@@ -109,7 +124,11 @@ export function makeProfileQaEntry(findingsText, meta = {}) {
     needs_review: Boolean(meta.needs_review),
     persistence_status: meta.persistence_status || "recommended",
     structured_findings: Array.isArray(meta.structured_findings) ? meta.structured_findings : [],
-    image_count: Array.isArray(meta.conversation)
+    frame_count: Number(meta.frame_count || 0),
+    media_context: meta.media_context || null,
+    image_count: meta.image_count != null
+      ? Number(meta.image_count || 0)
+      : Array.isArray(meta.conversation)
       ? meta.conversation.reduce((count, message) => count + (Array.isArray(message.imageAttachments) ? message.imageAttachments.length : 0), 0)
       : 0,
     findings: parseFindingBullets(findingsText),
@@ -167,6 +186,8 @@ export function buildProfileQaFindingCards(entries, firstName = "") {
         needs_review: entry.needs_review,
         persistence_status: entry.persistence_status,
         image_count: entry.image_count,
+        frame_count: entry.frame_count,
+        media_context: entry.media_context,
         sourceLabel: sourceLabelForProfileQaEntry(entry),
         duplicateCount: 0,
         sources: [entry.id],
@@ -192,6 +213,8 @@ export function buildRecentProfileQaFindings(entries, firstName = "", limit = 3)
       needs_review: entry.needs_review,
       persistence_status: entry.persistence_status,
       image_count: entry.image_count,
+      frame_count: entry.frame_count,
+      media_context: entry.media_context,
       sourceLabel: sourceLabelForProfileQaEntry(entry),
       entryId: entry.id,
       order: index,

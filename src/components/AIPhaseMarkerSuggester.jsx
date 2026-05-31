@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 
 function fmtMmSs(value) {
   if (value == null || Number(value) < 0) return "--";
@@ -535,6 +536,7 @@ export default function AIPhaseMarkerSuggester({ session, timelineRows, userProf
       const timelineEvidence = buildTimelineEvidence(session, timelineRows);
       const hrSamples = buildHRSamples(timelineRows);
       const groundingContext = buildAIGroundingContext(userProfile);
+      const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
       const draft = buildWholeTimelineDraft(session, timelineRows);
 
       const res = await base44.integrations.Core.InvokeLLM({
@@ -550,6 +552,7 @@ Use event notes and heart-rate trajectory together:
 - The correct marker should make sense in the full sequence before it makes sense as an isolated note.
 
 ${groundingContext}
+${reviewedVisualEvidence}
 
 Choose:
 - pre_climax_offset_s: the beginning of the final sustained approach to climax, not the first intense or interesting cue. Look for the point where the event sequence and HR trajectory stop behaving like ordinary build/plateau and become the final approach.
