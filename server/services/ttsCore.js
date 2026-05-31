@@ -82,6 +82,21 @@ export function runProcess(command, args, options = {}) {
   });
 }
 
+export function runProcessBinary(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true, ...options });
+    const stdout = [];
+    let stderr = '';
+    child.stdout?.on('data', (data) => { stdout.push(Buffer.from(data)); });
+    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve({ stdout: Buffer.concat(stdout), stderr });
+      else reject(new Error(`${command} exited with ${code}: ${stderr}`));
+    });
+  });
+}
+
 export function buildChunkInstructions(baseInstructions, previousContext, supportsInstructionsForModel) {
   const base = String(baseInstructions || '').trim();
   if (!supportsInstructionsForModel) return '';

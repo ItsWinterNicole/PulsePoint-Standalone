@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity } from "lucide-react";
+import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity, MessageCircle } from "lucide-react";
 import InstallAppButton from "./InstallAppButton";
 import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
 
@@ -45,8 +45,12 @@ const navItems = [
 { path: "/analytics", icon: BarChart2, label: "Analytics" },
 { path: "/modeler", icon: FlaskConical, label: "Predictive Modeler" },
 { path: "/settings", icon: Settings2, label: "Settings & Status" },
+{ path: "/profile-qa", icon: MessageCircle, label: "Profile Q&A" },
 { path: "/profile", icon: UserCircle, label: "My Profile" }];
 
+function isPathActive(path, pathname) {
+  return path === "/" ? pathname === "/" : pathname === path || pathname.startsWith(`${path}/`);
+}
 
 export default function Layout() {
   const location = useLocation();
@@ -78,7 +82,7 @@ export default function Layout() {
           {open ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
         <span className="text-sm font-semibold text-foreground tracking-tight">
-          {navItems.find((n) => n.path === "/" ? location.pathname === "/" : location.pathname.startsWith(n.path))?.label ?? "App"}
+          {navItems.find((n) => isPathActive(n.path, location.pathname))?.label ?? "App"}
         </span>
       </header>}
 
@@ -104,7 +108,7 @@ export default function Layout() {
         </div>
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
           {navItems.map(({ path, icon: Icon, label }) => {
-            const isActive = path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
+            const isActive = isPathActive(path, location.pathname);
             return (
               <Link
                 key={path}

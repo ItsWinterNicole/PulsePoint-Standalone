@@ -19,6 +19,7 @@ import Profiler from './pages/Profiler';
 import HROverlay from './pages/HROverlay';
 import LongTermTrends from './pages/LongTermTrends';
 import Profile from './pages/Profile';
+import ProfileQA from './pages/ProfileQA';
 import CorrelationMatrix from './pages/CorrelationMatrix';
 import VideoPlayer from './pages/VideoPlayer';
 import SessionReviewPlayer from './pages/SessionReviewPlayer';
@@ -76,6 +77,7 @@ const AuthenticatedApp = () => {
         <Route path="/profiler" element={<Profiler />} />
         <Route path="/overlay" element={<HROverlay />} />
         <Route path="/trends" element={<LongTermTrends />} />
+        <Route path="/profile-qa" element={<ProfileQA />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/correlations" element={<CorrelationMatrix />} />
         <Route path="/video" element={<VideoPlayer />} />

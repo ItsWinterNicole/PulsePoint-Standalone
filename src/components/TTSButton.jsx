@@ -351,6 +351,8 @@ export function formatTimeAsWords(time) {
 // Clean text for natural speech
 export function cleanTextForSpeech(text) {
   return repairDecimalSpacing(text)
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
     .replace(/•/g, ". ")
     .replace(/·/g, ". ")
     .replace(/–|—/g, ", ")
@@ -366,7 +368,7 @@ export function cleanTextForSpeech(text) {
     .replace(/</g, " less than ")
     .replace(/±/g, " plus or minus ")
     .replace(/\+/g, " plus ")
-    .replace(/\*/g, " times ")
+    .replace(/(\d)\s*\*\s*(\d)/g, "$1 times $2")
     .replace(/%/g, " percent")
     .replace(/\/(?=\d)/g, " out of ")
     .replace(/→/g, " to ")

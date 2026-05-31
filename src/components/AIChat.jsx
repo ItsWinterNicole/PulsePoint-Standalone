@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon } from "lucide-react";
+import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -26,8 +26,11 @@ const SESSION_CATEGORIES = [
 
 const PROFILE_MECHANICAL_RULE = `STRUCTURED ANATOMICAL / FUNCTIONAL PROFILE RULE: If populated profile fields provide erect dimensions, glans or foreskin context, meatal or urethral dimensions, accommodation or device-fit observations, or functional response observations, you may use them to deepen A&P interpretation of the person's reported findings when analytically relevant. Connect dimensions to supported stimulation mechanics, fit, pressure distribution, sensitivity, device interaction, or repeated response patterns only when the available findings support that link. Do not force mention of measurements, and do not turn dimensional data into unsupported causal claims.`;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"];
+const ALLOWED_VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".mkv"];
 const MAX_IMAGE_COUNT = 5;
 const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
+const VIDEO_FRAME_SAMPLE_COUNT = 12;
 
 function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -42,8 +45,113 @@ function fileToDataUrl(file) {
   });
 }
 
+function dataUrlToFile(dataUrl, filename, mimeType = "image/jpeg") {
+  const binary = atob(stripDataUrl(dataUrl));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], filename, { type: mimeType });
+}
+
+function loadVideoMetadata(file, existingUrl) {
+  return new Promise((resolve) => {
+    const url = existingUrl || URL.createObjectURL(file);
+    const shouldRevoke = !existingUrl;
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadedmetadata = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      if (shouldRevoke) URL.revokeObjectURL(url);
+      resolve(duration);
+    };
+    video.onerror = () => {
+      if (shouldRevoke) URL.revokeObjectURL(url);
+      resolve(0);
+    };
+    video.src = url;
+  });
+}
+
+function seekVideo(video, time) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("error", handleError);
+    };
+    const handleSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Could not sample this video clip."));
+    };
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("error", handleError);
+    video.currentTime = time;
+  });
+}
+
+async function sampleVideoFrames({ file, startSeconds, endSeconds, label, maxFrames = VIDEO_FRAME_SAMPLE_COUNT }) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  video.crossOrigin = "anonymous";
+  const loaded = new Promise((resolve, reject) => {
+    video.onloadedmetadata = resolve;
+    video.onerror = () => reject(new Error("Could not load this video clip."));
+  });
+  video.src = url;
+  await loaded;
+
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  const start = Math.max(0, Math.min(Number(startSeconds) || 0, duration));
+  const end = Math.max(start + 0.25, Math.min(Number(endSeconds) || duration || start + 1, duration || start + 1));
+  const frameCount = Math.max(1, Math.min(maxFrames, VIDEO_FRAME_SAMPLE_COUNT));
+  const width = Math.min(960, video.videoWidth || 960);
+  const height = Math.max(1, Math.round(width * ((video.videoHeight || 540) / (video.videoWidth || 960))));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  const frames = [];
+
+  for (let index = 0; index < frameCount; index += 1) {
+    const ratio = frameCount === 1 ? 0 : index / (frameCount - 1);
+    const time = start + (end - start) * ratio;
+    await seekVideo(video, Math.max(0, Math.min(time, duration || time)));
+    ctx.drawImage(video, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    const filename = `${String(label || file.name || "video-clip").replace(/[^a-z0-9_-]+/gi, "-").slice(0, 52)}-frame-${index + 1}.jpg`;
+    frames.push({
+      dataUrl,
+      filename,
+      file: dataUrlToFile(dataUrl, filename, "image/jpeg"),
+      time,
+    });
+  }
+
+  URL.revokeObjectURL(url);
+  return frames;
+}
+
 function stripDataUrl(dataUrl) {
   return String(dataUrl || "").replace(/^data:[^;]+;base64,/, "");
+}
+
+function formatSeconds(value) {
+  const seconds = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds - minutes * 60;
+  return minutes ? `${minutes}:${remainder.toFixed(1).padStart(4, "0")}` : `${remainder.toFixed(1)}s`;
+}
+
+function isAllowedVideoFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  return ALLOWED_VIDEO_TYPES.includes(file?.type) || ALLOWED_VIDEO_EXTENSIONS.some((extension) => name.endsWith(extension));
 }
 
 function normalizeAIImageResult(result) {
@@ -110,11 +218,12 @@ export default function AIChat({
   latestSavedFinding,
   recentSavedFindings,
   scopeId,
+  defaultOpen = false,
   onSaveMessages,
   onSaveNotes,
 }) {
   const [copiedIndex, setCopiedIndex] = useState(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [fullScreen, setFullScreen] = useState(false);
   const [messages, setMessages] = useState(savedMessages || []);
   const [input, setInput] = useState("");
@@ -129,17 +238,24 @@ export default function AIChat({
   const [ttsStatus, setTtsStatus] = useState(null);
   const [ttsElapsedSeconds, setTtsElapsedSeconds] = useState(0);
   const [selectedImages, setSelectedImages] = useState([]);
+  const [selectedVideoClip, setSelectedVideoClip] = useState(null);
+  const [videoPreviewSize, setVideoPreviewSize] = useState("large");
+  const [videoPlayheadSeconds, setVideoPlayheadSeconds] = useState(0);
+  const [processingVideoClip, setProcessingVideoClip] = useState(false);
   const [imageError, setImageError] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const imageInputRef = useRef(null);
+  const videoInputRef = useRef(null);
+  const videoPreviewRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const micStreamRef = useRef(null);
   const speechDetectedRef = useRef(false);
   const silenceStartRef = useRef(null);
   const voiceArmedRef = useRef(false);
+  const suppressNextTranscriptionRef = useRef(false);
   const vadFrameRef = useRef(null);
   const audioContextRef = useRef(null);
   const audioRef = useRef(null);
@@ -181,6 +297,10 @@ export default function AIChat({
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     audioContextRef.current?.close?.();
   }, []);
+
+  useEffect(() => () => {
+    if (selectedVideoClip?.previewUrl) URL.revokeObjectURL(selectedVideoClip.previewUrl);
+  }, [selectedVideoClip?.previewUrl]);
 
   useEffect(() => {
     if (!ttsStatus || !["preparing", "fetching"].includes(ttsStatus.phase)) {
@@ -267,6 +387,7 @@ export default function AIChat({
 
   const speakText = async (text, idx) => {
     if (!ttsEnabled) return;
+    releaseVoiceCaptureForPlayback();
     const requestId = ttsRequestIdRef.current + 1;
     ttsRequestIdRef.current = requestId;
     setSpeakingIdx(null);
@@ -344,6 +465,38 @@ export default function AIChat({
     }
   };
 
+  const toggleSpeechForMessage = (text, idx) => {
+    if (audioRef.current && ttsStatus?.idx === idx) {
+      if (audioRef.current.paused) {
+        audioRef.current.play().then(() => {
+          setSpeakingIdx(idx);
+          setTtsStatus((status) => status?.idx === idx ? {
+            ...status,
+            phase: "playing",
+            message: status.message?.startsWith("Paused") ? "Playing" : status.message,
+            startedAt: Date.now(),
+          } : status);
+        }).catch((error) => {
+          setSpeakingIdx(null);
+          setTtsStatus({ idx, phase: "error", message: error?.message || "Audio playback was blocked", startedAt: Date.now() });
+        });
+        return;
+      }
+
+      audioRef.current.pause();
+      setSpeakingIdx(idx);
+      setTtsStatus((status) => status?.idx === idx ? {
+        ...status,
+        phase: "paused",
+        message: "Paused. Tap this response to resume.",
+        startedAt: Date.now(),
+      } : status);
+      return;
+    }
+
+    speakText(text, idx);
+  };
+
   const stopSpeaking = () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -398,14 +551,199 @@ export default function AIChat({
     setSelectedImages((prev) => prev.filter((image) => image.id !== id));
   };
 
+  const seekVideoPreview = (seconds) => {
+    const next = Math.max(0, Number(seconds) || 0);
+    setVideoPlayheadSeconds(next);
+    if (videoPreviewRef.current && Number.isFinite(videoPreviewRef.current.duration)) {
+      videoPreviewRef.current.currentTime = Math.min(next, videoPreviewRef.current.duration);
+    }
+  };
+
+  const markVideoBoundary = (boundary) => {
+    if (!selectedVideoClip) return;
+    const current = Number.isFinite(videoPreviewRef.current?.currentTime)
+      ? videoPreviewRef.current.currentTime
+      : videoPlayheadSeconds;
+    updateSelectedVideoClip((clip) => {
+      const duration = clip.duration || Math.max(clip.endSeconds || 0, current + 0.3);
+      if (boundary === "start") {
+        const startSeconds = Math.max(0, Math.min(current, Math.max(0, duration - 0.3)));
+        return { ...clip, startSeconds, endSeconds: Math.max(startSeconds + 0.3, clip.endSeconds) };
+      }
+      const endSeconds = Math.min(Math.max(clip.startSeconds + 0.3, current), duration);
+      return { ...clip, endSeconds };
+    });
+  };
+
+  const handleVideoFile = async (files) => {
+    const file = Array.from(files || [])[0];
+    if (!file) return;
+    setImageError("");
+    if (!isAllowedVideoFile(file)) {
+      setImageError("Video clips must be MP4, WebM, MOV, or MKV.");
+      return;
+    }
+    try {
+      const previewUrl = URL.createObjectURL(file);
+      const duration = await loadVideoMetadata(file, previewUrl);
+      const defaultEnd = Math.min(12, Math.max(1, duration || 12));
+      setSelectedVideoClip({
+        id: makeId("pending-video"),
+        file,
+        filename: file.name,
+        sizeBytes: file.size,
+        previewUrl,
+        duration,
+        startSeconds: 0,
+        endSeconds: defaultEnd,
+        label: "",
+        processedClip: null,
+        processingStatus: "",
+      });
+      setVideoPlayheadSeconds(0);
+    } catch (error) {
+      setImageError(error.message || "Could not inspect this video.");
+    } finally {
+      if (videoInputRef.current) videoInputRef.current.value = "";
+    }
+  };
+
+  const updateSelectedVideoClip = (updater, options = {}) => {
+    setSelectedVideoClip((clip) => {
+      if (!clip) return clip;
+      const next = typeof updater === "function" ? updater(clip) : { ...clip, ...updater };
+      if (options.keepProcessed) return next;
+      return { ...next, processedClip: null, processingStatus: "" };
+    });
+  };
+
+  const processSelectedVideoClip = async () => {
+    if (!selectedVideoClip) return null;
+    const slots = VIDEO_FRAME_SAMPLE_COUNT;
+    if (slots <= 0) {
+      setImageError("No video frame slots are available.");
+      return null;
+    }
+    const label = selectedVideoClip.label?.trim() || selectedVideoClip.filename || "video technique example";
+    setProcessingVideoClip(true);
+    updateSelectedVideoClip({ processingStatus: "Processing clip with local FFmpeg..." }, { keepProcessed: true });
+    try {
+      const processed = await base44.integrations.Core.ProcessVideoClip({
+        file: selectedVideoClip.file,
+        startSeconds: selectedVideoClip.startSeconds,
+        endSeconds: selectedVideoClip.endSeconds,
+        label,
+        frameCount: Math.min(slots, VIDEO_FRAME_SAMPLE_COUNT),
+      });
+      updateSelectedVideoClip({
+        processedClip: processed,
+        processingStatus: "MP4 preview ready. Raw source was discarded after processing.",
+      }, { keepProcessed: true });
+      return processed;
+    } catch (error) {
+      const message = error?.status === 404
+        ? "Video processing endpoint is not available yet. Restart the local API server, then try Generate MP4 Preview again."
+        : error?.message || "Could not process this video clip.";
+      updateSelectedVideoClip({ processingStatus: message }, { keepProcessed: true });
+      setImageError(message);
+      return null;
+    } finally {
+      setProcessingVideoClip(false);
+    }
+  };
+
+  const sendSelectedVideoClipForReview = () => {
+    if (!selectedVideoClip || processingVideoClip) return;
+    const caption = selectedVideoClip.label?.trim();
+    const fallback = caption
+      ? `Please review this video clip: ${caption}`
+      : "Please review this video clip.";
+    sendMessage(input.trim() || fallback);
+  };
+
+  const materializeVideoClipFrames = async () => {
+    if (!selectedVideoClip) return [];
+    const slots = VIDEO_FRAME_SAMPLE_COUNT;
+    if (slots <= 0) {
+      setImageError("No video frame slots are available.");
+      return [];
+    }
+    setProcessingVideoClip(true);
+    try {
+      const label = selectedVideoClip.label?.trim() || selectedVideoClip.filename || "video technique example";
+      const processed = selectedVideoClip.processedClip || await processSelectedVideoClip();
+      if (processed?.frames?.length) {
+        return processed.frames.slice(0, slots).map((frame, index) => {
+          const dataUrl = frame.data ? `data:${frame.mimeType || "image/jpeg"};base64,${frame.data}` : frame.url || frame.file_url || "";
+          const filename = frame.filename || `${label}-frame-${index + 1}.jpg`;
+          const file = dataUrl.startsWith("data:")
+            ? dataUrlToFile(dataUrl, filename, frame.mimeType || "image/jpeg")
+            : null;
+          return {
+            id: makeId("video-frame"),
+            file,
+            filename,
+            mimeType: frame.mimeType || "image/jpeg",
+            sizeBytes: file?.size || 0,
+            previewUrl: frame.url || frame.file_url || dataUrl,
+            base64Data: frame.data || (dataUrl.startsWith("data:") ? stripDataUrl(dataUrl) : ""),
+            storagePath: frame.file_url || frame.url || "",
+            createdAt: new Date().toISOString(),
+            sourceVideo: {
+              filename: selectedVideoClip.filename,
+              label,
+              startSeconds: selectedVideoClip.startSeconds,
+              endSeconds: selectedVideoClip.endSeconds,
+              frameTimeSeconds: Number(frame.frameTimeSeconds ?? selectedVideoClip.startSeconds),
+              frameIndex: frame.frameIndex || index + 1,
+              processedClipUrl: processed.clip_url || processed.url || "",
+              motionSummary: index === 0 ? processed.motion_summary || null : null,
+            },
+          };
+        });
+      }
+      const frames = await sampleVideoFrames({
+        file: selectedVideoClip.file,
+        startSeconds: selectedVideoClip.startSeconds,
+        endSeconds: selectedVideoClip.endSeconds,
+        label,
+        maxFrames: Math.min(slots, VIDEO_FRAME_SAMPLE_COUNT),
+      });
+      return frames.map((frame, index) => ({
+        id: makeId("video-frame"),
+        file: frame.file,
+        filename: frame.filename,
+        mimeType: "image/jpeg",
+        sizeBytes: frame.file.size,
+        previewUrl: frame.dataUrl,
+        createdAt: new Date().toISOString(),
+        sourceVideo: {
+          filename: selectedVideoClip.filename,
+          label,
+          startSeconds: selectedVideoClip.startSeconds,
+          endSeconds: selectedVideoClip.endSeconds,
+          frameTimeSeconds: Number(frame.time.toFixed(2)),
+          frameIndex: index + 1,
+        },
+      }));
+    } finally {
+      setProcessingVideoClip(false);
+    }
+  };
+
   const uploadSelectedImages = async () => {
-    if (!selectedImages.length) return { metadata: [], aiImages: [] };
+    const videoFrames = await materializeVideoClipFrames();
+    const maxPending = MAX_IMAGE_COUNT + (videoFrames.length ? VIDEO_FRAME_SAMPLE_COUNT : 0);
+    const pendingImages = [...selectedImages, ...videoFrames].slice(0, maxPending);
+    if (!pendingImages.length) return { metadata: [], aiImages: [] };
     setUploadingImages(true);
     const uploaded = [];
     const aiImages = [];
     try {
-      for (const image of selectedImages) {
-        const upload = await base44.integrations.Core.UploadFile({ file: image.file });
+      for (const image of pendingImages) {
+        const upload = image.storagePath
+          ? { file_url: image.storagePath, url: image.storagePath }
+          : await base44.integrations.Core.UploadFile({ file: image.file });
         uploaded.push({
           id: makeId("image"),
           filename: image.filename,
@@ -415,15 +753,17 @@ export default function AIChat({
           previewUrl: upload?.file_url || upload?.url || image.previewUrl,
           createdAt: image.createdAt,
           scope: mode,
+          sourceVideo: image.sourceVideo || null,
           profileId: mode === "profile" ? scopeId || userProfile?.id || null : null,
           sessionId: mode === "session" ? scopeId || null : null,
         });
         aiImages.push({
           filename: image.filename,
           media_type: image.mimeType,
-          data: stripDataUrl(image.previewUrl),
+          data: image.base64Data || stripDataUrl(image.previewUrl),
         });
       }
+      if (videoFrames.length) setSelectedVideoClip(null);
       return { metadata: uploaded, aiImages };
     } finally {
       setUploadingImages(false);
@@ -447,6 +787,20 @@ export default function AIChat({
   const stopMicStream = () => {
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     micStreamRef.current = null;
+  };
+
+  const releaseVoiceCaptureForPlayback = () => {
+    if (!recording && !micStreamRef.current && !audioContextRef.current) return;
+    suppressNextTranscriptionRef.current = true;
+    voiceArmedRef.current = false;
+    setVoiceArmed(false);
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    } else {
+      stopVad();
+      stopMicStream();
+      setRecording(false);
+    }
   };
 
   const disableVoiceMode = () => {
@@ -513,6 +867,12 @@ export default function AIChat({
       stream.getTracks().forEach((t) => t.stop());
       if (micStreamRef.current === stream) micStreamRef.current = null;
       setRecording(false);
+      if (suppressNextTranscriptionRef.current) {
+        suppressNextTranscriptionRef.current = false;
+        audioChunksRef.current = [];
+        setTranscribing(false);
+        return;
+      }
       setTranscribing(true);
       const blob = new Blob(audioChunksRef.current, { type: mimeType });
       const ab = await blob.arrayBuffer();
@@ -615,9 +975,10 @@ export default function AIChat({
     setTimeout(() => setSavedFeedback(false), 3000);
   };
 
-  const sendMessage = async () => {
-    if ((!input.trim() && !selectedImages.length) || loading || uploadingImages) return;
-    const text = input.trim();
+  const sendMessage = async (overrideText = null) => {
+    const requestedText = typeof overrideText === "string" ? overrideText : input;
+    if ((!requestedText.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip) return;
+    const text = requestedText.trim();
     setLoading(true);
     setImageError("");
     let imagePayload = { metadata: [], aiImages: [] };
@@ -628,7 +989,7 @@ export default function AIChat({
       setImageError(error.message || "Image upload failed.");
       return;
     }
-    const userMsg = { role: "user", text: text || "Please review the attached image(s).", imageAttachments: imagePayload.metadata };
+    const userMsg = { role: "user", text: text || "Please review the attached media.", imageAttachments: imagePayload.metadata };
     const updated = [...messages, userMsg];
     setMessages(updated);
     onSaveMessages?.(updated);
@@ -639,6 +1000,25 @@ export default function AIChat({
       const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
       return `${m.role === "user" ? "User" : "AI"}: ${m.text}${attachmentLine}`;
     }).join("\n");
+    const videoContext = imagePayload.metadata
+      .filter((item) => item.sourceVideo)
+      .map((item) => item.sourceVideo)
+      .map((video) => `Video clip frame ${video.frameIndex}: "${video.label}" from ${Number(video.startSeconds).toFixed(1)}s to ${Number(video.endSeconds).toFixed(1)}s, sampled at ${Number(video.frameTimeSeconds).toFixed(1)}s from ${video.filename}.`)
+      .join("\n");
+    const motionSummary = imagePayload.metadata
+      .map((item) => item.sourceVideo?.motionSummary)
+      .find(Boolean);
+    const motionContext = motionSummary
+      ? [
+          `Local motion summary method: ${motionSummary.method || "unknown"}.`,
+          `Estimated motion level: ${motionSummary.motion_level || "unknown"}.`,
+          motionSummary.average_motion != null ? `Average frame-to-frame motion: ${motionSummary.average_motion}.` : null,
+          motionSummary.peak_motion != null ? `Peak frame-to-frame motion: ${motionSummary.peak_motion}.` : null,
+          motionSummary.active_motion_pct != null ? `Active motion coverage: ${motionSummary.active_motion_pct}%.` : null,
+          motionSummary.pause_candidates?.length ? `Possible low-motion pauses: ${motionSummary.pause_candidates.map((pause) => `${pause.startSeconds}-${pause.endSeconds}s (${pause.durationSeconds}s)`).join(", ")}.` : null,
+          motionSummary.note || null,
+        ].filter(Boolean).join("\n")
+      : "";
 
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
@@ -737,7 +1117,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     };
 
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${imageReviewPrompt || systemPrompt}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      prompt: `${imageReviewPrompt || systemPrompt}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
     });
 
@@ -778,6 +1158,7 @@ Return a conversational answer plus structured findings for review/persistence.`
   };
   const ttsStatusClass = (phase) => {
     if (phase === "error") return "border-destructive/30 bg-destructive/10 text-destructive";
+    if (phase === "paused") return "border-amber-400/30 bg-amber-400/10 text-amber-200";
     if (phase === "playing" || phase === "cached" || phase === "complete") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
     return "border-accent/30 bg-accent/10 text-accent";
   };
@@ -803,7 +1184,7 @@ Return a conversational answer plus structured findings for review/persistence.`
   const textareaClass = fullScreen
     ? "min-h-24 w-full resize-none rounded-2xl border border-border bg-muted/30 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
     : "w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50";
-  const sendDisabled = (!input.trim() && !selectedImages.length) || loading || uploadingImages;
+  const effectiveSendDisabled = (!input.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip;
 
   const renderSelectedImages = () => selectedImages.length ? (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
@@ -823,6 +1204,225 @@ Return a conversational answer plus structured findings for review/persistence.`
       ))}
     </div>
   ) : null;
+
+  const renderSelectedVideoClip = () => {
+    if (!selectedVideoClip) return null;
+    const expandedPreview = videoPreviewSize === "expanded";
+    const previewHeightClass = expandedPreview
+      ? "h-[clamp(28rem,62vh,48rem)]"
+      : "h-[clamp(20rem,46vh,34rem)]";
+
+    return (
+    <div className="rounded-lg border border-primary/25 bg-primary/[0.05] p-3 text-xs">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-primary">Local video clip</p>
+          <p className="truncate text-[10px] text-muted-foreground">
+            {selectedVideoClip.filename} · {selectedVideoClip.duration ? formatSeconds(selectedVideoClip.duration) : "duration pending"} · raw source is discarded after local processing
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setVideoPreviewSize((size) => size === "expanded" ? "large" : "expanded")}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title={expandedPreview ? "Compact preview" : "Expand preview"}
+          >
+            {expandedPreview ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedVideoClip(null)}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="Remove video clip"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      <div className={`mb-2 min-h-80 w-full resize-y overflow-hidden rounded-md border border-border bg-black ${previewHeightClass}`}>
+        <video
+          ref={videoPreviewRef}
+          src={selectedVideoClip.processedClip?.clip_url || selectedVideoClip.processedClip?.url || selectedVideoClip.previewUrl}
+          controls
+          muted
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={(event) => {
+            const duration = event.currentTarget.duration;
+            if (selectedVideoClip.processedClip) {
+              event.currentTarget.currentTime = 0;
+              setVideoPlayheadSeconds(0);
+              return;
+            }
+            if (Number.isFinite(duration) && duration > 0 && !selectedVideoClip.duration) {
+              updateSelectedVideoClip({ duration }, { keepProcessed: true });
+            }
+          }}
+          onTimeUpdate={(event) => {
+            if (!selectedVideoClip.processedClip) setVideoPlayheadSeconds(event.currentTarget.currentTime || 0);
+          }}
+          className="h-full w-full bg-black object-contain"
+        />
+      </div>
+      <input
+        value={selectedVideoClip.label}
+        onChange={(event) => updateSelectedVideoClip({ label: event.target.value })}
+        placeholder='Label, e.g. "fingers-on-glans technique"'
+        className="mb-2 w-full rounded-md border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+      />
+      <div className="rounded-md border border-border bg-background/60 p-2">
+        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+          <span>{selectedVideoClip.processedClip ? "Trimmed preview" : "Playhead"} <span className="font-medium text-foreground">{formatSeconds(videoPlayheadSeconds)}</span></span>
+          <span>
+            In <span className="font-medium text-foreground">{formatSeconds(selectedVideoClip.startSeconds)}</span>
+            {" · "}
+            Out <span className="font-medium text-foreground">{formatSeconds(selectedVideoClip.endSeconds)}</span>
+          </span>
+        </div>
+        <input
+          type="range"
+          min="0"
+          max={Math.max(0.3, selectedVideoClip.duration || selectedVideoClip.endSeconds || 30)}
+          step="0.1"
+          value={Math.min(videoPlayheadSeconds, Math.max(0.3, selectedVideoClip.duration || selectedVideoClip.endSeconds || 30))}
+          onChange={(event) => seekVideoPreview(event.target.value)}
+          disabled={Boolean(selectedVideoClip.processedClip)}
+          className="w-full accent-primary"
+        />
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => markVideoBoundary("start")}
+            disabled={Boolean(selectedVideoClip.processedClip)}
+            className="h-7 px-2 text-[11px]"
+          >
+            Mark In
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => markVideoBoundary("end")}
+            disabled={Boolean(selectedVideoClip.processedClip)}
+            className="h-7 px-2 text-[11px]"
+          >
+            Mark Out
+          </Button>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => seekVideoPreview(selectedVideoClip.startSeconds)}
+            className="h-7 px-2 text-[11px]"
+          >
+            Jump to In
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => seekVideoPreview(selectedVideoClip.endSeconds)}
+            className="h-7 px-2 text-[11px]"
+          >
+            Jump to Out
+          </Button>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <label className="text-[10px] text-muted-foreground">
+          Start
+          <input
+            type="number"
+            min="0"
+            max={Math.max(0.3, selectedVideoClip.duration || selectedVideoClip.endSeconds || 30)}
+            step="0.1"
+            value={selectedVideoClip.startSeconds}
+            onChange={(event) => {
+              const nextStart = Math.max(0, Number(event.target.value) || 0);
+              updateSelectedVideoClip((clip) => ({ ...clip, startSeconds: nextStart, endSeconds: Math.max(nextStart + 0.3, clip.endSeconds) }));
+              seekVideoPreview(nextStart);
+            }}
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+          />
+        </label>
+        <label className="text-[10px] text-muted-foreground">
+          End
+          <input
+            type="number"
+            min="0.3"
+            max={Math.max(0.3, selectedVideoClip.duration || selectedVideoClip.endSeconds || 30)}
+            step="0.1"
+            value={selectedVideoClip.endSeconds}
+            onChange={(event) => {
+              const requested = Number(event.target.value) || selectedVideoClip.endSeconds;
+              let nextEnd = requested;
+              updateSelectedVideoClip((clip) => {
+                const max = clip.duration || requested;
+                nextEnd = Math.min(Math.max(clip.startSeconds + 0.3, requested), max);
+                return { ...clip, endSeconds: nextEnd };
+              });
+              seekVideoPreview(nextEnd);
+            }}
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+          />
+        </label>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={processSelectedVideoClip}
+          disabled={processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+          className="h-7 px-2 text-[11px]"
+        >
+          {processingVideoClip ? <RefreshCw className="mr-1 h-3 w-3 animate-spin" /> : <Film className="mr-1 h-3 w-3" />}
+          {selectedVideoClip.processedClip ? "Rebuild MP4 Preview" : "Generate MP4 Preview"}
+        </Button>
+        {selectedVideoClip.processedClip && (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              onClick={sendSelectedVideoClipForReview}
+              disabled={loading || uploadingImages || processingVideoClip}
+              className="h-7 px-2 text-[11px]"
+            >
+              Send Clip to Sarah
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                updateSelectedVideoClip({ processedClip: null, processingStatus: "" });
+                seekVideoPreview(selectedVideoClip.startSeconds);
+              }}
+              className="h-7 px-2 text-[11px]"
+            >
+              Edit Marks
+            </Button>
+          </>
+        )}
+        <span className="text-[10px] text-muted-foreground">
+          {selectedVideoClip.processedClip
+            ? "Add or edit the caption in the text box, then send the clip for review."
+            : `Sarah gets ${VIDEO_FRAME_SAMPLE_COUNT} timestamped stills plus a local motion summary from this range.`}
+        </span>
+      </div>
+      {selectedVideoClip.processingStatus && (
+        <p className={`mt-2 text-[10px] ${selectedVideoClip.processedClip ? "text-emerald-400" : "text-muted-foreground"}`}>
+          {selectedVideoClip.processingStatus}
+        </p>
+      )}
+    </div>
+    );
+  };
 
   const renderMessageImages = (attachments = []) => attachments?.length ? (
     <div className="mb-2 grid grid-cols-2 gap-2">
@@ -847,19 +1447,41 @@ Return a conversational answer plus structured findings for review/persistence.`
       <input
         ref={imageInputRef}
         type="file"
-        accept={ALLOWED_IMAGE_TYPES.join(",")}
+        accept={[...ALLOWED_IMAGE_TYPES, ...ALLOWED_VIDEO_TYPES, ...ALLOWED_VIDEO_EXTENSIONS].join(",")}
         multiple
         className="hidden"
-        onChange={(event) => handleImageFiles(event.target.files)}
+        onChange={(event) => {
+          const files = Array.from(event.target.files || []);
+          const videos = files.filter((file) => isAllowedVideoFile(file));
+          const images = files.filter((file) => ALLOWED_IMAGE_TYPES.includes(file.type));
+          if (videos[0]) handleVideoFile([videos[0]]);
+          if (images.length) handleImageFiles(images);
+        }}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept={[...ALLOWED_VIDEO_TYPES, ...ALLOWED_VIDEO_EXTENSIONS].join(",")}
+        className="hidden"
+        onChange={(event) => handleVideoFile(event.target.files)}
       />
       <button
         type="button"
         onClick={() => imageInputRef.current?.click()}
-        disabled={loading || transcribing || uploadingImages || selectedImages.length >= MAX_IMAGE_COUNT}
+        disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
         title="Attach images for Sarah"
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
       >
         <Paperclip className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        onClick={() => videoInputRef.current?.click()}
+        disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+        title="Select a local video clip for Sarah"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
+      >
+        <Film className="h-4 w-4" />
       </button>
     </>
   );
@@ -879,10 +1501,10 @@ Return a conversational answer plus structured findings for review/persistence.`
       </button>
       <button
         onClick={sendMessage}
-        disabled={sendDisabled}
+        disabled={effectiveSendDisabled}
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
       >
-        {uploadingImages ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
+        {uploadingImages || processingVideoClip ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
       </button>
     </div>
   );
@@ -967,6 +1589,7 @@ Return a conversational answer plus structured findings for review/persistence.`
           {messages.length === 0 ? (
             <div className={`${fullScreen ? "mx-auto mt-auto w-full max-w-4xl pb-4" : ""} space-y-2`}>
               {renderSelectedImages()}
+              {renderSelectedVideoClip()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <textarea
                 ref={inputRef}
@@ -989,8 +1612,8 @@ Return a conversational answer plus structured findings for review/persistence.`
                   )}
                   <div
                     className={messageClass(msg.role)}
-                    onClick={msg.role === "assistant" ? () => speakText(msg.text, i) : undefined}
-                    title={msg.role === "assistant" ? (speakingIdx === i ? "Tap to replay from start" : "Tap to hear") : undefined}
+                    onClick={msg.role === "assistant" ? () => toggleSpeechForMessage(msg.text, i) : undefined}
+                    title={msg.role === "assistant" ? (ttsStatus?.idx === i && ttsStatus.phase === "paused" ? "Tap to resume" : speakingIdx === i ? "Tap to pause" : "Tap to hear") : undefined}
                   >
                     {renderMessageImages(msg.imageAttachments)}
                     <MessageMarkdown text={msg.text} />
@@ -1026,6 +1649,7 @@ Return a conversational answer plus structured findings for review/persistence.`
                             <span className="h-2 w-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "200ms" }} />
                           </span>
                         )}
+                        {ttsStatus.phase === "paused" && <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-current" />}
                         {ttsStatus.phase === "error" && <span className="h-2 w-2 shrink-0 rounded-full bg-current" />}
                         <span className="min-w-0 flex-1 truncate">{ttsStatusLabel(ttsStatus)}</span>
                         {ttsStatus.phase === "error" && (
@@ -1062,6 +1686,7 @@ Return a conversational answer plus structured findings for review/persistence.`
 
               {/* Input — shown after messages start */}
               {renderSelectedImages()}
+              {renderSelectedVideoClip()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <div className={composerClass}>
                 <textarea

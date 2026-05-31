@@ -7,7 +7,10 @@ async function request(path, options = {}) {
     const data = contentType.includes('application/json')
       ? await response.json()
       : { error: await response.text() };
-    const message = data?.error || data?.message || `Request failed: ${response.status}`;
+    const rawMessage = data?.error || data?.message || `Request failed: ${response.status}`;
+    const message = String(rawMessage).includes('<!DOCTYPE html>')
+      ? `Request failed: ${response.status}`
+      : rawMessage;
     const error = new Error(message);
     error.status = response.status;
     error.data = data;
@@ -113,6 +116,15 @@ export const base44 = {
         const form = new FormData();
         form.append('file', file);
         return request('/files/upload', { method: 'POST', body: form });
+      },
+      ProcessVideoClip: async ({ file, startSeconds = 0, endSeconds = 8, label = '', frameCount = 12 }) => {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('startSeconds', String(startSeconds));
+        form.append('endSeconds', String(endSeconds));
+        form.append('label', label);
+        form.append('frameCount', String(frameCount));
+        return request('/files/video-clip-preview', { method: 'POST', body: form });
       },
     },
   },
