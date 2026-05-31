@@ -1010,6 +1010,7 @@ ${firstNameToneCue}
 
 SYNTHESIS REQUIREMENTS:
 - Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.
+- Write every part of the response directly to the person in second person, including the opening overview. Do not open with "Ben is," "the person is," "the user is," or any other third-person framing.
 - Separate directly entered anatomical observations from repeated session-linked findings and from cautious interpretations.
 - Consider constitutional/body habitus, cardiovascular/autonomic, respiratory, neurological/sensory, musculoskeletal/biomechanical, and endocrine/metabolic context only when those data were provided.
 - When populated, integrate static resting or flaccid anatomy, static erect anatomy, dynamic transition findings, glans or foreskin context, meatal structure, urethral accommodation, fit or tolerance, pressure distribution, device interaction, instrumentation compatibility or limitations, and repeated functional response observations.
@@ -1026,7 +1027,7 @@ ${evidenceDigest}
 SELECTED SESSION-BY-SESSION EVIDENCE:
 ${sessionSummaries || "No session evidence is available; rely only on populated profile entries."}
 
-Write directly to the person in clear, clinically grounded language. Favor meaningful synthesis over measurement recital.`,
+Write directly to the person in clear, clinically grounded language. Favor meaningful synthesis over measurement recital. Before returning, check the overview and every section for third-person references and rewrite them into natural "you" and "your" language.`,
         response_json_schema: {
           type: "object",
           properties: {
@@ -1074,11 +1075,17 @@ Write directly to the person in clear, clinically grounded language. Favor meani
   const paragraphs = [];
   const paragraphMeta = [];
   if (result) {
+    paragraphs.push("Anatomical and Physiological Profile");
+    paragraphMeta.push({ type: "title", color: "hsl(var(--chart-2))" });
     if (result.overview) {
       paragraphs.push(naturalizeSpokenDates(result.overview));
       paragraphMeta.push({ type: "overview" });
     }
     for (const section of sections) {
+      if ((result[section.key] || []).length) {
+        paragraphs.push(section.label);
+        paragraphMeta.push({ type: "section-title", section });
+      }
       for (const finding of (result[section.key] || [])) {
         paragraphs.push(naturalizeSpokenDates(finding));
         paragraphMeta.push({ type: "section", section });
@@ -1132,6 +1139,21 @@ Write directly to the person in clear, clinically grounded language. Favor meani
             const meta = paragraphMeta[idx];
             if (!meta) return null;
 
+            if (meta.type === "title" || meta.type === "section-title") {
+              const color = meta.section?.color || meta.color || "hsl(var(--chart-2))";
+              return (
+                <p
+                  className="mt-4 border-t border-border pt-3 text-xs font-semibold uppercase tracking-wider transition-colors"
+                  style={{
+                    color,
+                    background: isActive ? `${color}18` : "transparent",
+                  }}
+                >
+                  {text}
+                </p>
+              );
+            }
+
             if (meta.type === "overview") {
               return (
                 <p
@@ -1147,15 +1169,9 @@ Write directly to the person in clear, clinically grounded language. Favor meani
             }
 
             const { section } = meta;
-            const firstInSection = paragraphs.findIndex((_, i) => paragraphMeta[i]?.type === "section" && paragraphMeta[i]?.section?.key === section.key) === idx;
 
             return (
               <div>
-                {firstInSection && (
-                  <p className="text-xs font-semibold uppercase tracking-wider mt-4 mb-1.5 pt-3 border-t border-border" style={{ color: section.color }}>
-                    {section.label}
-                  </p>
-                )}
                 <p
                   className="border-l-2 pl-3 py-1 text-sm leading-relaxed transition-all duration-200 rounded-r-md"
                   style={{
