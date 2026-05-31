@@ -1,8 +1,9 @@
 import { useCallback, useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
-import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
+import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const PROFILE_CATEGORIES = [
@@ -82,6 +83,24 @@ function reviewCandidateBullets(findings = []) {
     .join("\n");
 }
 
+function MessageMarkdown({ text }) {
+  return (
+    <ReactMarkdown
+      components={{
+        p: ({ children }) => <p className="my-1 first:mt-0 last:mb-0">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-inherit">{children}</strong>,
+        em: ({ children }) => <em className="italic text-inherit">{children}</em>,
+        ul: ({ children }) => <ul className="my-1 list-disc space-y-1 pl-4">{children}</ul>,
+        ol: ({ children }) => <ol className="my-1 list-decimal space-y-1 pl-4">{children}</ol>,
+        li: ({ children }) => <li className="pl-0.5">{children}</li>,
+        code: ({ children }) => <code className="rounded bg-black/15 px-1 py-0.5 text-[0.92em]">{children}</code>,
+      }}
+    >
+      {String(text || "")}
+    </ReactMarkdown>
+  );
+}
+
 export default function AIChat({
   mode = "session",
   context,
@@ -107,6 +126,8 @@ export default function AIChat({
   const [transcribing, setTranscribing] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [speakingIdx, setSpeakingIdx] = useState(null);
+  const [ttsStatus, setTtsStatus] = useState(null);
+  const [ttsElapsedSeconds, setTtsElapsedSeconds] = useState(0);
   const [selectedImages, setSelectedImages] = useState([]);
   const [imageError, setImageError] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
@@ -123,6 +144,7 @@ export default function AIChat({
   const audioContextRef = useRef(null);
   const audioRef = useRef(null);
   const audioUrlCacheRef = useRef(new Map());
+  const ttsRequestIdRef = useRef(0);
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
 
@@ -161,6 +183,18 @@ export default function AIChat({
   }, []);
 
   useEffect(() => {
+    if (!ttsStatus || !["preparing", "fetching"].includes(ttsStatus.phase)) {
+      setTtsElapsedSeconds(0);
+      return undefined;
+    }
+    setTtsElapsedSeconds(Math.max(0, Math.floor((Date.now() - ttsStatus.startedAt) / 1000)));
+    const timer = window.setInterval(() => {
+      setTtsElapsedSeconds(Math.max(0, Math.floor((Date.now() - ttsStatus.startedAt) / 1000)));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [ttsStatus]);
+
+  useEffect(() => {
     if (!fullScreen) return undefined;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -174,50 +208,140 @@ export default function AIChat({
     };
   }, [fullScreen]);
 
-  const playAudioUrl = (src, idx) => {
+  const setCurrentTtsStatus = (requestId, status) => {
+    if (requestId !== ttsRequestIdRef.current) return;
+    setTtsStatus(status);
+  };
+
+  const playAudioUrl = (src, idx, requestId = ttsRequestIdRef.current, options = {}) => new Promise((resolve, reject) => {
+    const {
+      fromCache = false,
+      chunkIndex = 0,
+      totalChunks = 1,
+      finalChunk = true,
+    } = options;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
     const el = new Audio(src);
     audioRef.current = el;
+    const suffix = totalChunks > 1 ? ` (${chunkIndex + 1}/${totalChunks})` : "";
     const cleanup = () => {
       if (audioRef.current === el) audioRef.current = null;
       setSpeakingIdx(null);
+      if (requestId === ttsRequestIdRef.current && finalChunk) {
+        setTtsStatus({ idx, phase: "complete", message: "Playback complete", startedAt: Date.now() });
+        window.setTimeout(() => {
+          if (requestId === ttsRequestIdRef.current) setTtsStatus(null);
+        }, 1600);
+      }
+      resolve();
     };
     el.onended = cleanup;
-    el.onerror = cleanup;
+    el.onerror = () => {
+      if (audioRef.current === el) audioRef.current = null;
+      setSpeakingIdx(null);
+      const error = new Error("Audio playback failed");
+      setCurrentTtsStatus(requestId, { idx, phase: "error", message: error.message, startedAt: Date.now() });
+      reject(error);
+    };
     setSpeakingIdx(idx);
-    el.play();
-  };
+    setCurrentTtsStatus(requestId, {
+      idx,
+      phase: "playing",
+      message: `${fromCache ? "Playing cached audio" : "Playing"}${suffix}`,
+      startedAt: Date.now(),
+    });
+    el.play().catch((error) => {
+      setSpeakingIdx(null);
+      setCurrentTtsStatus(requestId, {
+        idx,
+        phase: "error",
+        message: error?.message || "Audio playback was blocked",
+        startedAt: Date.now(),
+      });
+      reject(error);
+    });
+  });
 
   const speakText = async (text, idx) => {
     if (!ttsEnabled) return;
-    const cacheKey = `${idx}:${String(text || "")}`;
-    const cachedUrl = audioUrlCacheRef.current.get(cacheKey);
-    if (cachedUrl) {
-      playAudioUrl(cachedUrl, idx);
-      return;
+    const requestId = ttsRequestIdRef.current + 1;
+    ttsRequestIdRef.current = requestId;
+    setSpeakingIdx(null);
+    setTtsStatus({ idx, phase: "preparing", message: "Preparing TTS request", startedAt: Date.now() });
+    try {
+      const cleanedText = cleanTextForSpeech(text);
+      const chunks = splitIntoChunks(cleanedText, TTS_CHUNK_TARGET_CHARS).filter((chunk) => chunk.trim());
+      if (!chunks.length) {
+        setCurrentTtsStatus(requestId, { idx, phase: "error", message: "Nothing to read", startedAt: Date.now() });
+        return;
+      }
+      const runtime = getTTSRuntime();
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        if (requestId !== ttsRequestIdRef.current) return;
+        const chunk = chunks[chunkIndex];
+        const cacheKey = `${idx}:${runtime.cacheProfile}:${runtime.format}:${runtime.speed}:${chunk}`;
+        let src = audioUrlCacheRef.current.get(cacheKey);
+        let fromCache = Boolean(src);
+        if (src) {
+          setCurrentTtsStatus(requestId, {
+            idx,
+            phase: "cached",
+            message: chunks.length > 1 ? `Using cached audio chunk ${chunkIndex + 1}/${chunks.length}` : "Using cached audio",
+            startedAt: Date.now(),
+          });
+        } else {
+          setCurrentTtsStatus(requestId, {
+            idx,
+            phase: "fetching",
+            message: chunks.length > 1 ? `Fetching Sarah audio chunk ${chunkIndex + 1}/${chunks.length}` : "Fetching Sarah audio",
+            startedAt: Date.now(),
+          });
+          const res = await base44.functions.invoke("openaiTTS", {
+            text: prepareTTSInput(chunk),
+            voice: "nova",
+            model: runtime.model,
+            speed: runtime.speed,
+            instructions: runtime.supportsInstructions ? runtime.instructions : "",
+            format: runtime.format,
+          });
+          const audio = res.data?.audio;
+          if (!audio) {
+            setSpeakingIdx(null);
+            setCurrentTtsStatus(requestId, { idx, phase: "error", message: res.data?.error || "TTS returned no audio", startedAt: Date.now() });
+            return;
+          }
+          const binary = atob(audio);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          src = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT) }));
+          audioUrlCacheRef.current.set(cacheKey, src);
+          fromCache = false;
+        }
+        setCurrentTtsStatus(requestId, {
+          idx,
+          phase: "ready",
+          message: chunks.length > 1 ? `Audio chunk ${chunkIndex + 1}/${chunks.length} ready` : "Audio ready, starting playback",
+          startedAt: Date.now(),
+        });
+        await playAudioUrl(src, idx, requestId, {
+          fromCache,
+          chunkIndex,
+          totalChunks: chunks.length,
+          finalChunk: chunkIndex === chunks.length - 1,
+        });
+      }
+    } catch (error) {
+      setSpeakingIdx(null);
+      setCurrentTtsStatus(requestId, {
+        idx,
+        phase: "error",
+        message: error?.data?.error || error?.message || "TTS request failed",
+        startedAt: Date.now(),
+      });
     }
-    setSpeakingIdx(idx);
-    const runtime = getTTSRuntime();
-    const res = await base44.functions.invoke("openaiTTS", {
-      text: prepareTTSInput(text),
-      voice: "nova",
-      model: runtime.model,
-      speed: runtime.speed,
-      instructions: runtime.supportsInstructions ? runtime.instructions : "",
-      format: runtime.format,
-    });
-    const audio = res.data?.audio;
-    if (!audio) { setSpeakingIdx(null); return; }
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    const binary = atob(audio);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const src = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT) }));
-    audioUrlCacheRef.current.set(cacheKey, src);
-    playAudioUrl(src, idx);
   };
 
   const stopSpeaking = () => {
@@ -225,7 +349,9 @@ export default function AIChat({
       audioRef.current.pause();
       audioRef.current = null;
     }
+    ttsRequestIdRef.current += 1;
     setSpeakingIdx(null);
+    setTtsStatus(null);
   };
 
   const clearAudioCache = () => {
@@ -643,6 +769,18 @@ Return a conversational answer plus structured findings for review/persistence.`
 
   const hasUserReplied = messages.some((m) => m.role === "user");
   const hasMessages = messages.length > 0;
+  const ttsStatusLabel = (status) => {
+    if (!status) return "";
+    if (["preparing", "fetching"].includes(status.phase)) {
+      return `${status.message}${ttsElapsedSeconds ? ` (${ttsElapsedSeconds}s)` : ""}`;
+    }
+    return status.message || status.phase;
+  };
+  const ttsStatusClass = (phase) => {
+    if (phase === "error") return "border-destructive/30 bg-destructive/10 text-destructive";
+    if (phase === "playing" || phase === "cached" || phase === "complete") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+    return "border-accent/30 bg-accent/10 text-accent";
+  };
   const panelClass = fullScreen
     ? "fixed inset-0 z-50 flex flex-col overflow-hidden border-0 bg-background text-foreground"
     : "border border-border rounded-xl overflow-hidden";
@@ -855,7 +993,7 @@ Return a conversational answer plus structured findings for review/persistence.`
                     title={msg.role === "assistant" ? (speakingIdx === i ? "Tap to replay from start" : "Tap to hear") : undefined}
                   >
                     {renderMessageImages(msg.imageAttachments)}
-                    {msg.text}
+                    <MessageMarkdown text={msg.text} />
                     {msg.role === "assistant" && (
                       <button
                         type="button"
@@ -875,6 +1013,34 @@ Return a conversational answer plus structured findings for review/persistence.`
                         <span className="w-1 h-3 bg-accent rounded-full animate-bounce" style={{ animationDelay: "100ms" }} />
                         <span className="w-1 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: "200ms" }} />
                       </span>
+                    )}
+                    {msg.role === "assistant" && ttsStatus?.idx === i && (
+                      <div className={`mt-2 flex max-w-full items-center gap-2 rounded-lg border px-2 py-1 text-[10px] ${ttsStatusClass(ttsStatus.phase)}`}>
+                        {["preparing", "fetching"].includes(ttsStatus.phase) && (
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                        )}
+                        {ttsStatus.phase === "playing" && (
+                          <span className="inline-flex shrink-0 items-end gap-0.5">
+                            <span className="h-2 w-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "0ms" }} />
+                            <span className="h-3 w-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "100ms" }} />
+                            <span className="h-2 w-1 rounded-full bg-current animate-bounce" style={{ animationDelay: "200ms" }} />
+                          </span>
+                        )}
+                        {ttsStatus.phase === "error" && <span className="h-2 w-2 shrink-0 rounded-full bg-current" />}
+                        <span className="min-w-0 flex-1 truncate">{ttsStatusLabel(ttsStatus)}</span>
+                        {ttsStatus.phase === "error" && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              speakText(msg.text, i);
+                            }}
+                            className="shrink-0 rounded border border-current/30 px-1.5 py-0.5 font-semibold hover:bg-current/10"
+                          >
+                            Retry
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
