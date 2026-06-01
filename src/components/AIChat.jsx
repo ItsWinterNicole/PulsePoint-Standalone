@@ -1411,9 +1411,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     : "p-3 space-y-3";
   const threadClass = fullScreen
     ? "flex min-h-0 flex-1 basis-0 flex-col gap-2 overflow-y-auto border-t border-border px-1 pt-3 sm:px-3"
-    : selectedVideoClip
-      ? "min-h-[42rem] max-h-[76vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2"
-      : "min-h-[36rem] max-h-[70vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
+    : "min-h-[36rem] max-h-[70vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
   const messageClass = (role) => `group relative rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm ${
     fullScreen ? "max-w-[min(78%,52rem)] sm:text-[15px]" : "max-w-[85%]"
   } ${
@@ -1879,7 +1877,6 @@ Return a conversational answer plus structured findings for review/persistence.`
           {messages.length === 0 ? (
             <div className={`${fullScreen ? "mx-auto mt-auto w-full max-w-4xl pb-4" : ""} space-y-2`}>
               {renderSelectedImages()}
-              {renderSelectedVideoClip()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <textarea
                 ref={inputRef}
@@ -1984,7 +1981,6 @@ Return a conversational answer plus structured findings for review/persistence.`
 
               {/* Input — shown after messages start */}
               {renderSelectedImages()}
-              {renderSelectedVideoClip()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <div className={composerClass}>
                 <textarea
@@ -2001,6 +1997,12 @@ Return a conversational answer plus structured findings for review/persistence.`
               </div>
               </div>
               )}
+
+          {selectedVideoClip && (
+            <div className={fullScreen ? "min-h-0 shrink-0" : ""}>
+              {renderSelectedVideoClip()}
+            </div>
+          )}
 
           {mode === "profile" && Array.isArray(recentSavedFindings) && recentSavedFindings.length > 0 && !fullScreen && (
             <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs">

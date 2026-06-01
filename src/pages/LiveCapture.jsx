@@ -16,6 +16,7 @@ import PageHeader from "@/components/PageHeader";
 import LiveFootLandmarkTracker from "@/components/LiveFootLandmarkTracker";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
+import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 const MAX_TELEMETRY_POINTS = 240;
@@ -191,6 +192,102 @@ function ReadinessItem({ label, value, helper, ready, optional = false }) {
   );
 }
 
+function HrSourceSelector({
+  settings,
+  status,
+  recordingActive,
+  saving,
+  error,
+  onChange,
+  onApply,
+}) {
+  const source = HR_SOURCE_OPTIONS.find((option) => option.value === settings.source) || HR_SOURCE_OPTIONS[0];
+  const selectedSource = status?.hr?.selectedSource || settings.source;
+  const sourceStatus = status?.hr?.sourceStatus || {};
+  const pulsoidStatus = status?.hr?.pulsoid || {};
+  const isPulsoid = settings.source === "pulsoid";
+  const connected = Boolean(sourceStatus.connected);
+  const tokenSummary = isPulsoid && settings.pulsoidToken
+    ? `Token ${maskPulsoidToken(settings.pulsoidToken)}`
+    : "Token stays local to this browser and server session.";
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Heart-rate source</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Select one live HR source for capture. OBS recording sync still comes from the local relay.
+          </p>
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+          connected ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-muted/30 text-muted-foreground"
+        }`}>
+          {sourceStatus.label || source.label}: {connected ? "Live" : sourceStatus.message || "Waiting"}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <label className="space-y-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Provider</span>
+          <select
+            className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+            value={settings.source}
+            disabled={recordingActive}
+            onChange={(event) => onChange({ source: event.target.value })}
+          >
+            {HR_SOURCE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pulsoid token</span>
+          <input
+            className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+            value={settings.pulsoidToken}
+            disabled={recordingActive || !isPulsoid}
+            type="password"
+            placeholder="Pulsoid access token"
+            onChange={(event) => onChange({ pulsoidToken: event.target.value })}
+          />
+        </label>
+        <div className="flex items-end gap-2">
+          <label className="min-w-32 flex-1 space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mode</span>
+            <select
+              className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              value={settings.pulsoidMode}
+              disabled={recordingActive || !isPulsoid}
+              onChange={(event) => onChange({ pulsoidMode: event.target.value })}
+            >
+              {PULSOID_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={recordingActive || saving || (isPulsoid && !settings.pulsoidToken.trim())}
+            onClick={onApply}
+          >
+            {saving ? "Applying" : selectedSource === settings.source ? "Apply" : "Switch"}
+          </button>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span>{source.helper}</span>
+        <span>{tokenSummary}</span>
+        {pulsoidStatus.lastMessageAt && <span>Last Pulsoid HR {fmtTime(pulsoidStatus.lastMessageAt)}</span>}
+        {pulsoidStatus.error && <span className="text-destructive">{pulsoidStatus.error}</span>}
+        {error && <span className="text-destructive">{error}</span>}
+        {recordingActive && <span>Stop recording before switching HR sources.</span>}
+      </div>
+    </div>
+  );
+}
+
 function levelColor(percent) {
   const p = Math.max(0, Math.min(100, Number(percent) || 0));
   const hue = Math.round(142 - (142 * p) / 100);
@@ -295,6 +392,8 @@ function makeTelemetryPoint(hrTelemetry, emgTelemetry) {
     hrSmoothed: readNumber(hrTelemetry?.hrSmoothed, hrTelemetry?.smoothedHr, hrTelemetry?.hr_smoothed),
     baseline: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
     build: readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence),
+    hrSource: hrTelemetry?.source || hrTelemetry?.hr_source || null,
+    hrvQuality: hrTelemetry?.hrv?.quality || hrTelemetry?.hrv_quality || null,
     left: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct),
     right: readNumber(emgTelemetry?.right_pct),
     diff: readNumber(emgTelemetry?.diff_pct),
@@ -465,6 +564,9 @@ export default function LiveCapture() {
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [liveEvents, setLiveEvents] = useState([]);
   const [phaseMarkers, setPhaseMarkers] = useState([]);
+  const [hrSourceSettings, setHrSourceSettings] = useState(() => readHrSourceSettings());
+  const [hrSourceSaving, setHrSourceSaving] = useState(false);
+  const [hrSourceError, setHrSourceError] = useState("");
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
@@ -524,6 +626,48 @@ export default function LiveCapture() {
       return [...prev, point].slice(-MAX_TELEMETRY_POINTS);
     });
   };
+
+  const updateHrSourceSettings = useCallback((patch) => {
+    setHrSourceSettings((prev) => {
+      const next = { ...prev, ...patch };
+      writeHrSourceSettings(next);
+      return next;
+    });
+    setHrSourceError("");
+  }, []);
+
+  const applyHrSourceSettings = useCallback(async (settings = hrSourceSettings) => {
+    setHrSourceSaving(true);
+    setHrSourceError("");
+    writeHrSourceSettings(settings);
+    try {
+      const response = await fetch(`${API_BASE}/live-capture/hr-source`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: settings.source,
+          pulsoidToken: settings.pulsoidToken,
+          pulsoidMode: settings.pulsoidMode,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not apply HR source.");
+      setStatus((prev) => ({ ...(prev || {}), hr: { ...(prev?.hr || {}), ...(data.hr || {}) } }));
+    } catch (error) {
+      setHrSourceError(error.message || String(error));
+    } finally {
+      setHrSourceSaving(false);
+    }
+  }, [hrSourceSettings]);
+
+  useEffect(() => {
+    const settings = readHrSourceSettings();
+    setHrSourceSettings(settings);
+    if (settings.source === "heartrateonstream" || (settings.source === "pulsoid" && settings.pulsoidToken)) {
+      applyHrSourceSettings(settings);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetch(`${API_BASE}/live-capture/status`).then((res) => res.json()).then((data) => {
@@ -649,7 +793,7 @@ export default function LiveCapture() {
 
   const prediction = useMemo(() => computePrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
-  const hrConnected = Boolean(status?.hr?.connected);
+  const hrConnected = Boolean(status?.hr?.sourceStatus?.connected ?? status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
   const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
   const mainTelemetryView = captureMode === "hr";
@@ -1628,6 +1772,18 @@ export default function LiveCapture() {
 
       {mediaPanel}
 
+      {!focusView && !mainTelemetryView && (
+        <HrSourceSelector
+          settings={hrSourceSettings}
+          status={status}
+          recordingActive={recordingActive}
+          saving={hrSourceSaving}
+          error={hrSourceError}
+          onChange={updateHrSourceSettings}
+          onApply={() => applyHrSourceSettings()}
+        />
+      )}
+
       {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
@@ -1642,9 +1798,9 @@ export default function LiveCapture() {
         </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <ReadinessItem
-            label="HR Relay"
+            label="HR Source"
             value={hrConnected ? "Ready" : "Waiting"}
-            helper={hrConnected ? "Live Capture is connected to the heart-rate relay." : status?.hr?.error || status?.hr?.url || "Start the PulsePoint server and HR source."}
+            helper={status?.hr?.sourceStatus?.message || (hrConnected ? "Live Capture is connected to the selected HR source." : status?.hr?.error || status?.hr?.url || "Start the PulsePoint server and HR source.")}
             ready={hrConnected}
           />
           <ReadinessItem
@@ -1841,7 +1997,7 @@ export default function LiveCapture() {
         <>
       {!focusView && !mainTelemetryView && <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <MetricCard icon={<Radio className="w-4 h-4" />} label="PulsePoint Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
-        <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Relay" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
+        <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Source" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.sourceStatus?.label || status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
         {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
         <MetricCard icon={<Video className="w-4 h-4" />} label="OBS Recording" value={recordingActive ? "Recording" : "Stopped"} helper={recording?.filename || "No active capture"} active={recordingActive} />
       </div>}

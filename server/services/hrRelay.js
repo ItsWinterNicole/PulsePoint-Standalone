@@ -205,6 +205,16 @@ class HeartRateRelay {
       'elevated_delta',
       'marker',
       'note',
+      'hr_source',
+      'hr_measured_at',
+      'hr_received_at',
+      'hr_age_ms',
+      'rr_intervals_ms',
+      'hrv_rmssd_ms',
+      'hrv_sdnn_ms',
+      'hrv_pnn50',
+      'hrv_window_seconds',
+      'hrv_quality',
     ].join(',') + '\n';
     fs.writeFileSync(filepath, header, 'utf8');
     this.currentRecording = {
@@ -269,6 +279,16 @@ class HeartRateRelay {
       csvEscape(cleanNumber(data.elevatedDelta)),
       csvEscape(normalizeMarker(data.phase)),
       csvEscape(this.buildNote(data)),
+      csvEscape('heartrateonstream'),
+      csvEscape(data.measuredAt || epochMs),
+      csvEscape(data.receivedAt || epochMs),
+      csvEscape(data.quality?.ageMs ?? ''),
+      csvEscape(Array.isArray(data.rrIntervalsMs) ? data.rrIntervalsMs.join('|') : ''),
+      csvEscape(data.hrv?.rmssdMs ?? ''),
+      csvEscape(data.hrv?.sdnnMs ?? ''),
+      csvEscape(data.hrv?.pnn50 ?? ''),
+      csvEscape(data.hrv?.windowSeconds ?? ''),
+      csvEscape(data.hrv?.quality || 'unavailable'),
     ].join(',') + '\n';
     fs.appendFileSync(this.currentRecording.filepath, row, 'utf8');
     this.currentRecording.lastEpochMs = epochMs;

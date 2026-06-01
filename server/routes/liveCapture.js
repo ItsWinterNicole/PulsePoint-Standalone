@@ -2,9 +2,19 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import WebSocket from 'ws';
 import { parse } from 'csv-parse/sync';
 import { bulkCreate, upsertEntity } from '../db.js';
 import { liveCaptureConfig, uploadDir } from '../config.js';
+import {
+  HR_SOURCE_IDS,
+  HR_SOURCE_LABELS,
+  cleanHr,
+  maskToken,
+  normalizeHeartRateOnStreamTelemetry,
+  normalizePulsoidTelemetry,
+  parsePulsoidMessage,
+} from '../services/hrSources.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -28,8 +38,14 @@ const EMG_CALIBRATION_ACTIONS = new Set([
 const clients = new Set();
 let hrSocket = null;
 let hrReconnectTimer = null;
+let pulsoidSocket = null;
+let pulsoidReconnectTimer = null;
+let pulsoidPollTimer = null;
+let pulsoidBackoffMs = 1500;
+let pulsoidAccessToken = '';
 let emgPollTimer = null;
 let lastEmgSignature = '';
+let pulsoidRecording = null;
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -38,6 +54,26 @@ const state = {
     connected: false,
     recording: null,
     latestTelemetry: null,
+    selectedSource: HR_SOURCE_IDS.HEART_RATE_ON_STREAM,
+    selectedSourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.HEART_RATE_ON_STREAM],
+    sourceStatus: {
+      source: HR_SOURCE_IDS.HEART_RATE_ON_STREAM,
+      label: HR_SOURCE_LABELS[HR_SOURCE_IDS.HEART_RATE_ON_STREAM],
+      connected: false,
+      message: 'Using HeartRateOnStream relay',
+      mode: 'websocket',
+      tokenMasked: '',
+    },
+    pulsoid: {
+      mode: 'websocket',
+      tokenMasked: '',
+      connected: false,
+      lastMessageAt: null,
+      lastMeasuredAt: null,
+      error: null,
+      reconnecting: false,
+      pollMs: 800,
+    },
     lastMessageAt: null,
     error: null,
     relay: null,
@@ -73,6 +109,12 @@ function cleanNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function csvEscape(value) {
+  if (value == null) return '';
+  const str = String(value);
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
 function fmtDateForSession(date) {
   const d = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(d.getTime())) return new Date().toISOString();
@@ -100,6 +142,47 @@ function publicUploadUrl(filename) {
   return `/uploads/${filename}`;
 }
 
+function formatFilenameDate(date = new Date()) {
+  const value = date.toISOString().replace(/[:.]/g, '-');
+  return value.replace(/T/, '_').replace(/Z$/, '');
+}
+
+function shouldUseTelemetrySource(source) {
+  return state.hr.selectedSource === source;
+}
+
+function sanitizeHrSourceSettings(body = {}) {
+  const source = body.source === HR_SOURCE_IDS.PULSOID
+    ? HR_SOURCE_IDS.PULSOID
+    : HR_SOURCE_IDS.HEART_RATE_ON_STREAM;
+  const mode = body.pulsoidMode === 'http' ? 'http' : 'websocket';
+  return {
+    source,
+    pulsoidMode: mode,
+    pulsoidToken: String(body.pulsoidToken || '').trim(),
+  };
+}
+
+function refreshHrSourceStatus(message = '') {
+  const source = state.hr.selectedSource;
+  state.hr.selectedSourceLabel = HR_SOURCE_LABELS[source] || source;
+  state.hr.sourceStatus = {
+    source,
+    label: state.hr.selectedSourceLabel,
+    connected: source === HR_SOURCE_IDS.PULSOID ? Boolean(state.hr.pulsoid.connected) : Boolean(state.hr.connected),
+    mode: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.mode : 'websocket',
+    tokenMasked: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.tokenMasked : '',
+    message: message || (
+      source === HR_SOURCE_IDS.PULSOID
+        ? state.hr.pulsoid.error || (state.hr.pulsoid.connected ? 'Pulsoid feed connected' : 'Pulsoid feed waiting')
+        : state.hr.error || 'Using HeartRateOnStream relay'
+    ),
+    lastMessageAt: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.lastMessageAt : state.hr.lastMessageAt,
+    lastMeasuredAt: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.lastMeasuredAt : null,
+    reconnecting: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.reconnecting : false,
+  };
+}
+
 async function copyCaptureFileToUploads(filePath, prefix) {
   if (!filePath) return null;
   try {
@@ -121,6 +204,124 @@ async function copyCaptureFileToUploads(filePath, prefix) {
   }
 }
 
+async function createPulsoidRecording(recording = {}, reason = 'obs_record_start') {
+  await fs.mkdir(HR_RECORDINGS_DIR, { recursive: true });
+  const filename = `hr_timeline_pulsoid_${formatFilenameDate()}.csv`;
+  const filepath = path.join(HR_RECORDINGS_DIR, filename);
+  const header = [
+    'timestamp',
+    'time_offset_ms',
+    'time_offset_s',
+    'hr',
+    'hr_smoothed',
+    'baseline_hr',
+    'elevated_delta',
+    'marker',
+    'note',
+    'hr_source',
+    'hr_measured_at',
+    'hr_received_at',
+    'hr_age_ms',
+    'rr_intervals_ms',
+    'hrv_rmssd_ms',
+    'hrv_sdnn_ms',
+    'hrv_pnn50',
+    'hrv_window_seconds',
+    'hrv_quality',
+  ].join(',') + '\n';
+  await fs.writeFile(filepath, header, 'utf8');
+  pulsoidRecording = {
+    filename,
+    filepath,
+    createdAt: new Date().toISOString(),
+    startEpochMs: Number(recording?.startedAtMs) || Date.now(),
+    lastEpochMs: null,
+    reason,
+  };
+  state.hr.pulsoidRecording = {
+    filename,
+    filepath,
+    active: Boolean(recording?.active ?? true),
+    startedAtMs: pulsoidRecording.startEpochMs,
+  };
+  return pulsoidRecording;
+}
+
+async function appendPulsoidTelemetryRow(telemetry) {
+  if (!state.hr.recording?.active || state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID) return;
+  if (!pulsoidRecording) await createPulsoidRecording(state.hr.recording, 'pulsoid_auto_start');
+  const epochMs = Number(telemetry?.receivedAt) || Date.now();
+  if (pulsoidRecording.lastEpochMs != null && epochMs <= pulsoidRecording.lastEpochMs) return;
+  const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
+  if (hr == null) return;
+  const timeOffsetMs = epochMs - pulsoidRecording.startEpochMs;
+  const hrv = telemetry?.hrv || {};
+  const rr = Array.isArray(telemetry?.rrIntervalsMs) ? telemetry.rrIntervalsMs.join('|') : '';
+  const note = hrv.quality && hrv.quality !== 'unavailable'
+    ? `real_rr_intervals=true; hrv_quality=${hrv.quality}`
+    : 'hrv_unavailable_without_rr_intervals';
+  const row = [
+    csvEscape(new Date(epochMs).toISOString()),
+    csvEscape(timeOffsetMs),
+    csvEscape((timeOffsetMs / 1000).toFixed(3)),
+    csvEscape(hr),
+    csvEscape(hr),
+    '',
+    '',
+    '',
+    csvEscape(note),
+    csvEscape(HR_SOURCE_IDS.PULSOID),
+    csvEscape(telemetry.measuredAt || ''),
+    csvEscape(telemetry.receivedAt || epochMs),
+    csvEscape(telemetry.quality?.ageMs ?? ''),
+    csvEscape(rr),
+    csvEscape(hrv.rmssdMs ?? ''),
+    csvEscape(hrv.sdnnMs ?? ''),
+    csvEscape(hrv.pnn50 ?? ''),
+    csvEscape(hrv.windowSeconds ?? ''),
+    csvEscape(hrv.quality || 'unavailable'),
+  ].join(',') + '\n';
+  await fs.appendFile(pulsoidRecording.filepath, row, 'utf8');
+  pulsoidRecording.lastEpochMs = epochMs;
+}
+
+async function finalizePulsoidRecording(recording = {}) {
+  if (!pulsoidRecording) return null;
+  const current = pulsoidRecording;
+  const metaPath = current.filepath.replace(/\.csv$/i, '.json');
+  await fs.writeFile(metaPath, JSON.stringify({
+    reason: 'obs_record_stop',
+    csv: current.filepath,
+    createdAt: current.createdAt,
+    endedAt: new Date().toISOString(),
+    source: HR_SOURCE_IDS.PULSOID,
+    sourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.PULSOID],
+    obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
+  }, null, 2), 'utf8');
+  state.hr.pulsoidRecording = {
+    filename: current.filename,
+    filepath: current.filepath,
+    metaPath,
+    active: false,
+    startedAtMs: current.startEpochMs,
+  };
+  pulsoidRecording = null;
+  return state.hr.pulsoidRecording;
+}
+
+async function resolveHrRecordingForImport(recording = {}) {
+  if (state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID) return recording;
+  const sourceRecording = pulsoidRecording
+    ? await finalizePulsoidRecording(recording)
+    : state.hr.pulsoidRecording;
+  if (!sourceRecording?.filepath) return recording;
+  return {
+    ...recording,
+    ...sourceRecording,
+    obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
+  };
+}
+
 function parseHrRows(text) {
   const records = parse(text, { columns: true, skip_empty_lines: true, trim: true });
   return records
@@ -134,6 +335,16 @@ function parseHrRows(text) {
       elevated_delta: cleanNumber(row.elevated_delta),
       marker: row.marker || null,
       note: row.note || null,
+      hr_source: row.hr_source || null,
+      hr_measured_at: cleanNumber(row.hr_measured_at),
+      hr_received_at: cleanNumber(row.hr_received_at),
+      hr_age_ms: cleanNumber(row.hr_age_ms),
+      rr_intervals_ms: row.rr_intervals_ms || null,
+      hrv_rmssd_ms: cleanNumber(row.hrv_rmssd_ms),
+      hrv_sdnn_ms: cleanNumber(row.hrv_sdnn_ms),
+      hrv_pnn50: cleanNumber(row.hrv_pnn50),
+      hrv_window_seconds: cleanNumber(row.hrv_window_seconds),
+      hrv_quality: row.hrv_quality || null,
     }))
     .filter((row) => row.hr != null);
 }
@@ -254,7 +465,9 @@ function buildSessionSeed(recording) {
     live_capture: true,
     capture_status: 'recording',
     capture_started_at: started.toISOString(),
-    capture_source: 'OBS + HR relay + EMG bridge',
+    capture_source: `OBS + ${state.hr.selectedSourceLabel || 'HR relay'} + EMG bridge`,
+    hr_source: state.hr.selectedSource,
+    hr_source_label: state.hr.selectedSourceLabel,
     notes: 'Live capture session created automatically when OBS recording started. Add subjective details after recording.',
   };
 }
@@ -303,6 +516,8 @@ async function finalizeLiveSession(recording) {
         emg: emgUpload,
         obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
       },
+      hr_source: state.hr.selectedSource,
+      hr_source_label: state.hr.selectedSourceLabel,
       hr_data_file: hrImport.upload?.file_url || undefined,
       emg_data_file: emgUpload?.file_url || undefined,
       emg_enabled: Boolean(emgUpload),
@@ -311,6 +526,8 @@ async function finalizeLiveSession(recording) {
         imported_at: new Date().toISOString(),
         hr_rows: hrImport.rows,
         hr_original_rows: hrImport.originalRows,
+        hr_source: state.hr.selectedSource,
+        hr_source_label: state.hr.selectedSourceLabel,
         emg_attached: Boolean(emgUpload),
       },
       capture_digest: buildCaptureDigest({ hrRows: hrImport.rawRows, hrImport, emgUpload, recording }),
@@ -385,6 +602,176 @@ async function refreshLatestFiles() {
   broadcast('files', state.files);
 }
 
+function updatePulsoidState(patch, message = '') {
+  state.hr.pulsoid = { ...state.hr.pulsoid, ...patch };
+  refreshHrSourceStatus(message);
+  broadcast('status', state);
+}
+
+function clearPulsoidTimers() {
+  clearTimeout(pulsoidReconnectTimer);
+  clearTimeout(pulsoidPollTimer);
+  pulsoidReconnectTimer = null;
+  pulsoidPollTimer = null;
+}
+
+function closePulsoidConnection({ quiet = false } = {}) {
+  clearPulsoidTimers();
+  if (pulsoidSocket) {
+    try {
+      pulsoidSocket.close();
+    } catch {
+      // Ignore close races during source switching.
+    }
+  }
+  pulsoidSocket = null;
+  if (!quiet) updatePulsoidState({ connected: false, reconnecting: false }, 'Pulsoid feed stopped');
+}
+
+function applySelectedHrTelemetry(telemetry) {
+  state.hr.latestTelemetry = telemetry;
+  state.hr.lastMessageAt = new Date().toISOString();
+  broadcast('hr_telemetry', telemetry);
+}
+
+function handlePulsoidTelemetry(telemetry) {
+  if (!telemetry) return;
+  pulsoidBackoffMs = 1500;
+  const receivedIso = new Date(telemetry.receivedAt || Date.now()).toISOString();
+  state.hr.pulsoid = {
+    ...state.hr.pulsoid,
+    connected: true,
+    reconnecting: false,
+    error: null,
+    lastMessageAt: receivedIso,
+    lastMeasuredAt: telemetry.measuredAt ? new Date(telemetry.measuredAt).toISOString() : null,
+  };
+  telemetry.quality = {
+    ...(telemetry.quality || {}),
+    reconnecting: false,
+  };
+  if (shouldUseTelemetrySource(HR_SOURCE_IDS.PULSOID)) {
+    refreshHrSourceStatus('Pulsoid HR live');
+    applySelectedHrTelemetry(telemetry);
+    appendPulsoidTelemetryRow(telemetry).catch((error) => {
+      state.hr.pulsoid.error = `Pulsoid CSV write failed: ${error.message || error}`;
+      refreshHrSourceStatus();
+      broadcast('status', state);
+    });
+  } else {
+    refreshHrSourceStatus();
+  }
+  broadcast('status', state);
+}
+
+function schedulePulsoidReconnect(reason = 'disconnected') {
+  if (state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID || !pulsoidAccessToken) return;
+  const delay = pulsoidBackoffMs;
+  pulsoidBackoffMs = Math.min(30000, Math.round(pulsoidBackoffMs * 1.7));
+  updatePulsoidState({
+    connected: false,
+    reconnecting: true,
+    error: reason,
+  }, `Pulsoid reconnecting in ${Math.round(delay / 1000)}s`);
+  pulsoidReconnectTimer = setTimeout(() => {
+    if (state.hr.pulsoid.mode === 'http') {
+      startPulsoidPolling();
+    } else {
+      connectPulsoidSocket();
+    }
+  }, delay);
+  pulsoidReconnectTimer.unref?.();
+}
+
+function connectPulsoidSocket() {
+  clearPulsoidTimers();
+  if (!pulsoidAccessToken) {
+    updatePulsoidState({ connected: false, reconnecting: false, error: 'Pulsoid token required' }, 'Pulsoid token required');
+    return;
+  }
+  const url = `wss://dev.pulsoid.net/api/v1/data/real_time?access_token=${encodeURIComponent(pulsoidAccessToken)}`;
+  try {
+    pulsoidSocket = new WebSocket(url);
+    pulsoidSocket.addEventListener('open', () => {
+      updatePulsoidState({ connected: true, reconnecting: false, error: null }, 'Pulsoid websocket connected');
+    });
+    pulsoidSocket.addEventListener('message', (event) => {
+      handlePulsoidTelemetry(parsePulsoidMessage(String(event.data || '')));
+    });
+    pulsoidSocket.addEventListener('close', () => {
+      state.hr.pulsoid.connected = false;
+      schedulePulsoidReconnect('Pulsoid websocket closed');
+    });
+    pulsoidSocket.addEventListener('error', () => {
+      state.hr.pulsoid.connected = false;
+      schedulePulsoidReconnect('Pulsoid websocket error');
+    });
+  } catch (error) {
+    schedulePulsoidReconnect(error.message || String(error));
+  }
+}
+
+async function pollPulsoidLatestOnce() {
+  if (!pulsoidAccessToken) {
+    updatePulsoidState({ connected: false, reconnecting: false, error: 'Pulsoid token required' }, 'Pulsoid token required');
+    return;
+  }
+  try {
+    const res = await fetch('https://dev.pulsoid.net/api/v1/data/heart_rate/latest', {
+      headers: {
+        Authorization: `Bearer ${pulsoidAccessToken}`,
+        Accept: 'application/json',
+      },
+    });
+    if (res.status === 401) {
+      updatePulsoidState({
+        connected: false,
+        reconnecting: false,
+        error: 'Pulsoid token invalid or missing data:heart_rate:read scope',
+      });
+      return;
+    }
+    if (res.status === 412) {
+      updatePulsoidState({ connected: false, reconnecting: true, error: 'Pulsoid has no heart-rate data yet' });
+      return;
+    }
+    if (!res.ok) {
+      throw new Error(`Pulsoid latest endpoint returned ${res.status}`);
+    }
+    const text = await res.text();
+    const parsed = parsePulsoidMessage(text) || normalizePulsoidTelemetry({ data: { heart_rate: text } });
+    handlePulsoidTelemetry(parsed);
+  } catch (error) {
+    updatePulsoidState({ connected: false, reconnecting: true, error: error.message || String(error) });
+  }
+}
+
+function startPulsoidPolling() {
+  clearPulsoidTimers();
+  const poll = async () => {
+    await pollPulsoidLatestOnce();
+    if (state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID || state.hr.pulsoid.mode !== 'http') return;
+    const delay = state.hr.pulsoid.error ? 2500 : state.hr.pulsoid.pollMs;
+    pulsoidPollTimer = setTimeout(poll, delay);
+    pulsoidPollTimer.unref?.();
+  };
+  poll();
+}
+
+function restartPulsoidSource() {
+  closePulsoidConnection({ quiet: true });
+  if (state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID) {
+    updatePulsoidState({ connected: false, reconnecting: false, error: null }, 'Using HeartRateOnStream relay');
+    return;
+  }
+  pulsoidBackoffMs = 1500;
+  if (state.hr.pulsoid.mode === 'http') {
+    startPulsoidPolling();
+  } else {
+    connectPulsoidSocket();
+  }
+}
+
 function connectHrBridge() {
   if (hrSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(hrSocket.readyState)) return;
   clearTimeout(hrReconnectTimer);
@@ -395,6 +782,7 @@ function connectHrBridge() {
     hrSocket.addEventListener('open', () => {
       state.hr.connected = true;
       state.hr.error = null;
+      refreshHrSourceStatus();
       broadcast('status', state);
     });
 
@@ -409,18 +797,32 @@ function connectHrBridge() {
       state.hr.lastMessageAt = new Date().toISOString();
 
       if (msg.type === 'telemetry') {
-        state.hr.latestTelemetry = msg.data || null;
-        broadcast('hr_telemetry', state.hr.latestTelemetry);
+        const normalized = normalizeHeartRateOnStreamTelemetry(msg.data || null);
+        if (shouldUseTelemetrySource(HR_SOURCE_IDS.HEART_RATE_ON_STREAM)) {
+          state.hr.latestTelemetry = normalized || msg.data || null;
+          refreshHrSourceStatus('HeartRateOnStream HR live');
+          broadcast('hr_telemetry', state.hr.latestTelemetry);
+        }
       }
 
       if (msg.type === 'relay_status') {
         state.hr.relay = msg.relay || null;
+        refreshHrSourceStatus();
         broadcast('status', state);
       }
 
       if (msg.type === 'recording_info') {
         state.hr.recording = msg.recording || null;
-        if (state.hr.recording?.active) ensureLiveSession(state.hr.recording);
+        if (state.hr.recording?.active) {
+          ensureLiveSession(state.hr.recording);
+          if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
+            createPulsoidRecording(state.hr.recording, 'pulsoid_recording_info').catch((error) => {
+              state.hr.pulsoid.error = `Pulsoid CSV start failed: ${error.message || error}`;
+              refreshHrSourceStatus();
+              broadcast('status', state);
+            });
+          }
+        }
         broadcast('recording', state.hr.recording);
       }
 
@@ -434,13 +836,20 @@ function connectHrBridge() {
         };
         if (state.hr.recording.active) {
           ensureLiveSession(state.hr.recording);
+          if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
+            createPulsoidRecording(state.hr.recording).catch((error) => {
+              state.hr.pulsoid.error = `Pulsoid CSV start failed: ${error.message || error}`;
+              refreshHrSourceStatus();
+              broadcast('status', state);
+            });
+          }
         }
         broadcast('recording', state.hr.recording);
         refreshLatestFiles();
         if (!state.hr.recording.active) {
-          finalizeLiveSession(state.hr.recording).then((result) => {
+          resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => finalizeLiveSession(recordingForImport).then((result) => {
             if (result) broadcast('live_session_imported', result);
-          });
+          }));
         }
       }
 
@@ -451,14 +860,15 @@ function connectHrBridge() {
         };
         broadcast('recording_finalized', state.hr.recording);
         refreshLatestFiles();
-        finalizeLiveSession(state.hr.recording).then((result) => {
+        resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => finalizeLiveSession(recordingForImport).then((result) => {
           if (result) broadcast('live_session_imported', result);
-        });
+        }));
       }
     });
 
     hrSocket.addEventListener('close', () => {
       state.hr.connected = false;
+      refreshHrSourceStatus();
       broadcast('status', state);
       hrReconnectTimer = setTimeout(connectHrBridge, 1500);
     });
@@ -466,11 +876,13 @@ function connectHrBridge() {
     hrSocket.addEventListener('error', () => {
       state.hr.connected = false;
       state.hr.error = `Could not connect to ${HR_WS_URL}`;
+      refreshHrSourceStatus();
       broadcast('status', state);
     });
   } catch (error) {
     state.hr.connected = false;
     state.hr.error = error.message || String(error);
+    refreshHrSourceStatus();
     hrReconnectTimer = setTimeout(connectHrBridge, 1500);
   }
 }
@@ -546,6 +958,47 @@ function startEmgPolling() {
 connectHrBridge();
 startEmgPolling();
 refreshLatestFiles();
+
+liveCaptureRouter.post('/hr-source', (req, res) => {
+  if (state.hr.recording?.active) {
+    res.status(409).json({ error: 'Stop the active recording before switching heart-rate sources.' });
+    return;
+  }
+  const settings = sanitizeHrSourceSettings(req.body || {});
+  state.hr.selectedSource = settings.source;
+  state.hr.selectedSourceLabel = HR_SOURCE_LABELS[settings.source] || settings.source;
+  pulsoidAccessToken = settings.pulsoidToken;
+  state.hr.pulsoid = {
+    ...state.hr.pulsoid,
+    mode: settings.pulsoidMode,
+    tokenMasked: maskToken(pulsoidAccessToken),
+    error: null,
+    reconnecting: false,
+  };
+  if (settings.source === HR_SOURCE_IDS.PULSOID) {
+    state.hr.latestTelemetry = null;
+    restartPulsoidSource();
+  } else {
+    closePulsoidConnection({ quiet: true });
+    state.hr.pulsoid = {
+      ...state.hr.pulsoid,
+      connected: false,
+      reconnecting: false,
+      error: null,
+    };
+    refreshHrSourceStatus('Using HeartRateOnStream relay');
+    broadcast('status', state);
+  }
+  res.json({
+    ok: true,
+    hr: {
+      selectedSource: state.hr.selectedSource,
+      selectedSourceLabel: state.hr.selectedSourceLabel,
+      sourceStatus: state.hr.sourceStatus,
+      pulsoid: state.hr.pulsoid,
+    },
+  });
+});
 
 liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
   const action = String(req.body?.action || '');

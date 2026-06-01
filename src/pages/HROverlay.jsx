@@ -2,12 +2,12 @@ import { useState, useEffect, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip,
-  CartesianGrid, ReferenceLine, Legend,
+  CartesianGrid, ReferenceLine,
 } from "recharts";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Activity, CheckSquare, Square, Info } from "lucide-react";
 import moment from "moment";
+import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -18,6 +18,7 @@ const COLORS = [
 
 const PHASE_COLORS = { pre_climax: "#a855f7", climax: "#ef4444", recovery: "#3b82f6" };
 const BUCKET_S = 5; // 5-second buckets
+const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -164,6 +165,10 @@ export default function HROverlay() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(new Set());
   const [mode, setMode] = useState("aligned"); // "aligned" | "absolute"
+  const [hrSourceSettings, setHrSourceSettings] = useState(() => readHrSourceSettings());
+  const [hrSourceStatus, setHrSourceStatus] = useState("");
+  const [hrSourceError, setHrSourceError] = useState("");
+  const [hrSourceSaving, setHrSourceSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -190,6 +195,37 @@ export default function HROverlay() {
       setLoading(false);
     })();
   }, []);
+
+  const updateHrSourceSettings = (patch) => {
+    const next = { ...hrSourceSettings, ...patch };
+    setHrSourceSettings(next);
+    writeHrSourceSettings(next);
+    setHrSourceError("");
+  };
+
+  const applyHrSourceSettings = async () => {
+    setHrSourceSaving(true);
+    setHrSourceError("");
+    writeHrSourceSettings(hrSourceSettings);
+    try {
+      const response = await fetch(`${API_BASE}/live-capture/hr-source`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: hrSourceSettings.source,
+          pulsoidToken: hrSourceSettings.pulsoidToken,
+          pulsoidMode: hrSourceSettings.pulsoidMode,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not apply HR source.");
+      setHrSourceStatus(data.hr?.sourceStatus?.message || "Heart-rate source updated.");
+    } catch (error) {
+      setHrSourceError(error.message || String(error));
+    } finally {
+      setHrSourceSaving(false);
+    }
+  };
 
   const toggleSession = (id) => {
     setSelected((prev) => {
@@ -287,6 +323,62 @@ export default function HROverlay() {
         <h1 className="text-2xl font-bold tracking-tight">HR Overlay</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
           Compare heart rate timelines across sessions on one chart
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-end">
+          <label className="flex-1 space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Live HR source</span>
+            <select
+              className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              value={hrSourceSettings.source}
+              onChange={(event) => updateHrSourceSettings({ source: event.target.value })}
+            >
+              {HR_SOURCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex-1 space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pulsoid token</span>
+            <input
+              className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              value={hrSourceSettings.pulsoidToken}
+              type="password"
+              disabled={hrSourceSettings.source !== "pulsoid"}
+              placeholder="Pulsoid access token"
+              onChange={(event) => updateHrSourceSettings({ pulsoidToken: event.target.value })}
+            />
+          </label>
+          <label className="min-w-36 space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mode</span>
+            <select
+              className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              value={hrSourceSettings.pulsoidMode}
+              disabled={hrSourceSettings.source !== "pulsoid"}
+              onChange={(event) => updateHrSourceSettings({ pulsoidMode: event.target.value })}
+            >
+              {PULSOID_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={hrSourceSaving || (hrSourceSettings.source === "pulsoid" && !hrSourceSettings.pulsoidToken.trim())}
+            onClick={applyHrSourceSettings}
+          >
+            {hrSourceSaving ? "Applying" : "Apply"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {hrSourceSettings.source === "pulsoid" && hrSourceSettings.pulsoidToken
+            ? `Pulsoid token ${maskPulsoidToken(hrSourceSettings.pulsoidToken)} is stored locally.`
+            : "This only changes live HR input; historical chart styling is unchanged."}
+          {hrSourceStatus && <span className="ml-2 text-primary">{hrSourceStatus}</span>}
+          {hrSourceError && <span className="ml-2 text-destructive">{hrSourceError}</span>}
         </p>
       </div>
 
