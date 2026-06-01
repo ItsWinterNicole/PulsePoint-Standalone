@@ -1228,27 +1228,34 @@ export default function SessionDetail() {
           savedNotes={sessionNotes}
           onSaveMessages={async (msgs) => {
             setChatMessages(msgs);
-            const updated = { ...(s.ai_analysis || {}), _chat_messages: msgs };
+            let updated = { ...(session?.ai_analysis || s.ai_analysis || {}), _chat_messages: msgs };
+            setSession((prev) => {
+              if (!prev) return prev;
+              updated = { ...(prev.ai_analysis || updated), _chat_messages: msgs };
+              return { ...prev, ai_analysis: updated };
+            });
             await base44.entities.Session.update(id, { ai_analysis: updated });
           }}
           onSaveNotes={async (merged, meta = {}) => {
             setSessionNotes(merged);
             const patch = { notes: merged };
             if (isVisualReviewSource(meta.source)) {
+              const conversation = Array.isArray(meta.conversation) ? meta.conversation : chatMessages;
+              if (Array.isArray(conversation)) setChatMessages(conversation);
               const visualEntry = makeSessionVisualEvidenceEntry(meta, merged);
               const visualFindings = normalizeSessionVisualEvidence([
                 visualEntry,
-                ...(s.ai_analysis?._visual_findings || []),
+                ...((session?.ai_analysis || s.ai_analysis)?._visual_findings || []),
               ]);
               patch.ai_analysis = {
-                ...(s.ai_analysis || {}),
-                _chat_messages: Array.isArray(meta.conversation) ? meta.conversation : chatMessages,
+                ...(session?.ai_analysis || s.ai_analysis || {}),
+                _chat_messages: conversation,
                 _visual_findings: visualFindings,
               };
               setSession((prev) => ({
                 ...prev,
                 notes: merged,
-                ai_analysis: { ...(prev?.ai_analysis || {}), _visual_findings: visualFindings },
+                ai_analysis: { ...(prev?.ai_analysis || {}), ...patch.ai_analysis },
               }));
             }
             await base44.entities.Session.update(id, patch);

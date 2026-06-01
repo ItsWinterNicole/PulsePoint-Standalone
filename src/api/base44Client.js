@@ -131,6 +131,7 @@ export const base44 = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
       }),
+      BrowseLocalVideo: async () => request('/files/local-video/browse', { method: 'POST' }),
       localVideoStreamUrl: (path) => `/api/files/local-video/stream?path=${encodeURIComponent(path)}`,
     },
   },

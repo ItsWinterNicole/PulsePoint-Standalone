@@ -71,7 +71,7 @@ export default function Layout() {
     && new URLSearchParams(location.search).get("display") === "focus";
 
   return (
-    <div className={`dark ${uiPreferenceClasses(uiPrefs)} min-h-screen bg-background text-foreground flex flex-col`}>
+    <div className={`dark ${uiPreferenceClasses(uiPrefs)} min-h-screen min-w-0 overflow-x-hidden bg-background text-foreground flex flex-col`}>
       {/* Top bar */}
       {!isDisplayView && <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-card border-b border-border flex items-center px-2 gap-2">
         <button
@@ -130,7 +130,7 @@ export default function Layout() {
         <InstallAppButton />
       </aside>}
 
-      <main className={`flex-1 ${isDisplayView ? "overflow-hidden" : "pt-14 overflow-auto"}`}>
+      <main className={`min-w-0 flex-1 ${isDisplayView ? "overflow-hidden" : "pt-14 overflow-y-auto overflow-x-hidden"}`}>
         <Outlet />
       </main>
       {!isDisplayView && <BackgroundJobStatusTray />}

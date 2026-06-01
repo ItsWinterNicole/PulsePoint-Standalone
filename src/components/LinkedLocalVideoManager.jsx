@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, ExternalLink, FileVideo, RefreshCw, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ExternalLink, FileVideo, FolderOpen, RefreshCw, Trash2, Upload, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 
@@ -49,6 +49,32 @@ function normalizeVideoRecord(video) {
   };
 }
 
+function cleanDroppedPath(value) {
+  const raw = String(value || "").trim().replace(/^"+|"+$/g, "");
+  if (!raw) return "";
+  const firstLine = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] || "";
+  if (firstLine.startsWith("file:///")) {
+    try {
+      const url = new URL(firstLine);
+      return decodeURIComponent(url.pathname)
+        .replace(/^\/([A-Za-z]:)/, "$1")
+        .replace(/\//g, "\\");
+    } catch {
+      return firstLine.replace(/^file:\/\/\//, "").replace(/\//g, "\\");
+    }
+  }
+  return firstLine;
+}
+
+function errorMessage(err, fallback) {
+  const raw = err?.data?.error || err?.message || fallback;
+  const text = String(raw || fallback);
+  if (text.includes("<!DOCTYPE html>") || err?.status === 404) {
+    return "The local video API is not available in the running server yet. Restart the local API server, then try again.";
+  }
+  return text;
+}
+
 export default function LinkedLocalVideoManager({
   videos = [],
   onChange,
@@ -60,6 +86,7 @@ export default function LinkedLocalVideoManager({
   const [labelInput, setLabelInput] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [dragActive, setDragActive] = useState(false);
 
   const saveVideos = async (nextVideos) => {
     await onChange?.(nextVideos.map(normalizeVideoRecord));
@@ -92,10 +119,56 @@ export default function LinkedLocalVideoManager({
       setPathInput("");
       setLabelInput("");
     } catch (err) {
-      setError(err?.data?.error || err?.message || "Could not link that local video.");
+      setError(errorMessage(err, "Could not link that local video."));
     } finally {
       setBusy("");
     }
+  };
+
+  const browseVideo = async () => {
+    setBusy("browse");
+    setError("");
+    try {
+      const meta = await base44.integrations.Core.BrowseLocalVideo();
+      if (meta?.cancelled) return;
+      setPathInput(meta.path || "");
+      if (!labelInput.trim()) setLabelInput(meta.filename || "");
+    } catch (err) {
+      setError(errorMessage(err, "Could not open the local video picker."));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const applyDroppedPath = (path, file) => {
+    const cleaned = cleanDroppedPath(path);
+    if (cleaned) {
+      setPathInput(cleaned);
+      if (!labelInput.trim()) setLabelInput(file?.name || cleaned.split(/[\\/]/).pop() || "");
+      setError("");
+      return true;
+    }
+    if (file?.name) {
+      setLabelInput((current) => current || file.name);
+      setError("The browser accepted the video but did not expose its full Windows path. Try dropping copied path text, or paste the path from File Explorer / OBS.");
+      return true;
+    }
+    return false;
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+    const transfer = event.dataTransfer;
+    const textPath = cleanDroppedPath(transfer.getData("text/uri-list") || transfer.getData("text/plain"));
+    if (applyDroppedPath(textPath)) return;
+
+    const item = [...(transfer.items || [])].find((entry) => entry.kind === "file");
+    const file = item?.getAsFile?.() || transfer.files?.[0];
+    const exposedPath = file?.path || file?.webkitRelativePath || "";
+    if (applyDroppedPath(exposedPath, file)) return;
+    setError("Drop a local video file here, or paste its full path from File Explorer / OBS.");
   };
 
   const refreshVideo = async (video) => {
@@ -122,7 +195,7 @@ export default function LinkedLocalVideoManager({
         ? normalizeVideoRecord({ ...item, exists: false, lastCheckedAt: new Date().toISOString() })
         : item);
       await saveVideos(next);
-      setError(err?.data?.error || err?.message || "That linked video is not reachable right now.");
+      setError(errorMessage(err, "That linked video is not reachable right now."));
     } finally {
       setBusy("");
     }
@@ -146,26 +219,44 @@ export default function LinkedLocalVideoManager({
         </span>
       </div>
 
-      <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_14rem_auto]">
-        <input
-          value={pathInput}
-          onChange={(event) => setPathInput(event.target.value)}
-          placeholder="Paste full video path, e.g. D:\OBS\Sessions\2026-05-31.mkv"
-          className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-        />
-        <input
-          value={labelInput}
-          onChange={(event) => setLabelInput(event.target.value)}
-          placeholder="Optional label"
-          className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-        />
-        <Button type="button" size="sm" onClick={addVideo} disabled={busy === "add"} className="h-9 gap-1.5">
-          {busy === "add" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FileVideo className="h-3.5 w-3.5" />}
-          Link Video
-        </Button>
+      <div
+        className={`mt-3 rounded-xl border border-dashed p-2 transition-colors ${
+          dragActive ? "border-primary bg-primary/10" : "border-border bg-muted/10"
+        }`}
+        onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }}
+        onDragOver={(event) => { event.preventDefault(); setDragActive(true); }}
+        onDragLeave={(event) => { event.preventDefault(); setDragActive(false); }}
+        onDrop={handleDrop}
+      >
+        <div className="grid gap-2 lg:grid-cols-[auto_1fr_14rem_auto]">
+          <Button type="button" size="sm" variant="outline" onClick={browseVideo} disabled={busy === "browse"} className="h-9 gap-1.5">
+            {busy === "browse" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+            Browse
+          </Button>
+          <input
+            value={pathInput}
+            onChange={(event) => setPathInput(event.target.value)}
+            placeholder="Paste or drop full video path, e.g. D:\OBS\Sessions\2026-05-31.mkv"
+            className="h-9 min-w-0 rounded-lg border border-border bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <input
+            value={labelInput}
+            onChange={(event) => setLabelInput(event.target.value)}
+            placeholder="Optional label"
+            className="h-9 min-w-0 rounded-lg border border-border bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <Button type="button" size="sm" onClick={addVideo} disabled={busy === "add"} className="h-9 gap-1.5">
+            {busy === "add" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FileVideo className="h-3.5 w-3.5" />}
+            Link Video
+          </Button>
+        </div>
+        <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <Upload className="h-3.5 w-3.5" />
+          Drop a video file or copied path here. If the browser hides the path, paste it from File Explorer or OBS.
+        </div>
       </div>
       <p className="mt-1 text-[10px] text-muted-foreground">
-        Browser file pickers usually hide full paths, so paste the path from File Explorer or OBS recording settings.
+        Browse opens a local Windows picker from the app server. You can still paste a path from File Explorer or OBS recording settings.
       </p>
 
       {error && (

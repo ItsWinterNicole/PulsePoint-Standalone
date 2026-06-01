@@ -188,21 +188,27 @@ export default function BodyExplorationDetail() {
             defaultOpen
             onSaveMessages={async (msgs) => {
               setChatMessages(msgs);
-              const updatedAi = { ...(exploration.ai_body_exploration || {}), _chat_messages: msgs };
-              setExploration((prev) => ({ ...prev, ai_body_exploration: updatedAi }));
+              let updatedAi = { ...(exploration.ai_body_exploration || {}), _chat_messages: msgs };
+              setExploration((prev) => {
+                if (!prev) return prev;
+                updatedAi = { ...(prev.ai_body_exploration || updatedAi), _chat_messages: msgs };
+                return { ...prev, ai_body_exploration: updatedAi };
+              });
               await base44.entities.BodyExploration.update(id, { ai_body_exploration: updatedAi });
             }}
             onSaveNotes={async (merged, meta = {}) => {
               setExplorationNotes(merged);
+              const conversation = Array.isArray(meta.conversation) ? meta.conversation : chatMessages;
+              if (Array.isArray(conversation)) setChatMessages(conversation);
               const updatedAi = {
                 ...(exploration.ai_body_exploration || {}),
-                _chat_messages: Array.isArray(meta.conversation) ? meta.conversation : chatMessages,
+                _chat_messages: conversation,
               };
               if (isVisualReviewSource(meta.source)) {
                 const visualEntry = makeBodyExplorationVisualEvidenceEntry(meta, merged);
                 updatedAi._visual_findings = normalizeBodyExplorationVisualEvidence([
                   visualEntry,
-                  ...(exploration.ai_body_exploration?._visual_findings || []),
+                  ...((exploration.ai_body_exploration || {})._visual_findings || []),
                 ]);
               }
               setExploration((prev) => ({

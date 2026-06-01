@@ -21,6 +21,16 @@ function cleanText(value, maxLength = 700) {
   return text.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+function formatTimePhrase(value) {
+  const total = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.round((total - minutes * 60) * 10) / 10;
+  const secondsText = seconds % 1 === 0 ? String(Math.round(seconds)) : seconds.toFixed(1);
+  if (!minutes) return `${secondsText} second${seconds === 1 ? "" : "s"}`;
+  if (!seconds) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `${minutes} minute${minutes === 1 ? "" : "s"} and ${secondsText} second${seconds === 1 ? "" : "s"}`;
+}
+
 function compactFindingText(finding) {
   if (!finding) return "";
   if (typeof finding === "string") return cleanText(finding);
@@ -175,13 +185,13 @@ function formatMediaContext(entry) {
   if (Array.isArray(media.videos) && media.videos.length) {
     const videos = media.videos.map((video) => {
       const range = video.startSeconds != null && video.endSeconds != null
-        ? `${Number(video.startSeconds).toFixed(1)}-${Number(video.endSeconds).toFixed(1)}s`
+        ? `${formatTimePhrase(video.startSeconds)} to ${formatTimePhrase(video.endSeconds)}`
         : "";
       const timelineRange = video.timelineStartSeconds != null && video.timelineEndSeconds != null
-        ? `, ${video.timelineLabel || "session timeline"} ${Number(video.timelineStartSeconds).toFixed(1)}-${Number(video.timelineEndSeconds).toFixed(1)}s`
+        ? `, ${video.timelineLabel || "session timeline"} ${formatTimePhrase(video.timelineStartSeconds)} to ${formatTimePhrase(video.timelineEndSeconds)}`
         : "";
       const label = video.label || video.filename || "video clip";
-      const frames = video.frameTimes?.length ? ` frames at ${video.frameTimes.join(", ")}s` : "";
+      const frames = video.frameTimes?.length ? ` frames at ${video.frameTimes.map(formatTimePhrase).join(", ")}` : "";
       return `${label}${range ? ` (${range}${timelineRange})` : timelineRange ? ` (${timelineRange.replace(/^, /, "")})` : ""}${frames}`;
     });
     parts.push(videos.join("; "));

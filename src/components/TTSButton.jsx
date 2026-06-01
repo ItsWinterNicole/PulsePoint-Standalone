@@ -353,6 +353,7 @@ export function cleanTextForSpeech(text) {
   return repairDecimalSpacing(text)
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (_, time) => formatTimeAsWords(time))
     .replace(/•/g, ". ")
     .replace(/·/g, ". ")
     .replace(/–|—/g, ", ")

@@ -32,9 +32,71 @@ const ALLOWED_VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".mkv"];
 const MAX_IMAGE_COUNT = 5;
 const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
 const VIDEO_FRAME_SAMPLE_COUNT = 12;
+const TTS_CACHE_DB_NAME = "pulsepoint-ai-chat-tts";
+const TTS_CACHE_DB_VERSION = 1;
+const TTS_CACHE_STORE_NAME = "audioChunks";
 
 function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function hashText(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function openTtsCacheDb() {
+  if (typeof window === "undefined" || !("indexedDB" in window)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const request = window.indexedDB.open(TTS_CACHE_DB_NAME, TTS_CACHE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(TTS_CACHE_STORE_NAME)) {
+        db.createObjectStore(TTS_CACHE_STORE_NAME, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
+  });
+}
+
+async function getStoredTtsAudio(key) {
+  const db = await openTtsCacheDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    const transaction = db.transaction(TTS_CACHE_STORE_NAME, "readonly");
+    const request = transaction.objectStore(TTS_CACHE_STORE_NAME).get(key);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => resolve(null);
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => db.close();
+  });
+}
+
+async function putStoredTtsAudio(record) {
+  const db = await openTtsCacheDb();
+  if (!db) return;
+  await new Promise((resolve) => {
+    const transaction = db.transaction(TTS_CACHE_STORE_NAME, "readwrite");
+    transaction.objectStore(TTS_CACHE_STORE_NAME).put(record);
+    transaction.oncomplete = resolve;
+    transaction.onerror = resolve;
+    transaction.onabort = resolve;
+  });
+  db.close();
+}
+
+function audioBase64ToObjectUrl(audio, mimeType) {
+  const binary = atob(audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes.buffer], { type: mimeType }));
 }
 
 function fileToDataUrl(file) {
@@ -150,6 +212,16 @@ function formatSeconds(value) {
   return minutes ? `${minutes}:${remainder.toFixed(1).padStart(4, "0")}` : `${remainder.toFixed(1)}s`;
 }
 
+function formatTimePhrase(value) {
+  const total = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.round((total - minutes * 60) * 10) / 10;
+  const secondsText = seconds % 1 === 0 ? String(Math.round(seconds)) : seconds.toFixed(1);
+  if (!minutes) return `${secondsText} second${seconds === 1 ? "" : "s"}`;
+  if (!seconds) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `${minutes} minute${minutes === 1 ? "" : "s"} and ${secondsText} second${seconds === 1 ? "" : "s"}`;
+}
+
 function isAllowedVideoFile(file) {
   const name = String(file?.name || "").toLowerCase();
   return ALLOWED_VIDEO_TYPES.includes(file?.type) || ALLOWED_VIDEO_EXTENSIONS.some((extension) => name.endsWith(extension));
@@ -195,12 +267,13 @@ function reviewCandidateBullets(findings = []) {
 function MessageMarkdown({ text }) {
   return (
     <ReactMarkdown
+      className="space-y-2 text-[0.95rem] leading-7"
       components={{
-        p: ({ children }) => <p className="my-1 first:mt-0 last:mb-0">{children}</p>,
+        p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
         strong: ({ children }) => <strong className="font-semibold text-inherit">{children}</strong>,
         em: ({ children }) => <em className="italic text-inherit">{children}</em>,
-        ul: ({ children }) => <ul className="my-1 list-disc space-y-1 pl-4">{children}</ul>,
-        ol: ({ children }) => <ol className="my-1 list-decimal space-y-1 pl-4">{children}</ol>,
+        ul: ({ children }) => <ul className="my-2 list-disc space-y-1.5 pl-5">{children}</ul>,
+        ol: ({ children }) => <ol className="my-2 list-decimal space-y-1.5 pl-5">{children}</ol>,
         li: ({ children }) => <li className="pl-0.5">{children}</li>,
         code: ({ children }) => <code className="rounded bg-black/15 px-1 py-0.5 text-[0.92em]">{children}</code>,
       }}
@@ -246,6 +319,7 @@ export default function AIChat({
   const [videoPreviewSize, setVideoPreviewSize] = useState("large");
   const [videoPlayheadSeconds, setVideoPlayheadSeconds] = useState(0);
   const [processingVideoClip, setProcessingVideoClip] = useState(false);
+  const [chatProcessingStatus, setChatProcessingStatus] = useState(null);
   const [imageError, setImageError] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
   const bottomRef = useRef(null);
@@ -407,26 +481,54 @@ export default function AIChat({
         return;
       }
       const runtime = getTTSRuntime();
-      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
-        if (requestId !== ttsRequestIdRef.current) return;
+      const fetchPromises = new Map();
+      const runtimeSignature = [
+        runtime.cacheProfile,
+        runtime.model,
+        runtime.format,
+        runtime.speed,
+        hashText(runtime.supportsInstructions ? runtime.instructions : ""),
+      ].join(":");
+      const cacheKeyForChunk = (chunk) => `${runtimeSignature}:${chunk.length}:${hashText(chunk)}`;
+      const fetchChunkAudio = async (chunkIndex, { showStatus = false } = {}) => {
         const chunk = chunks[chunkIndex];
-        const cacheKey = `${idx}:${runtime.cacheProfile}:${runtime.format}:${runtime.speed}:${chunk}`;
-        let src = audioUrlCacheRef.current.get(cacheKey);
-        let fromCache = Boolean(src);
-        if (src) {
-          setCurrentTtsStatus(requestId, {
-            idx,
-            phase: "cached",
-            message: chunks.length > 1 ? `Using cached audio chunk ${chunkIndex + 1}/${chunks.length}` : "Using cached audio",
-            startedAt: Date.now(),
-          });
-        } else {
-          setCurrentTtsStatus(requestId, {
-            idx,
-            phase: "fetching",
-            message: chunks.length > 1 ? `Fetching Sarah audio chunk ${chunkIndex + 1}/${chunks.length}` : "Fetching Sarah audio",
-            startedAt: Date.now(),
-          });
+        const cacheKey = cacheKeyForChunk(chunk);
+        const cached = audioUrlCacheRef.current.get(cacheKey);
+        if (cached) {
+          if (showStatus) {
+            setCurrentTtsStatus(requestId, {
+              idx,
+              phase: "cached",
+              message: chunks.length > 1 ? `Using cached audio chunk ${chunkIndex + 1}/${chunks.length}` : "Using cached audio",
+              startedAt: Date.now(),
+            });
+          }
+          return { src: cached, fromCache: true };
+        }
+        const stored = await getStoredTtsAudio(cacheKey);
+        if (stored?.audio && stored?.text === chunk) {
+          const src = audioBase64ToObjectUrl(stored.audio, stored.mimeType || getTTSMime(stored.format || runtime.format || TTS_PLAYBACK_FORMAT));
+          audioUrlCacheRef.current.set(cacheKey, src);
+          if (showStatus) {
+            setCurrentTtsStatus(requestId, {
+              idx,
+              phase: "cached",
+              message: chunks.length > 1 ? `Using saved audio chunk ${chunkIndex + 1}/${chunks.length}` : "Using saved audio",
+              startedAt: Date.now(),
+            });
+          }
+          return { src, fromCache: true };
+        }
+        if (fetchPromises.has(chunkIndex)) return fetchPromises.get(chunkIndex);
+        const promise = (async () => {
+          if (showStatus) {
+            setCurrentTtsStatus(requestId, {
+              idx,
+              phase: "fetching",
+              message: chunks.length > 1 ? `Fetching Sarah audio chunk ${chunkIndex + 1}/${chunks.length}` : "Fetching Sarah audio",
+              startedAt: Date.now(),
+            });
+          }
           const res = await base44.functions.invoke("openaiTTS", {
             text: prepareTTSInput(chunk),
             voice: "nova",
@@ -436,17 +538,39 @@ export default function AIChat({
             format: runtime.format,
           });
           const audio = res.data?.audio;
-          if (!audio) {
-            setSpeakingIdx(null);
-            setCurrentTtsStatus(requestId, { idx, phase: "error", message: res.data?.error || "TTS returned no audio", startedAt: Date.now() });
-            return;
-          }
-          const binary = atob(audio);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          src = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT) }));
+          if (!audio) throw new Error(res.data?.error || "TTS returned no audio");
+          const format = res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT;
+          const mimeType = getTTSMime(format);
+          const src = audioBase64ToObjectUrl(audio, mimeType);
           audioUrlCacheRef.current.set(cacheKey, src);
-          fromCache = false;
+          putStoredTtsAudio({
+            key: cacheKey,
+            text: chunk,
+            audio,
+            format,
+            mimeType,
+            voice: "nova",
+            model: runtime.model,
+            speed: runtime.speed,
+            createdAt: Date.now(),
+          }).catch(() => {});
+          return { src, fromCache: false };
+        })().finally(() => {
+          fetchPromises.delete(chunkIndex);
+        });
+        fetchPromises.set(chunkIndex, promise);
+        return promise;
+      };
+
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        if (requestId !== ttsRequestIdRef.current) return;
+        if (chunkIndex + 1 < chunks.length && !fetchPromises.has(chunkIndex + 1) && !audioUrlCacheRef.current.get(cacheKeyForChunk(chunks[chunkIndex + 1]))) {
+          fetchChunkAudio(chunkIndex + 1, { showStatus: false }).catch(() => {});
+        }
+        const { src, fromCache } = await fetchChunkAudio(chunkIndex, { showStatus: true });
+        if (requestId !== ttsRequestIdRef.current) return;
+        if (chunkIndex + 1 < chunks.length && !fetchPromises.has(chunkIndex + 1) && !audioUrlCacheRef.current.get(cacheKeyForChunk(chunks[chunkIndex + 1]))) {
+          fetchChunkAudio(chunkIndex + 1, { showStatus: false }).catch(() => {});
         }
         setCurrentTtsStatus(requestId, {
           idx,
@@ -633,6 +757,11 @@ export default function AIChat({
     }
     const label = selectedVideoClip.label?.trim() || selectedVideoClip.filename || "video technique example";
     setProcessingVideoClip(true);
+    setChatProcessingStatus({
+      phase: "processing",
+      message: "Preparing local video clip",
+      detail: `Building a short review clip from ${formatTimePhrase(selectedVideoClip.startSeconds)} to ${formatTimePhrase(selectedVideoClip.endSeconds)}.`,
+    });
     updateSelectedVideoClip({ processingStatus: "Processing clip with local FFmpeg..." }, { keepProcessed: true });
     try {
       const processed = await base44.integrations.Core.ProcessVideoClip({
@@ -646,12 +775,18 @@ export default function AIChat({
         processedClip: processed,
         processingStatus: "MP4 preview ready. Raw source was discarded after processing.",
       }, { keepProcessed: true });
+      setChatProcessingStatus({
+        phase: "ready",
+        message: "Video preview ready",
+        detail: "Sarah will receive sampled frames plus local motion timing from this clip.",
+      });
       return processed;
     } catch (error) {
       const message = error?.status === 404
         ? "Video processing endpoint is not available yet. Restart the local API server, then try Generate MP4 Preview again."
         : error?.message || "Could not process this video clip.";
       updateSelectedVideoClip({ processingStatus: message }, { keepProcessed: true });
+      setChatProcessingStatus({ phase: "error", message: "Video clip processing failed", detail: message });
       setImageError(message);
       return null;
     } finally {
@@ -701,6 +836,11 @@ export default function AIChat({
       const timelineEndSeconds = selectedVideoClip.endSeconds + timelineOffsetSeconds;
       const timelineLabel = evidenceScope === "body_exploration" ? "body exploration timeline" : evidenceScope === "session" ? "session timeline" : "source video timeline";
       if (processed?.frames?.length) {
+        setChatProcessingStatus({
+          phase: "sampling",
+          message: "Extracting video evidence",
+          detail: `Using ${processed.frames.length} sampled frames from ${formatTimePhrase(selectedVideoClip.startSeconds)} to ${formatTimePhrase(selectedVideoClip.endSeconds)}.`,
+        });
         return processed.frames.slice(0, slots).map((frame, index) => {
           const frameTimeSeconds = Number(frame.frameTimeSeconds ?? selectedVideoClip.startSeconds);
           const dataUrl = frame.data ? `data:${frame.mimeType || "image/jpeg"};base64,${frame.data}` : frame.url || frame.file_url || "";
@@ -735,6 +875,11 @@ export default function AIChat({
           };
         });
       }
+      setChatProcessingStatus({
+        phase: "sampling",
+        message: "Sampling video frames in the browser",
+        detail: `Using ${Math.min(slots, VIDEO_FRAME_SAMPLE_COUNT)} frames from ${formatTimePhrase(selectedVideoClip.startSeconds)} to ${formatTimePhrase(selectedVideoClip.endSeconds)}.`,
+      });
       const frames = await sampleVideoFrames({
         file: selectedVideoClip.file,
         startSeconds: selectedVideoClip.startSeconds,
@@ -774,6 +919,13 @@ export default function AIChat({
     const pendingImages = [...selectedImages, ...videoFrames].slice(0, maxPending);
     if (!pendingImages.length) return { metadata: [], aiImages: [] };
     setUploadingImages(true);
+    setChatProcessingStatus({
+      phase: videoFrames.length ? "uploading" : "uploading",
+      message: videoFrames.length ? "Uploading sampled video frames" : "Uploading images",
+      detail: videoFrames.length
+        ? `${videoFrames.length} frames are being attached for Sarah's review.`
+        : `${pendingImages.length} image${pendingImages.length === 1 ? "" : "s"} are being attached.`,
+    });
     const uploaded = [];
     const aiImages = [];
     try {
@@ -1023,24 +1175,40 @@ export default function AIChat({
     setTimeout(() => setSavedFeedback(false), 3000);
   };
 
+  const persistChatMessages = async (messageList) => {
+    try {
+      await onSaveMessages?.(messageList);
+    } catch (error) {
+      const message = error?.message || "Chat save failed.";
+      setImageError(message);
+      setChatProcessingStatus({ phase: "error", message: "Chat save failed", detail: message });
+    }
+  };
+
   const sendMessage = async (overrideText = null) => {
     const requestedText = typeof overrideText === "string" ? overrideText : input;
     if ((!requestedText.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip) return;
     const text = requestedText.trim();
     setLoading(true);
+    setChatProcessingStatus({
+      phase: selectedVideoClip ? "queued" : selectedImages.length ? "queued" : "thinking",
+      message: selectedVideoClip ? "Starting Sarah video review" : selectedImages.length ? "Starting Sarah image review" : "Sarah is thinking",
+      detail: selectedVideoClip ? "Preparing the clip, frame evidence, motion summary, and session context." : "",
+    });
     setImageError("");
     let imagePayload = { metadata: [], aiImages: [] };
     try {
       imagePayload = await uploadSelectedImages();
     } catch (error) {
       setLoading(false);
+      setChatProcessingStatus({ phase: "error", message: "Could not prepare attachments", detail: error.message || "Image upload failed." });
       setImageError(error.message || "Image upload failed.");
       return;
     }
     const userMsg = { role: "user", text: text || "Please review the attached media.", imageAttachments: imagePayload.metadata };
     const updated = [...messages, userMsg];
     setMessages(updated);
-    onSaveMessages?.(updated);
+    await persistChatMessages(updated);
     setInput("");
     setSelectedImages([]);
 
@@ -1052,10 +1220,10 @@ export default function AIChat({
       .filter((item) => item.sourceVideo)
       .map((item) => item.sourceVideo)
       .map((video) => {
-        const sourceRange = `${Number(video.startSeconds).toFixed(1)}s to ${Number(video.endSeconds).toFixed(1)}s`;
-        const sourceFrameTime = `${Number(video.frameTimeSeconds).toFixed(1)}s`;
+        const sourceRange = `${formatTimePhrase(video.startSeconds)} to ${formatTimePhrase(video.endSeconds)}`;
+        const sourceFrameTime = formatTimePhrase(video.frameTimeSeconds);
         const timelineRange = video.timelineStartSeconds != null && video.timelineEndSeconds != null
-          ? ` This same clip spans ${formatSeconds(video.timelineStartSeconds)} to ${formatSeconds(video.timelineEndSeconds)} on the ${video.timelineLabel || "session timeline"}, and this frame is at ${formatSeconds(video.frameTimelineSeconds ?? video.frameTimeSeconds)} on that timeline.`
+          ? ` This same clip spans ${formatTimePhrase(video.timelineStartSeconds)} to ${formatTimePhrase(video.timelineEndSeconds)} on the ${video.timelineLabel || "session timeline"}, and this frame is at ${formatTimePhrase(video.frameTimelineSeconds ?? video.frameTimeSeconds)} on that timeline.`
           : "";
         return `Video clip frame ${video.frameIndex}: "${video.label}" from ${sourceRange} in source video ${video.filename}, sampled at source time ${sourceFrameTime}.${timelineRange}`;
       })
@@ -1070,7 +1238,7 @@ export default function AIChat({
           motionSummary.average_motion != null ? `Average frame-to-frame motion: ${motionSummary.average_motion}.` : null,
           motionSummary.peak_motion != null ? `Peak frame-to-frame motion: ${motionSummary.peak_motion}.` : null,
           motionSummary.active_motion_pct != null ? `Active motion coverage: ${motionSummary.active_motion_pct}%.` : null,
-          motionSummary.pause_candidates?.length ? `Possible low-motion pauses: ${motionSummary.pause_candidates.map((pause) => `${pause.startSeconds}-${pause.endSeconds}s (${pause.durationSeconds}s)`).join(", ")}.` : null,
+          motionSummary.pause_candidates?.length ? `Possible low-motion pauses: ${motionSummary.pause_candidates.map((pause) => `${formatTimePhrase(pause.startSeconds)} to ${formatTimePhrase(pause.endSeconds)} (${formatTimePhrase(pause.durationSeconds)})`).join(", ")}.` : null,
           motionSummary.note || null,
         ].filter(Boolean).join("\n")
       : "";
@@ -1083,6 +1251,7 @@ export default function AIChat({
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
     const SESSION_SCOPE_RULE = `SCOPE RULE: Stay anchored to THIS specific ${conversationSubject}'s data only. Never compare to or reference other records unless the provided context explicitly asks for that comparison.`;
+    const TIME_FORMAT_RULE = `TIME FORMAT RULE: When discussing clip or session timing, write times in natural minutes-and-seconds language, like "nine minutes and fifty-eight seconds" or "one minute and twelve seconds". Do not use raw second counts like "598 seconds", compact labels like "598s", or bracketed numeric timestamps like "[9:58]" in the user-facing response.`;
 
     const QUESTION_QUALITY_RULE = `QUESTION QUALITY — THIS IS THE MOST IMPORTANT RULE:
 Questions should be rooted in the session's AROUSAL and STIMULATION experience, not heart rate numbers or timestamps. Good anchors to use:
@@ -1140,6 +1309,7 @@ You are Sarah inside PulsePoint. The user may provide explicit adult anatomical 
 - Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.
 - Focus on anatomy, physiology, device fit, marker/sticker placement, catheter/sleeve/e-stim/suction interaction, posture/positioning, and evidence-aware profile/session updates.
 - Use direct second-person language and be respectful, warm, and precise.
+- ${TIME_FORMAT_RULE}
 - In chatResponse and every findingText, use "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".
 - If you make any concrete visible observation that may matter later, include it in findings. Use persistTo "profile", "session", or "both" for durable evidence; use persistTo "none" with needsUserConfirmation true for cautious review candidates.
 - Leave findings empty only if the image is unusable or has no useful observable information.
@@ -1171,8 +1341,17 @@ Return a conversational answer plus structured findings for review/persistence.`
       required: ["chatResponse", "findings", "limitations", "followUpQuestions"],
     };
 
+    setChatProcessingStatus({
+      phase: "analyzing",
+      message: imagePayload.aiImages.length ? "Sarah is reviewing the visual evidence" : "Sarah is composing a response",
+      detail: imagePayload.aiImages.length
+        ? "Long video reviews can take a bit while the model reads frames, motion context, and session notes."
+        : "",
+    });
+
+    try {
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${imageReviewPrompt || systemPrompt}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      prompt: `${imageReviewPrompt || systemPrompt}\n\n${TIME_FORMAT_RULE}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
     });
 
@@ -1183,8 +1362,9 @@ Return a conversational answer plus structured findings for review/persistence.`
     const aiMsg = { role: "assistant", text: reply };
     const finalMessages = [...updated, aiMsg];
     setMessages(finalMessages);
-    onSaveMessages?.(finalMessages);
+    await persistChatMessages(finalMessages);
     setLoading(false);
+    setChatProcessingStatus(null);
     const newIdx = finalMessages.length - 1;
     if (ttsEnabled) speakText(reply, newIdx);
     if (imagePayload.aiImages.length) {
@@ -1193,6 +1373,12 @@ Return a conversational answer plus structured findings for review/persistence.`
       persistFindings(finalMessages).catch(() => {
         setSavingFindings(false);
       });
+    }
+    } catch (error) {
+      const message = error?.data?.error || error?.message || "Sarah response failed.";
+      setLoading(false);
+      setChatProcessingStatus({ phase: "error", message: "Sarah response failed", detail: message });
+      setImageError(message);
     }
   };
 
@@ -1227,7 +1413,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     ? "flex min-h-0 flex-1 basis-0 flex-col gap-2 overflow-y-auto border-t border-border px-1 pt-3 sm:px-3"
     : selectedVideoClip
       ? "min-h-[42rem] max-h-[76vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2"
-      : "min-h-80 max-h-80 space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
+      : "min-h-[36rem] max-h-[70vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
   const messageClass = (role) => `group relative rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm ${
     fullScreen ? "max-w-[min(78%,52rem)] sm:text-[15px]" : "max-w-[85%]"
   } ${
@@ -1496,9 +1682,38 @@ Return a conversational answer plus structured findings for review/persistence.`
     );
   };
 
-  const renderMessageImages = (attachments = []) => attachments?.length ? (
-    <div className="mb-2 grid grid-cols-2 gap-2">
-      {attachments.map((image) => (
+  const renderMessageImages = (attachments = []) => {
+    if (!attachments?.length) return null;
+    const videoClipMap = new Map();
+    const regularImages = [];
+    attachments.forEach((image) => {
+      const video = image.sourceVideo || null;
+      const clipUrl = video?.processedClipUrl;
+      if (clipUrl) {
+        const key = `${clipUrl}|${video.startSeconds}|${video.endSeconds}`;
+        if (!videoClipMap.has(key)) videoClipMap.set(key, video);
+      } else {
+        regularImages.push(image);
+      }
+    });
+    const videoClips = [...videoClipMap.values()];
+
+    return (
+      <div className="mb-2 space-y-2">
+        {videoClips.map((video) => (
+          <div key={`${video.processedClipUrl}-${video.startSeconds}-${video.endSeconds}`} className="overflow-hidden rounded-lg border border-white/20 bg-black/20">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-1 text-[10px] opacity-85">
+              <span className="truncate font-semibold">{video.label || video.filename || "Attached video clip"}</span>
+              <span className="shrink-0">
+                {formatSeconds(video.timelineStartSeconds ?? video.startSeconds)}-{formatSeconds(video.timelineEndSeconds ?? video.endSeconds)}
+              </span>
+            </div>
+            <video src={video.processedClipUrl} controls className="max-h-[28rem] w-full bg-black object-contain" />
+          </div>
+        ))}
+        {regularImages.length > 0 && (
+          <div className="grid grid-cols-2 gap-2">
+            {regularImages.map((image) => (
         <a
           key={image.id || image.storagePath || image.previewUrl}
           href={image.previewUrl || image.storagePath}
@@ -1510,9 +1725,12 @@ Return a conversational answer plus structured findings for review/persistence.`
           <img src={image.previewUrl || image.storagePath} alt={image.filename || "Attached image"} className="aspect-square w-full object-cover" />
           <span className="block truncate px-1.5 py-1 text-[10px] opacity-80">{image.filename || "image"}</span>
         </a>
-      ))}
-    </div>
-  ) : null;
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderAttachButton = () => (
     <>
@@ -1745,12 +1963,20 @@ Return a conversational answer plus structured findings for review/persistence.`
               {loading && (
                 <div className="flex gap-2 items-start">
                   <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
-                  <div className="bg-muted/70 rounded-xl rounded-tl-sm px-3 py-2 flex items-center gap-1.5">
-                    {uploadingImages && <ImageIcon className="h-3.5 w-3.5 text-accent" />}
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                    <span className="sr-only">Sarah is analyzing</span>
+                  <div className="max-w-[min(85%,38rem)] rounded-xl rounded-tl-sm border border-accent/20 bg-muted/70 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      {uploadingImages || processingVideoClip ? <ImageIcon className="h-3.5 w-3.5 text-accent" /> : null}
+                      <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                      <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                      <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                      <span className="text-xs font-semibold text-foreground">
+                        {chatProcessingStatus?.message || "Sarah is analyzing"}
+                      </span>
+                    </div>
+                    {chatProcessingStatus?.detail && (
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{chatProcessingStatus.detail}</p>
+                    )}
+                    <span className="sr-only">{chatProcessingStatus?.message || "Sarah is analyzing"}</span>
                   </div>
                 </div>
               )}

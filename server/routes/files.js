@@ -3,11 +3,14 @@ import multer from 'multer';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { uploadDir } from '../config.js';
 import { runProcess, runProcessBinary, slugifyFilePart } from '../services/ttsCore.js';
 
 export const filesRouter = express.Router();
 fs.mkdirSync(uploadDir, { recursive: true });
+const execFileAsync = promisify(execFile);
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
@@ -174,6 +177,39 @@ filesRouter.post('/local-video/metadata', async (req, res) => {
   }
 });
 
+filesRouter.post('/local-video/browse', async (_req, res) => {
+  if (process.platform !== 'win32') {
+    return res.status(400).json({ error: 'The local video picker is currently available on Windows only.' });
+  }
+
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Select local session video'
+$dialog.Filter = 'Video files (*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi)|*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi|All files (*.*)|*.*'
+$dialog.Multiselect = $false
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.FileName
+}
+`;
+
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], {
+      timeout: 120000,
+      windowsHide: false,
+    });
+    const selectedPath = normalizeLocalVideoPath(stdout);
+    if (!selectedPath) return res.json({ cancelled: true });
+    res.json(await localVideoMetadata(selectedPath));
+  } catch (error) {
+    const message = error?.killed
+      ? 'The local video picker timed out before a file was selected.'
+      : error?.message || 'Could not open the local video picker.';
+    res.status(500).json({ error: message });
+  }
+});
+
 filesRouter.get('/local-video/stream', async (req, res) => {
   try {
     const requestedPath = normalizeLocalVideoPath(req.query?.path);
@@ -229,11 +265,13 @@ filesRouter.post('/video-clip-preview', upload.single('file'), async (req, res) 
       '-t', String(duration),
       '-i', sourcePath,
       '-map', '0:v:0',
-      '-an',
+      '-map', '0:a?',
       '-vf', 'scale=min(960\\,iw):-2',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '23',
+      '-c:a', 'aac',
+      '-b:a', '128k',
       '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart',
       clipPath,
