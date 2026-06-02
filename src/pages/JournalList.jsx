@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { BookOpen, ChevronDown, ChevronUp, Trash2, Calendar, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import TTSReader from "../components/TTSReader";
+import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import moment from "moment";
 
@@ -126,54 +126,15 @@ function JournalCard({ journal, onDelete }) {
 
           {/* AI journal output */}
           {ai && paras.length > 0 ? (
-            <TTSReader
+            <AIOutputReader
               sessionId={`journal-list-${journal.id}`}
               title={`${dateStr} – Session Journal`}
               paragraphs={paras}
-              renderParagraph={(text, idx, isActive, isBuffering) => {
-                const m = meta[idx];
-                if (!m) return null;
-
-                if (m.type === "title") {
-                  return (
-                    <p className={`text-base font-semibold leading-snug border-l-2 pl-3 py-1 transition-all rounded-r-md ${
-                      isActive ? "border-accent bg-accent/10 text-foreground" : "border-accent/50 text-foreground"
-                    }`}>
-                      {text}
-                    </p>
-                  );
-                }
-
-                if (m.type === "moment") {
-                  return (
-                    <li className={`text-sm pl-3 border-l-2 py-0.5 list-none leading-relaxed transition-all rounded-r-md ${
-                      isActive ? "border-chart-4 bg-chart-4/10" : "border-chart-4/40"
-                    }`} style={{ color: "hsl(var(--foreground))" }}>
-                      {isBuffering && <span className="inline-block w-2.5 h-2.5 border-2 border-t-transparent rounded-full animate-spin mr-1.5 align-middle" style={{ borderColor: "hsl(var(--chart-4))" }} />}
-                      {text}
-                    </li>
-                  );
-                }
-
-                const color = SECTION_COLORS[m.key] || "hsl(var(--primary))";
-                const label = SECTION_LABELS[m.key] || m.key;
-
-                return (
-                  <div
-                    className="pl-3 border-l-2 py-2 leading-relaxed transition-all duration-200 rounded-r-md"
-                    style={{
-                      borderColor: isActive ? color : color + "66",
-                      background: isActive ? color + "18" : isBuffering ? color + "0f" : "transparent",
-                    }}
-                  >
-                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1 flex items-center gap-1" style={{ color }}>
-                      {isBuffering && <span className="w-2.5 h-2.5 border-2 border-t-transparent rounded-full animate-spin shrink-0" style={{ borderColor: color, borderTopColor: "transparent" }} />}
-                      {label}
-                    </p>
-                    <p className="text-sm" style={{ color: isActive ? "#fff" : "hsl(var(--foreground))" }}>{text}</p>
-                  </div>
-                );
-              }}
+              paragraphMeta={meta.map((m) => {
+                if (m.type === "title") return { type: "summary", color: "hsl(var(--accent))" };
+                if (m.type === "moment") return { type: "section", sec: { key: "notable_moments", label: "Notable Moments", color: "hsl(var(--chart-4))" } };
+                return { type: "section", sec: { key: m.key, label: SECTION_LABELS[m.key] || m.key, color: SECTION_COLORS[m.key] || "hsl(var(--primary))" } };
+              })}
             />
           ) : (
             <p className="text-xs text-muted-foreground">No AI journal generated for this entry.</p>

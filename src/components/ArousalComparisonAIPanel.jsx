@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { TrendingUp } from "lucide-react";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import moment from "moment";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
@@ -226,12 +226,6 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
     ...(result.cross_session_patterns || []).map(() => ({ type: "section", key: "cross_session_patterns" })),
   ] : [];
 
-  // Track first index of each section for header rendering
-  const sectionFirstIdx = {};
-  paraMeta.forEach((m, i) => {
-    if (m.type === "section" && sectionFirstIdx[m.key] == null) sectionFirstIdx[m.key] = i;
-  });
-
   const sessionDatesLabel = sessions
     .map((s) => s.date ? moment(s.date).format("MMM D") : null)
     .filter(Boolean).join(" & ");
@@ -268,47 +262,17 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
           <div className="text-[10px] text-muted-foreground">
             {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
           </div>
-          <TTSReader
+          <AIOutputReader
             sessionId={"arousal_compare_" + sessionKey}
             title={`Arousal Comparison – ${sessionDatesLabel}`}
             sessionDate={sessions[0]?.date}
             sourceGeneratedAt={generatedAt}
             paragraphs={paras}
-            renderParagraph={(text, idx, isActive, isBuffering) => {
-            const meta = paraMeta[idx];
-            if (!meta) return null;
-
-            if (meta.type === "summary") {
-              return (
-                <p className={`text-sm font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/10 text-foreground" : "border-primary/50 text-foreground"}`}>
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                  {text}
-                </p>
-              );
-            }
-
-            const sec = SECTIONS.find((s) => s.key === meta.key);
-            const isFirst = sectionFirstIdx[meta.key] === idx;
-            return (
-              <div>
-                {isFirst && (
-                  <p className="text-[10px] font-semibold uppercase tracking-wider mt-3 mb-1 pt-2 border-t border-border" style={{ color: sec?.color }}>
-                    {sec?.label}
-                  </p>
-                )}
-                <li
-                  className="text-sm leading-relaxed pl-3 border-l-2 py-1 list-none transition-all duration-200 rounded-r-md flex items-start gap-2"
-                  style={{
-                    borderColor: isActive ? sec?.color : isBuffering ? sec?.color + "99" : sec?.color + "44",
-                    background: isActive ? sec?.color + "18" : isBuffering ? sec?.color + "0a" : "transparent",
-                  }}
-                >
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin mt-1" />}
-                  {text}
-                </li>
-              </div>
-            );
-            }}
+            paragraphMeta={paraMeta.map((meta) => {
+              if (meta.type === "summary") return meta;
+              const sec = SECTIONS.find((item) => item.key === meta.key);
+              return { type: "section", sec };
+            })}
           />
         </div>
       )}

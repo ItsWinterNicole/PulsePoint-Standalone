@@ -97,6 +97,14 @@ function nearestTelemetrySummary(timelineRows, start, end) {
   return `${rows.length} telemetry samples; HR avg ${avg} BPM, range ${min}-${max} BPM.`;
 }
 
+function isStaticTrackingMarkerFinding(finding) {
+  const text = `${finding?.title || ""} ${finding?.text || finding?.findingText || ""}`.toLowerCase();
+  if (!/(tracking marker|reflective marker|visible dot|bright dot|circular dot|marker dot|markers on both feet|dots on both feet)/.test(text)) {
+    return false;
+  }
+  return !/(move|movement|shift|change|lost|loss|reacquir|occlud|hidden|blocked|asymmetr|toe curl|heel|plant|brace|bracing|foot position|feet position|marker placement changed|tracking quality)/.test(text);
+}
+
 function normalizeAIResult(raw, fallbackWindow) {
   const value = typeof raw === "string" ? null : raw;
   const findings = Array.isArray(value?.findings) && value.findings.length
@@ -115,14 +123,14 @@ function normalizeAIResult(raw, fallbackWindow) {
       text: finding.text || finding.findingText || "",
       confidence: finding.confidence || "moderate",
       category: finding.category || "other",
-    })).filter((finding) => finding.text),
+    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding)),
     events: events.map((event) => ({
       time_s: Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
       note: event.note || event.text || "",
       category: Array.isArray(event.category) ? event.category : [event.category || "other"],
       annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
       confidence: event.confidence || "moderate",
-    })).filter((event) => event.note),
+    })).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note })),
   };
 }
 
@@ -203,6 +211,59 @@ function compactVideoPassFlow(entries = []) {
   }));
 }
 
+function compactCardContinuity(card) {
+  if (!card) return "";
+  const findings = (card.findings || [])
+    .map((finding) => `${finding.title || "Finding"}: ${finding.text || ""}`)
+    .filter(Boolean)
+    .slice(0, 4);
+  const events = (card.events || [])
+    .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
+    .filter(Boolean)
+    .slice(0, 3);
+  return [
+    `Previous reviewed window: ${fmtMmSs(card.window?.start)} to ${fmtMmSs(card.window?.end)}.`,
+    card.summary ? `Prior summary: ${card.summary}` : "",
+    findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
+    events.length ? `Prior draft events: ${events.join(" | ")}` : "",
+    card.telemetry ? `Prior telemetry: ${card.telemetry}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function compactSavedContinuity(entry) {
+  if (!entry) return "";
+  const findings = (entry.findings || []).slice(0, 4);
+  const events = (entry.draft_events || [])
+    .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
+    .slice(0, 3);
+  return [
+    `Previous accepted Sarah video-pass window: ${fmtMmSs(entry.clip?.start_s)} to ${fmtMmSs(entry.clip?.end_s)}.`,
+    entry.summary ? `Prior summary: ${entry.summary}` : "",
+    findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
+    events.length ? `Prior draft events: ${events.join(" | ")}` : "",
+    entry.telemetry ? `Prior telemetry: ${entry.telemetry}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function findSavedPriorContinuity(session, selectedVideo, window) {
+  const currentStart = Number(window?.start);
+  if (!Number.isFinite(currentStart)) return "";
+  const selectedFingerprint = selectedVideo?.fingerprint || "";
+  const selectedFilename = selectedVideo?.filename || selectedVideo?.label || "";
+  const entries = normalizeSessionVideoPassFindings(session)
+    .filter((entry) => {
+      const end = Number(entry.clip?.end_s);
+      if (!Number.isFinite(end) || end > currentStart + 0.5) return false;
+      const entryFingerprint = entry.source_video?.fingerprint || "";
+      const entryFilename = entry.source_video?.filename || entry.source_video?.label || "";
+      if (selectedFingerprint && entryFingerprint) return selectedFingerprint === entryFingerprint;
+      if (selectedFilename && entryFilename) return selectedFilename === entryFilename;
+      return true;
+    })
+    .sort((a, b) => Number(b.clip?.end_s || 0) - Number(a.clip?.end_s || 0));
+  return compactSavedContinuity(entries[0]);
+}
+
 export default function AIVideoPassPanel({
   session,
   timelineRows = [],
@@ -261,6 +322,9 @@ export default function AIVideoPassPanel({
         });
         const telemetry = nearestTelemetrySummary(timelineRows, window.start, window.end);
         setStatus(`Sarah reviewing ${label}`);
+        const continuityContext = compactCardContinuity(nextCards[nextCards.length - 1])
+          || findSavedPriorContinuity(session, selectedVideo, window)
+          || "No prior reviewed window is available. Treat this as the first observed window, then establish baseline context for the next window.";
         const images = (preview.frames || []).map((frame) => ({
           filename: frame.filename,
           media_type: frame.mimeType || "image/jpeg",
@@ -309,9 +373,27 @@ export default function AIVideoPassPanel({
             required: ["summary", "findings", "events"],
           },
           images,
-          prompt: `You are Sarah, reviewing sampled frames from a linked local session video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+          prompt: `You are Sarah, reviewing sampled frames from a linked local session video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+
+Observation priorities, in order:
+1. Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift.
+2. Visible physiological response: erection/engorgement quality, genital position/state, visible skin color or surface sheen, scrotal/testicular position when clearly visible, and whether these change from the prior window.
+3. Whole-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, and relaxation/tension cues.
+4. Telemetry trend: HR direction, stability, phase labels, and whether the visual state supports or conflicts with the HR trend.
+5. Relevant equipment or environment only when it affects interpretation.
+
+Low-priority control objects: a mouse, remote, keyboard, phone, dark handheld object, or general control device is not itself a useful finding. Treat it as session-control context unless it directly explains a stimulation pause/resume or hand transition. Prefer "your hand leaves/returns to genital contact" over detailed discussion of the object. If the object could be a mouse/control, do not call it a stimulation device.
+
+Output style: write the summary as a flowing chronological observation with the most useful changes first. Findings should be compact cards about meaningful physiology, stimulation, movement, or telemetry deltas. Avoid spending a finding slot on static background objects, unchanged setup, or the mere presence of a control object.
 
 Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context. If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
+
+Foot and body tracking dots rule: circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session context, nearby events, or the user's caption. Never write "foot electrode markers" from appearance alone.
+
+Do not create a standalone finding or timeline event just because static tracking markers are visible. Treat unchanged marker dots as scene context. Mention them only if they materially support a movement observation, marker loss/reacquisition, toe/heel/planting state, foot asymmetry, bracing, or a clear change in marker position/visibility.
+
+Continuity rule: each window is part of a sequential review. Use the previous reviewed window below as context. In this current window, prioritize what continues, what changed, what started, what stopped, and what became more or less visible. Do not repeat stable background details from the prior window unless they changed or are needed to explain a new observation.
+${continuityContext}
 
 Session window: ${fmtMmSs(window.start)} to ${fmtMmSs(window.end)} (${window.start.toFixed(1)}s-${window.end.toFixed(1)}s).
 Telemetry in this window: ${telemetry}

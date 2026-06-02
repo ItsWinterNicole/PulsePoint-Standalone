@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { Brain } from "lucide-react";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 
@@ -249,22 +249,13 @@ Provide a structured comparative analysis covering key differences, HR patterns,
             <div className="text-[10px] text-muted-foreground">
               {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
             </div>
-            <TTSReader
+            <AIOutputReader
               sessionId={`session-compare-${sessionKey}`}
               title={compareTitle}
               sessionDate={sessions[0]?.date}
               sourceGeneratedAt={generatedAt}
               paragraphs={paras}
-              renderParagraph={(text, idx, isActive, isBuffering) => (
-              <p className={`text-sm leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${
-                idx === 0
-                  ? isActive ? "border-primary bg-primary/10 text-foreground font-bold" : "border-primary text-foreground font-medium"
-                  : isActive ? "border-primary bg-primary/10 text-foreground font-medium" : "border-primary/30 text-foreground/80"
-              }`}>
-                {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                {text}
-              </p>
-              )}
+              paragraphMeta={paras.map((_, idx) => idx === 0 ? { type: "summary" } : { type: "section", sec: { key: "comparison", label: "Comparison Details", color: "hsl(var(--primary))" } })}
             />
           </div>
         );

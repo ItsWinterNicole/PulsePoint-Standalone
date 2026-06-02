@@ -1,6 +1,7 @@
 // PWA_FULL_SEND_V1
 // PWA_NO_FOCUS_RELOAD_V1
-const CACHE_NAME = "pulsepoint-shell-v6";
+// PWA_RESUME_NO_NAVIGATE_V1
+const CACHE_NAME = "pulsepoint-shell-v7";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -51,7 +52,16 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "PULSEPOINT_SKIP_WAITING") {
-    self.skipWaiting();
+    event.waitUntil(
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+        // Android installed-app resume can surface a waiting worker while TTS,
+        // live capture, or AI/video processing is active. Never swap
+        // controllers underneath an open PulsePoint window; the update can
+        // activate naturally after all app windows are closed.
+        if (!clients.length) return self.skipWaiting();
+        return null;
+      })
+    );
   }
 });
 

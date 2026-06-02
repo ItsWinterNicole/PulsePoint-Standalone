@@ -2,7 +2,7 @@ import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Brain, Lightbulb, TrendingUp, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const OUTCOME_LABELS = {
@@ -155,39 +155,14 @@ Be specific, reference the actual numbers, and provide practical takeaways the u
       )}
 
       {result && (
-        <TTSReader
+        <AIOutputReader
           paragraphs={paragraphs}
-          renderParagraph={(text, idx, isActive) => {
-            const sec = sectionMap[idx];
-            return (
-              <li
-                className={`text-sm leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 rounded-r-md list-none ${
-                  isActive ? "bg-primary/8 font-medium text-foreground border-primary" : "text-foreground border-primary/30"
-                }`}
-              >
-                {text}
-              </li>
-            );
-          }}
+          title="AI Correlation Analysis"
+          sessionId="event-correlation-ai"
+          paragraphMeta={sectionMap.map((sec) => ({ type: "section", sec }))}
         />
       )}
 
-      {result && sections.map((sec) =>
-        (result[sec.key] || []).length > 0 ? (
-          <div key={sec.key} className="bg-muted/50 rounded-lg p-3 space-y-1.5">
-            <p className="text-xs font-semibold flex items-center gap-1.5" style={{ color: sec.color }}>
-              {sec.icon}{sec.label}
-            </p>
-            <ul className="space-y-1">
-              {result[sec.key].map((item, i) => (
-                <li key={i} className="text-sm text-foreground pl-3 border-l-2 border-primary/30 leading-relaxed py-0.5">
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null
-      )}
     </div>
   );
 }

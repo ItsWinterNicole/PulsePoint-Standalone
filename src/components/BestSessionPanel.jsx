@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Trophy, Brain } from "lucide-react";
 import { Link } from "react-router-dom";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import moment from "moment";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
@@ -253,19 +253,13 @@ ${JSON.stringify(summaries, null, 2)}`,
                 <div className="text-[10px] text-muted-foreground">
                   {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
                 </div>
-                <TTSReader
+                <AIOutputReader
                   sessionId="best-session-analysis"
                   title="AI Best Session"
                   sessionDate={bestSession?.date}
                   sourceGeneratedAt={generatedAt}
                   paragraphs={paras}
-                  renderParagraph={(text, idx, isActive) => (
-                    <p className={`text-sm leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 rounded-r-md ${
-                      isActive ? "border-primary bg-primary/10 text-foreground font-medium" : "border-primary/30 text-[#ffffff]"
-                    }`}>
-                      {text}
-                    </p>
-                  )}
+                  paragraphMeta={paras.map((_, idx) => idx === 0 ? { type: "summary" } : { type: "section", sec: { key: "best_session", label: "Why This Session Stands Out", color: "hsl(var(--primary))" } })}
                 />
               </div>
             );

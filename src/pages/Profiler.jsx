@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import TTSReader from "../components/TTSReader";
+import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1404,43 +1405,12 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
         }
 
         return (
-          <TTSReader
+          <AIOutputReader
             sessionId="profiler_near_climax"
             title="Near-Climax Event Analysis"
             paragraphs={paras}
-            renderParagraph={(text, idx, isActive, isBuffering) => {
-              const meta = paraMeta[idx];
-              if (!meta) return null;
-              if (meta.type === "summary") {
-                return (
-                  <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground" : "border-chart-3 text-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </p>
-                );
-              }
-              const { sec, first } = meta;
-              return (
-                <div>
-                  {first && (
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1.5 tracking-wider mt-3" style={{ color: sec.color }}>
-                      {sec.label}
-                    </p>
-                  )}
-                  <li
-                    className="text-sm pl-3 border-l-2 py-1 leading-relaxed list-none transition-all duration-200 rounded-r-md flex items-center gap-2"
-                    style={{
-                      borderColor: isActive ? sec.color : sec.color + "55",
-                      background: isActive ? sec.color + "18" : "transparent",
-                      color: "hsl(var(--foreground))",
-                    }}
-                  >
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: sec.color, borderTopColor: "transparent" }} />}
-                    {text}
-                  </li>
-                </div>
-              );
-            }}
+            summaryColor="hsl(var(--chart-3))"
+            paragraphMeta={paraMeta}
           />
         );
       })()}
@@ -1636,43 +1606,11 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
       <CompactError message={error} />
 
       {result && (
-        <TTSReader
+        <AIOutputReader
           sessionId="profiler_stim_methods"
           title="Stimulation Methods Analysis"
           paragraphs={paras}
-          renderParagraph={(text, idx, isActive, isBuffering) => {
-            const meta = paraMeta[idx];
-            if (!meta) return null;
-            if (meta.type === "overview") {
-              return (
-                <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/10 text-foreground" : "border-primary/50 text-foreground"}`}>
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                  {text}
-                </p>
-              );
-            }
-            const { sec, first } = meta;
-            return (
-              <div>
-                {first && (
-                  <p className="text-[10px] font-semibold uppercase tracking-wider mt-4 mb-1.5 pt-3 border-t border-border" style={{ color: sec.color }}>
-                    {sec.label}
-                  </p>
-                )}
-                <li
-                  className="text-sm pl-3 border-l-2 py-1 leading-relaxed list-none transition-all duration-200 rounded-r-md flex items-center gap-2"
-                  style={{
-                    borderColor: isActive ? sec.color : sec.color + "55",
-                    background: isActive ? sec.color + "18" : "transparent",
-                    color: "hsl(var(--foreground))",
-                  }}
-                >
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: sec.color, borderTopColor: "transparent" }} />}
-                  {text}
-                </li>
-              </div>
-            );
-          }}
+          paragraphMeta={paraMeta}
         />
       )}
     </SectionCard>

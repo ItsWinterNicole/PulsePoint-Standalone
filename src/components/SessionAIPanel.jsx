@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
@@ -780,34 +780,29 @@ Provide ${isTechnical
                 </span>
               )}
             </div>
-            <TTSReader
+            <AIOutputReader
               sessionId={session.id}
               title={analysisTitle}
               sessionDate={session.date}
               sourceGeneratedAt={result?._meta?.last_generated_at}
               paragraphs={paras}
-              renderParagraph={(text, paraIdx, isActive, isBuffering) => {
-              // Find which section this paragraph belongs to
-              let section = sections[0];
-              for (const sec of sections) {
-                if (paraIdx >= sec.start) section = sec;
-              }
-              const isSummary = section.label === null;
-              if (isSummary) {
-                return (
-                  <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground" : isBuffering ? "border-primary/60 bg-primary/5 text-foreground" : "border-primary/50 text-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </p>
-                );
-              }
-              return (
-                <li className={`text-base leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 rounded-r-md list-none flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground font-medium" : isBuffering ? "border-primary/60 bg-primary/5 text-foreground" : "border-primary/30 text-foreground"}`}>
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                  {text}
-                </li>
-              );
-              }}
+              paragraphMeta={paras.map((_, paraIdx) => {
+                let section = sections[0];
+                for (const sec of sections) {
+                  if (paraIdx >= sec.start) section = sec;
+                }
+                return section.label === null
+                  ? { type: "summary", color: "hsl(var(--primary))" }
+                  : {
+                    type: "section",
+                    sec: {
+                      key: section.label,
+                      label: section.label,
+                      color: SECTION_COLORS[section.color] || "hsl(var(--primary))",
+                      icon: section.icon,
+                    },
+                  };
+              })}
             />
           </div>
         );

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Brain, Activity, Lightbulb, TrendingUp, Zap, Target, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
@@ -269,20 +269,6 @@ ${JSON.stringify({
       )}
 
       {result && (() => {
-        // Group section items by section key for visual headers + TTS
-        const sections = [];
-        let curSec = null;
-        paras.forEach((text, i) => {
-          const meta = paraMeta[i];
-          if (meta.type === "summary") return;
-          if (!curSec || curSec.key !== meta.sec.key) {
-            curSec = { key: meta.sec.key, sec: meta.sec, items: [{ text, i }] };
-            sections.push(curSec);
-          } else {
-            curSec.items.push({ text, i });
-          }
-        });
-
         return (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
@@ -293,48 +279,13 @@ ${JSON.stringify({
                 </span>
               )}
             </div>
-            <TTSReader
+            <AIOutputReader
               sessionId={session.id}
               title="AI Incomplete Session Analysis"
               sessionDate={session.date}
               sourceGeneratedAt={generatedAt}
               paragraphs={paras}
-              renderParagraph={(text, idx, isActive) => {
-              const meta = paraMeta[idx];
-              if (!meta) return null;
-
-              if (meta.type === "summary") {
-                return (
-                  <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md ${isActive ? "border-primary bg-primary/8 text-foreground" : "border-primary/50 text-foreground"}`}>
-                    {text}
-                  </p>
-                );
-              }
-
-              const { sec } = meta;
-              // Check if this is the first item in its section → render section header above
-              const isFirstInSection = sections.find(s => s.key === sec.key)?.items[0]?.i === idx;
-
-              return (
-                <div key={idx}>
-                  {isFirstInSection && (
-                    <p className="text-xs font-semibold flex items-center gap-1.5 mt-3 mb-1.5 pt-2 border-t border-border" style={{ color: sec.color }}>
-                      {sec.icon}{sec.label}
-                    </p>
-                  )}
-                  <li
-                    className="text-sm pl-3 border-l-2 py-1 leading-relaxed list-none transition-all duration-200 rounded-r-md"
-                    style={{
-                      borderColor: isActive ? sec.color : sec.color + "55",
-                      background: isActive ? sec.color + "18" : "transparent",
-                      color: "hsl(var(--foreground))",
-                    }}
-                  >
-                    {text}
-                  </li>
-                </div>
-              );
-              }}
+              paragraphMeta={paraMeta}
             />
           </div>
         );

@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, Zap, Heart, Clock, ChevronDown, ChevronUp, TrendingUp, AlertCircle, Activity } from "lucide-react";
+import { Brain, Zap, Heart, TrendingUp, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import TTSReader from "@/components/TTSReader";
+import AIOutputReader from "@/components/AIOutputReader";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const PRESET_METHODS = [
@@ -386,16 +386,11 @@ IMPORTANT: For climax_probability, predicted_hr_min, predicted_hr_max, predicted
 
             {/* TTS for narrative */}
             {result.narrative && (
-              <TTSReader
+              <AIOutputReader
                 sessionId={`modeler_${selectedMethods.join("_")}_${duration}`}
                 title="Simulation Forecast"
                 paragraphs={[result.narrative]}
-                renderParagraph={(text, idx, isActive, isBuffering) => (
-                  <p className={`text-sm leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground" : isBuffering ? "border-primary/60 bg-primary/5 text-muted-foreground" : "border-primary/30 text-muted-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </p>
-                )}
+                paragraphMeta={[{ type: "summary" }]}
               />
             )}
 
@@ -438,16 +433,11 @@ IMPORTANT: For climax_probability, predicted_hr_min, predicted_hr_max, predicted
               <p className="text-[10px] font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
                 <TrendingUp className="w-3.5 h-3.5" /> Key Predictive Factors
               </p>
-              <TTSReader
+              <AIOutputReader
                 sessionId={`modeler_factors_${selectedMethods.join("_")}`}
                 title="Key Predictive Factors"
                 paragraphs={result.key_factors}
-                renderParagraph={(text, idx, isActive, isBuffering) => (
-                  <li className={`text-sm pl-3 border-l-2 py-1 list-none transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground font-medium" : isBuffering ? "border-primary/60 bg-primary/5 text-foreground" : "border-primary/40 text-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </li>
-                )}
+                paragraphMeta={result.key_factors.map(() => ({ type: "section", sec: { key: "key_factors", label: "Key Predictive Factors", color: "hsl(var(--primary))", icon: <TrendingUp className="w-3.5 h-3.5" /> } }))}
               />
             </div>
           )}
@@ -458,16 +448,11 @@ IMPORTANT: For climax_probability, predicted_hr_min, predicted_hr_max, predicted
               <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5" /> Risk Flags
               </p>
-              <TTSReader
+              <AIOutputReader
                 sessionId={`modeler_risks_${selectedMethods.join("_")}`}
                 title="Risk Flags"
                 paragraphs={result.risk_flags}
-                renderParagraph={(text, idx, isActive, isBuffering) => (
-                  <li className={`text-sm pl-3 border-l-2 py-1 list-none transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-destructive bg-destructive/8 text-foreground font-medium" : isBuffering ? "border-destructive/60 bg-destructive/5 text-foreground" : "border-destructive/40 text-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </li>
-                )}
+                paragraphMeta={result.risk_flags.map(() => ({ type: "section", sec: { key: "risk_flags", label: "Risk Flags", color: "hsl(var(--destructive))", icon: <AlertCircle className="w-3.5 h-3.5" /> } }))}
               />
             </div>
           )}
@@ -478,16 +463,11 @@ IMPORTANT: For climax_probability, predicted_hr_min, predicted_hr_max, predicted
               <p className="text-[10px] font-semibold uppercase tracking-wider text-accent flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5" /> Optimization Tips
               </p>
-              <TTSReader
+              <AIOutputReader
                 sessionId={`modeler_tips_${selectedMethods.join("_")}`}
                 title="Optimization Tips"
                 paragraphs={result.optimization_tips}
-                renderParagraph={(text, idx, isActive, isBuffering) => (
-                  <li className={`text-sm pl-3 border-l-2 py-1 list-none transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-accent bg-accent/8 text-foreground font-medium" : isBuffering ? "border-accent/60 bg-accent/5 text-foreground" : "border-accent/40 text-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </li>
-                )}
+                paragraphMeta={result.optimization_tips.map(() => ({ type: "section", sec: { key: "optimization_tips", label: "Optimization Tips", color: "hsl(var(--accent))", icon: <Zap className="w-3.5 h-3.5" /> } }))}
               />
             </div>
           )}

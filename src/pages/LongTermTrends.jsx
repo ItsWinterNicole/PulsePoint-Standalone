@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, TrendingUp, Activity, Lightbulb, Zap, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import { Brain, TrendingUp, Activity, Lightbulb, Zap, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import TTSReader from "../components/TTSReader";
+import AIOutputReader from "../components/AIOutputReader";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip,
   CartesianGrid, Legend,
@@ -277,8 +277,8 @@ Write as one reader reviewing their own longitudinal self-monitoring. Every numb
     setLoading(false);
   };
 
-  const { paras, paraMeta, sectionFirstIdx } = useMemo(() => {
-    if (!result) return { paras: [], paraMeta: [], sectionFirstIdx: {} };
+  const { paras, paraMeta } = useMemo(() => {
+    if (!result) return { paras: [], paraMeta: [] };
     const paras = [];
     const paraMeta = [];
     if (result.summary) { paras.push(result.summary); paraMeta.push({ type: "summary" }); }
@@ -288,11 +288,7 @@ Write as one reader reviewing their own longitudinal self-monitoring. Every numb
         paraMeta.push({ type: "section", sec });
       }
     }
-    const sectionFirstIdx = {};
-    paraMeta.forEach((m, i) => {
-      if (m.type === "section" && sectionFirstIdx[m.sec.key] == null) sectionFirstIdx[m.sec.key] = i;
-    });
-    return { paras, paraMeta, sectionFirstIdx };
+    return { paras, paraMeta };
   }, [result]);
 
   return (
@@ -318,48 +314,12 @@ Write as one reader reviewing their own longitudinal self-monitoring. Every numb
       )}
 
       {!collapsed && result && (
-        <TTSReader
+        <AIOutputReader
           sessionId="trends_analysis"
           title="Long-Term Trends"
           sessionDate={new Date().toISOString()}
           paragraphs={paras}
-          renderParagraph={(text, idx, isActive, isBuffering) => {
-            const meta = paraMeta[idx];
-            if (!meta) return null;
-
-            if (meta.type === "summary") {
-              return (
-                <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground" : isBuffering ? "border-primary/60 bg-primary/5 text-foreground" : "border-primary/50 text-foreground"}`}>
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                  {text}
-                </p>
-              );
-            }
-
-            const { sec } = meta;
-            const isFirst = sectionFirstIdx[sec.key] === idx;
-
-            return (
-              <div>
-                {isFirst && (
-                  <p className="text-xs font-semibold flex items-center gap-1.5 mt-4 mb-1.5 pt-2 border-t border-border" style={{ color: sec.color }}>
-                    {sec.icon}{sec.label}
-                  </p>
-                )}
-                <li
-                  className="text-base leading-relaxed pl-3 border-l-2 py-1.5 list-none transition-all duration-200 rounded-r-md flex items-start gap-2"
-                  style={{
-                    borderColor: isActive ? sec.color : isBuffering ? sec.color + "99" : sec.color + "44",
-                    background: isActive ? sec.color + "18" : isBuffering ? sec.color + "0a" : "transparent",
-                    color: "hsl(var(--foreground))",
-                  }}
-                >
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin mt-1" />}
-                  {text}
-                </li>
-              </div>
-            );
-          }}
+          paragraphMeta={paraMeta}
         />
       )}
     </div>

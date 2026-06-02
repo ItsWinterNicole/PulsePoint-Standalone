@@ -2,7 +2,7 @@ import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { ChevronDown, ChevronUp, Activity, Clock, TrendingUp, Zap, Lightbulb } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
@@ -274,12 +274,6 @@ ${JSON.stringify({
 
   const { paras, paraMeta } = buildParas();
 
-  // Track first index for each section (for rendering section headers)
-  const sectionFirstIdx = {};
-  paraMeta.forEach((m, i) => {
-    if (m.type === "section" && sectionFirstIdx[m.sec.key] == null) sectionFirstIdx[m.sec.key] = i;
-  });
-
   return (
     <div className="bg-card rounded-xl border border-border p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -312,49 +306,13 @@ ${JSON.stringify({
               </span>
             )}
           </div>
-          <TTSReader
+          <AIOutputReader
             sessionId={session.id + "_timeline"}
             title="Timeline & Arousal Narrative"
             sessionDate={session.date}
             sourceGeneratedAt={generatedAt}
             paragraphs={paras}
-            renderParagraph={(text, idx, isActive, isBuffering) => {
-            const meta = paraMeta[idx];
-            if (!meta) return null;
-
-            if (meta.type === "summary") {
-              return (
-                <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground" : isBuffering ? "border-primary/60 bg-primary/5 text-foreground" : "border-primary/50 text-foreground"}`}>
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                  {text}
-                </p>
-              );
-            }
-
-            const { sec } = meta;
-            const isFirst = sectionFirstIdx[sec.key] === idx;
-
-            return (
-              <div>
-                {isFirst && (
-                  <p className="text-xs font-semibold flex items-center gap-1.5 mt-4 mb-1.5 pt-2 border-t border-border" style={{ color: sec.color }}>
-                    {sec.icon}{sec.label}
-                  </p>
-                )}
-                <li
-                  className="text-base leading-relaxed pl-3 border-l-2 py-1.5 list-none transition-all duration-200 rounded-r-md flex items-start gap-2"
-                  style={{
-                    borderColor: isActive ? sec.color : isBuffering ? sec.color + "99" : sec.color + "44",
-                    background: isActive ? sec.color + "18" : isBuffering ? sec.color + "0a" : "transparent",
-                    color: "hsl(var(--foreground))",
-                  }}
-                >
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin mt-1" />}
-                  {text}
-                </li>
-              </div>
-            );
-            }}
+            paragraphMeta={paraMeta}
           />
         </div>
       )}

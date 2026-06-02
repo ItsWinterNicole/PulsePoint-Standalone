@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { TrendingUp, Brain } from "lucide-react";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import moment from "moment";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
@@ -236,28 +236,15 @@ Provide structured findings per phase, cross-session notable findings, and a sta
             <div className="text-[10px] text-muted-foreground">
               {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
             </div>
-            <TTSReader
+            <AIOutputReader
               sessionId={`cascade-compare-${sessionKey}`}
               title="Comparative Cascade Analysis"
               sessionDate={sessions[0]?.date}
               sourceGeneratedAt={generatedAt}
               paragraphs={paras.map(p => p.text)}
-              renderParagraph={(text, idx, isActive, isBuffering) => {
-              const meta = paras[idx];
-              return (
-                <p
-                  className={`text-sm pl-3 border-l-2 py-1 leading-relaxed transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "font-medium" : ""}`}
-                  style={{
-                    borderColor: isActive ? (meta.color || "hsl(var(--primary))") : (meta.color ? meta.color + "66" : "hsl(var(--primary) / 0.4)"),
-                    background: isActive ? (meta.color ? meta.color + "18" : "hsl(var(--primary) / 0.08)") : "transparent",
-                    color: isActive ? "#fff" : meta.color ? "#ffffff" : "hsl(var(--foreground))",
-                  }}
-                >
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                  {text}
-                </p>
-              );
-              }}
+              paragraphMeta={paras.map((meta, idx) => idx === 0
+                ? { type: "summary" }
+                : { type: "section", sec: { key: `cascade_compare_${idx}`, label: "Cascade Comparison", color: meta.color || "hsl(var(--primary))" } })}
             />
           </div>
         );

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
@@ -513,47 +513,24 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
         if (result.cascade_quality) paras.push({ text: result.cascade_quality, type: "quality", color: null });
 
         return (
-          <TTSReader
+          <AIOutputReader
             sessionId={session.id}
             title="Cascade Overview"
             sessionDate={session.date}
             paragraphs={paras.map((p) => p.text)}
-            renderParagraph={(text, idx, isActive, isBuffering) => {
-              const meta = paras[idx];
-              if (meta.type === "summary") {
-                return (
-                  <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-primary bg-primary/8 text-foreground" : isBuffering ? "border-primary/60 bg-primary/5 text-foreground" : "border-primary/50 text-foreground"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
-                    {text}
-                  </p>);
-
-              }
-              if (meta.type === "quality") {
-                return (
-                  <div className={`rounded-lg px-3 py-2.5 transition-all duration-200 ${isActive ? "bg-primary/20" : isBuffering ? "bg-primary/10" : "bg-primary/10"}`}>
-                    {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin mb-1 block" />}
-                    <p className="text-xs font-semibold text-primary mb-1">Cascade Quality Assessment</p>
-                    <p className="text-foreground leading-relaxed text-base">{text}</p>
-                  </div>);
-
-              }
-              // phase item (prose paragraph)
-              return (
-                <div
-                  className="pl-3 border-l-2 py-2 leading-relaxed transition-all duration-200 rounded-r-md"
-                  style={{
-                    borderColor: isActive ? meta.color : isBuffering ? meta.color + "99" : meta.color + "66",
-                    background: isActive ? meta.color + "18" : isBuffering ? meta.color + "0f" : "transparent"
-                  }}>
-                  
-                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-1 flex items-center gap-1" style={{ color: meta.color }}>
-                    {isBuffering && <span className="shrink-0 w-2.5 h-2.5 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: meta.color, borderTopColor: "transparent" }} />}
-                    {meta.title}
-                  </p>
-                  <p className="text-base" style={{ color: isActive ? "#fff" : "hsl(var(--foreground))" }}>{text}</p>
-                </div>);
-
-            }} />);
+            paragraphMeta={paras.map((meta) => (
+              meta.type === "summary"
+                ? { type: "summary" }
+                : {
+                  type: meta.type === "quality" ? "section" : "phase",
+                  sec: {
+                    key: meta.type === "quality" ? "cascade_quality" : meta.title,
+                    label: meta.type === "quality" ? "Cascade Quality Assessment" : meta.title,
+                    color: meta.color || "hsl(var(--primary))",
+                  },
+                }
+            ))}
+          />);
 
 
       })()}

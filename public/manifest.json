@@ -52,7 +52,7 @@
   },
   "launch_handler": {
     "client_mode": [
-      "navigate-existing",
+      "focus-existing",
       "auto"
     ]
   },

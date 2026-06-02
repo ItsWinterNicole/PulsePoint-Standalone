@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 
@@ -191,26 +191,13 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
         </div>
       )}
       {result && (
-        <TTSReader
+        <AIOutputReader
           sessionId={`body-exploration-${exploration.id}`}
           title="AI Body Exploration Analysis"
           sessionDate={exploration.date}
           sourceGeneratedAt={generatedAt}
           paragraphs={paragraphs}
-          renderParagraph={(text, index, isActive) => {
-            const meta = paragraphMeta[index];
-            if (meta?.type === "summary") {
-              return <p className={`rounded-r-md border-l-2 border-primary py-1 pl-3 text-base font-medium leading-relaxed ${isActive ? "bg-primary/10" : ""}`}>{text}</p>;
-            }
-            const section = meta?.section;
-            const isFirst = paragraphMeta.findIndex((item) => item.section?.key === section?.key) === index;
-            return (
-              <div>
-                {isFirst && <p className="mb-1.5 mt-3 flex items-center gap-1.5 border-t border-border pt-2 text-xs font-semibold" style={{ color: section.color }}>{section.icon}{section.label}</p>}
-                <p className={`rounded-r-md border-l-2 py-1 pl-3 text-sm leading-relaxed ${isActive ? "bg-muted/50" : ""}`} style={{ borderColor: section.color }}>{text}</p>
-              </div>
-            );
-          }}
+          paragraphMeta={paragraphMeta}
         />
       )}
     </div>

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Zap, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import TTSReader from "./TTSReader";
+import AIOutputReader from "./AIOutputReader";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
@@ -177,48 +177,14 @@ Analyze these events in the context of this specific session. Cover:
               </span>
             )}
           </div>
-          <TTSReader
+          <AIOutputReader
             sessionId={session.id + "_nc_overview"}
             title="Near-Climax Overview"
             sessionDate={session.date}
             sourceGeneratedAt={generatedAt}
             paragraphs={paras}
-            renderParagraph={(text, idx, isActive, isBuffering) => {
-            const meta = paraMeta[idx];
-            if (!meta) return null;
-
-            if (meta.type === "summary") {
-              return (
-                <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${isActive ? "border-chart-3 bg-chart-3/10 text-foreground" : "border-chart-3/50 text-foreground"}`}
-                  style={{ borderColor: isActive ? "hsl(var(--chart-3))" : "hsl(var(--chart-3) / 0.5)" }}>
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: "hsl(var(--chart-3))", borderTopColor: "transparent" }} />}
-                  {text}
-                </p>
-              );
-            }
-
-            const { sec, first } = meta;
-            return (
-              <div>
-                {first && (
-                  <p className="text-[10px] font-semibold uppercase tracking-wider mt-3 mb-1.5" style={{ color: sec.color }}>
-                    {sec.label}
-                  </p>
-                )}
-                <li
-                  className="text-sm pl-3 border-l-2 py-1.5 leading-relaxed list-none transition-all duration-200 rounded-r-md flex items-start gap-2"
-                  style={{
-                    borderColor: isActive ? sec.color : sec.color + "55",
-                    background: isActive ? sec.color + "18" : "transparent",
-                    color: "hsl(var(--foreground))",
-                  }}
-                >
-                  {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-t-transparent rounded-full animate-spin mt-0.5" style={{ borderColor: sec.color, borderTopColor: "transparent" }} />}
-                  {text}
-                </li>
-              </div>
-            );
-            }}
+            summaryColor="hsl(var(--chart-3))"
+            paragraphMeta={paraMeta}
           />
         </div>
       )}
