@@ -1705,29 +1705,6 @@ export default function Profiler() {
     };
   }, [loadAttempt]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const refreshEvidenceAfterReturn = async () => {
-      if (document.visibilityState === "hidden") return;
-      try {
-        const all = await base44.entities.Session.list("-date", 300);
-        if (!cancelled) setSessions(all);
-      } catch {
-        // Preserve currently visible evidence if an opportunistic refresh is unavailable.
-      }
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshEvidenceAfterReturn();
-    };
-    window.addEventListener("focus", refreshEvidenceAfterReturn);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", refreshEvidenceAfterReturn);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, []);
-
   const refreshEvidence = async () => {
     setRefreshingEvidence(true);
     setLoadError("");

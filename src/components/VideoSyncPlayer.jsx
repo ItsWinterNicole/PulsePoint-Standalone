@@ -388,7 +388,7 @@ Annotation:
   }
 }
 
-export default function VideoSyncPlayer({ session, timelineRows, recordType = "session" }) {
+export default function VideoSyncPlayer({ session, timelineRows, recordType = "session", externalSeekTime = null }) {
   const isExploration = recordType === "body_exploration";
   const recordLabel = isExploration ? "exploration" : "session";
   const categoryOptions = isExploration ? EXPLORATION_EVENT_CATEGORIES : EVENT_CATEGORIES;
@@ -707,6 +707,17 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
       }
     });
   }, [activeFeedKey, loadedFeeds]);
+
+  useEffect(() => {
+    const requestedTime = typeof externalSeekTime === "object" && externalSeekTime !== null
+      ? externalSeekTime.time
+      : externalSeekTime;
+    if (!Number.isFinite(Number(requestedTime))) return;
+    const sessionTime = Math.max(0, Number(requestedTime));
+    const localTime = Math.max(0, sessionTime - Number(videoOffset || 0));
+    setPlayheadS(sessionTime);
+    setSynchronizedVideoTime(localTime);
+  }, [externalSeekTime, setSynchronizedVideoTime, videoOffset]);
 
   const syncSecondaryVideos = useCallback((primaryTime, playing = false) => {
     loadedFeeds.forEach((feed) => {

@@ -16,6 +16,7 @@ import {
 import { fmtSecondsInText } from "@/utils/formatSeconds";
 import { buildAudioExportFilename } from "@/utils/exportFilenames";
 import { base44 } from "@/api/base44Client";
+import { buildAudioChapterBundle, downloadChapterSidecars } from "@/lib/audioChapters";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
@@ -936,6 +937,58 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     extension: getTTSFileExtension(format),
   });
 
+  const buildCurrentChapterBundle = (audioFilename = getAudioDownloadFilename(), durationSeconds = 0) =>
+    buildAudioChapterBundle({
+      title: getDownloadDisplayTitle(),
+      audioFilename,
+      paragraphs: readableParagraphs,
+      durationSeconds,
+      source: title && /profile|q&a|qa|interview/i.test(title) ? "profile_qa" : "analysis_section",
+    });
+
+  const getSavedChapterLinks = (exportRecord = savedServerExport) => ([
+    exportRecord?.chapter_json_url,
+    exportRecord?.chapter_cue_url,
+    exportRecord?.chapter_txt_url,
+  ].filter(Boolean));
+
+  const triggerRemoteChapterDownloads = (exportRecord = savedServerExport) => {
+    const links = [
+      { url: exportRecord?.chapter_json_url, suffix: ".chapters.json" },
+      { url: exportRecord?.chapter_cue_url, suffix: ".cue" },
+      { url: exportRecord?.chapter_txt_url, suffix: ".chapters.txt" },
+    ].filter((entry) => entry.url);
+    links.forEach((entry, index) => {
+      window.setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = entry.url;
+        a.download = `${String(exportRecord?.filename || getAudioDownloadFilename()).replace(/\.[^.]+$/, "")}${entry.suffix}`;
+        a.click();
+      }, index * 120);
+    });
+  };
+
+  const downloadChapters = () => {
+    const exportRecord = savedServerExport?.file_url ? savedServerExport : null;
+    const remoteLinks = getSavedChapterLinks(exportRecord);
+    if (remoteLinks.length) {
+      triggerRemoteChapterDownloads(exportRecord);
+      setRequestStatus({ type: "ok", msg: `Downloaded ${remoteLinks.length} saved chapter file${remoteLinks.length === 1 ? "" : "s"}` });
+      return;
+    }
+
+    const audioFilename =
+      exportRecord?.filename ||
+      completedRender?.filename ||
+      lastDownloadRecord?.filename ||
+      getAudioDownloadFilename(completedRender?.format || exportRecord?.format || runtimeRef.current.format);
+    const durationSeconds =
+      Number(exportRecord?.duration_seconds || completedRender?.duration_seconds || 0);
+    const bundle = buildCurrentChapterBundle(audioFilename, durationSeconds);
+    downloadChapterSidecars(bundle, audioFilename);
+    setRequestStatus({ type: "ok", msg: `Downloaded ${bundle.chapters.length} estimated chapter bookmarks` });
+  };
+
   const clearSavedExportJob = () => {
     try {
       localStorage.removeItem(ttsExportStorageKey(sessionId, title));
@@ -976,8 +1029,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       title: exportRecord.title || getDownloadDisplayTitle(),
       filename: a.download,
       format: exportRecord.format || runtimeRef.current.format,
+      has_chapters: Boolean(exportRecord.has_chapters || exportRecord.sidecar_chapters_available),
+      chapter_count: Number(exportRecord.chapter_count || 0),
     });
-    setRequestStatus({ type: "ok", msg: "Downloaded existing narration export without re-rendering audio" });
+    setRequestStatus({
+      type: "ok",
+      msg: exportRecord.sidecar_chapters_available
+        ? "Downloaded existing narration export; chapter files are available"
+        : "Downloaded existing narration export without re-rendering audio",
+    });
   };
 
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
@@ -1003,6 +1063,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       session_date: sessionDate || null,
       source_generated_at: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
       exported_at: new Date().toISOString(),
+      has_chapters: Boolean(rendered.has_chapters),
+      chapter_format: rendered.chapter_format || "sidecar",
+      chapter_count: Number(rendered.chapter_count || 0),
+      chapter_source: rendered.chapter_source || "tts_export",
+      chapter_generated_at: rendered.chapter_generated_at || null,
+      chapters_embedded: Boolean(rendered.chapters_embedded),
+      sidecar_chapters_available: Boolean(rendered.sidecar_chapters_available),
+      chapter_json_url: rendered.chapter_json_url || null,
+      chapter_cue_url: rendered.chapter_cue_url || null,
+      chapter_txt_url: rendered.chapter_txt_url || null,
+      audio_content_version: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
     });
 
     saveDownloadRecord({
@@ -1011,11 +1082,18 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       title: displayTitle,
       filename,
       format: rendered.format || exportFormat,
+      has_chapters: Boolean(rendered.has_chapters),
+      chapter_count: Number(rendered.chapter_count || 0),
     });
     setSavedServerExport(createdExport);
     clearSavedExportJob();
     setCompletedRender(null);
-    setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded` });
+    setRequestStatus({
+      type: "ok",
+      msg: rendered.sidecar_chapters_available
+        ? `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded with chapter files ready`
+        : `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded`,
+    });
   };
 
   const resumeExportJob = async (jobId, saved = {}) => {
@@ -1206,12 +1284,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       const displayTitle = getDownloadDisplayTitle();
       const exportFormat = runtimeRef.current.format;
       const runtime = runtimeRef.current;
+      const plannedFilename = getAudioDownloadFilename(exportFormat);
+      const chapterBundle = buildCurrentChapterBundle(plannedFilename);
       const renderPayload = {
         title: displayTitle,
         chunks: allChunks.map((chunk) => ({
           text: prepareTTSInput(getChunkText(chunk)),
           previousContext: getChunkContext(chunk),
         })),
+        chapters: chapterBundle.chapters,
         voice: voiceRef.current,
         model: runtime.model,
         speed: runtime.speed,
@@ -1371,6 +1452,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           )}
         </button>
 
+        <button
+          type="button"
+          onClick={downloadChapters}
+          disabled={downloading || !readableParagraphs.length}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 active:opacity-70 transition-colors text-xs font-medium select-none"
+          style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
+          title="Download chapter bookmark files"
+        >
+          <Download className="w-3.5 h-3.5" /> Chapters
+        </button>
+
         <Link
           to="/settings"
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground active:opacity-70 transition-colors text-xs font-medium select-none"
@@ -1409,6 +1501,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             : sourceGeneratedAt && lastDownloadRecord.source_generated_at === sourceGeneratedAt
               ? " Matches this AI output."
               : ""}
+          {lastDownloadRecord.has_chapters
+            ? ` ${lastDownloadRecord.chapter_count || "Estimated"} chapters available.`
+            : ""}
         </div>
       )}
 
@@ -1416,6 +1511,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         <div className="text-[10px] px-2 py-1 rounded-md mb-1 bg-primary/10 text-primary">
           Narration already exported {formatDownloadTimestamp(savedServerExport.exported_at || savedServerExport.created_date) || "previously"}.
           {" "}Download reuses the saved audio file without rendering again.
+          {savedServerExport.sidecar_chapters_available
+            ? ` Chapter sidecars available (${savedServerExport.chapter_count || 0}).`
+            : " Chapter sidecars can be generated without re-rendering."}
         </div>
       )}
 

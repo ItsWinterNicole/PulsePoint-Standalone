@@ -13,6 +13,7 @@ import {
   supportsTTSInstructions,
   ttsExportMime,
 } from './ttsCore.js';
+import { writeChapterSidecars } from './audioChapters.js';
 
 export async function renderTTSExport(payload = {}, options = {}) {
   let workDir = null;
@@ -35,6 +36,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
       instructions = '',
       outputFormat: requestedOutputFormat = 'mp3',
       normalize = false,
+      chapters = [],
     } = payload || {};
 
     const model = normalizeTTSModel(requestedModel);
@@ -163,6 +165,20 @@ export async function renderTTSExport(payload = {}, options = {}) {
       durationSeconds = Math.round(Number(probe.stdout.trim()) || 0);
     } catch {}
 
+    let chapterMeta = null;
+    try {
+      chapterMeta = await writeChapterSidecars({
+        uploadDir,
+        outputBase,
+        audioFilename: finalFilename,
+        title,
+        chapters,
+        durationSeconds,
+      });
+    } catch (error) {
+      console.warn('[renderTTSExport] chapter sidecars failed', error);
+    }
+
     const result = {
       ok: true,
       jobId,
@@ -177,6 +193,13 @@ export async function renderTTSExport(payload = {}, options = {}) {
       speed: finalSpeed,
       chunks: normalizedChunks.length,
       normalized: Boolean(normalize),
+      ...(chapterMeta || {
+        has_chapters: false,
+        chapter_format: 'unavailable',
+        chapter_count: 0,
+        chapters_embedded: false,
+        sidecar_chapters_available: false,
+      }),
     };
 
     onProgress({

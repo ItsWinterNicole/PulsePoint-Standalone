@@ -52,6 +52,26 @@ export default function Library() {
     a.click();
   };
 
+  const handleDownloadChapters = (export_) => {
+    const baseFilename = buildAudioExportFilename({
+      title: export_.analysis_title || export_.title,
+      sessionDate: export_.session_date || export_.exported_at || export_.created_date,
+      extension: export_.format || "mp3",
+    }).replace(/\.[^.]+$/, "");
+    [
+      { url: export_.chapter_json_url, suffix: ".chapters.json" },
+      { url: export_.chapter_cue_url, suffix: ".cue" },
+      { url: export_.chapter_txt_url, suffix: ".chapters.txt" },
+    ].filter((entry) => entry.url).forEach((entry, index) => {
+      window.setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = entry.url;
+        a.download = `${baseFilename}${entry.suffix}`;
+        a.click();
+      }, index * 120);
+    });
+  };
+
   const handleDelete = (id) => {
     if (confirm("Delete this audio export?")) {
       deleteExport.mutate(id);
@@ -102,6 +122,9 @@ export default function Library() {
                   )}
                   {export_.voice && <span>Voice: {export_.voice}</span>}
                   {export_.speed && <span>Speed: {export_.speed}x</span>}
+                  {export_.sidecar_chapters_available && (
+                    <span>{export_.chapter_count || 0} chapters</span>
+                  )}
                 </div>
               </div>
 
@@ -123,9 +146,22 @@ export default function Library() {
                   variant="ghost"
                   onClick={() => handleDownload(export_)}
                   className="text-muted-foreground hover:text-foreground"
+                  title="Download audio"
                 >
                   <Download className="w-4 h-4" />
                 </Button>
+                {export_.sidecar_chapters_available && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleDownloadChapters(export_)}
+                    className="text-muted-foreground hover:text-foreground"
+                    title="Download chapter files"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span className="sr-only">Download chapter files</span>
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"

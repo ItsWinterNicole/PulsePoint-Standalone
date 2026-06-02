@@ -244,6 +244,7 @@ export default function SessionDetail() {
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
+  const [mediaSeekTime, setMediaSeekTime] = useState(null);
   const handleAnalysisSaved = useCallback((field, value) => {
     setSession((current) => (current ? { ...current, [field]: value } : current));
   }, []);
@@ -433,31 +434,6 @@ export default function SessionDetail() {
 
       setLoading(false);
     })();
-  }, [id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const refreshSessionAfterReturn = async () => {
-      if (document.visibilityState === "hidden") return;
-      try {
-        const rows = await base44.entities.Session.filter({ id });
-        if (!cancelled && rows[0]) {
-          setSession((current) => (current ? { ...current, ...rows[0] } : rows[0]));
-        }
-      } catch {
-        // Keep the currently displayed session if a background refresh is unavailable.
-      }
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshSessionAfterReturn();
-    };
-    window.addEventListener("focus", refreshSessionAfterReturn);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", refreshSessionAfterReturn);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
   }, [id]);
 
   useEffect(() => {
@@ -1026,6 +1002,7 @@ export default function SessionDetail() {
                     session={s}
                     timelineRows={timelineRows}
                     recordType="session"
+                    externalSeekTime={mediaSeekTime}
                   />
                 </div>
               </details>
@@ -1036,6 +1013,10 @@ export default function SessionDetail() {
                 timelineRows={timelineRows}
                 linkedLocalVideos={linkedLocalVideos}
                 onSessionUpdate={setSession}
+                onCursorChange={(seconds) => {
+                  setInspectionTime(seconds);
+                  setMediaSeekTime({ time: seconds, nonce: Date.now() });
+                }}
               />
             )}
             {s.media_images?.length > 0 && (

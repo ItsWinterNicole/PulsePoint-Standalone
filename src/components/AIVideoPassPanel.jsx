@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Play, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
+import { sessionContextEvidenceText } from "@/lib/sessionContext";
 import { buildSessionVideoPassDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
 
 function fmtMmSs(totalSeconds) {
@@ -27,6 +28,58 @@ function estimateSessionEnd(session, timelineRows = []) {
     ...(session?.event_timeline || []).map((event) => event.time_s),
   ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
   return candidates.length ? Math.max(...candidates) : 600;
+}
+
+function compactText(value, max = 1400) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text;
+}
+
+function listText(values) {
+  if (Array.isArray(values)) return values.filter(Boolean).join(", ");
+  return String(values || "").trim();
+}
+
+function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
+  const methods = listText(session?.methods);
+  const tags = listText(session?.tags);
+  const linkedLabel = selectedVideo?.label || selectedVideo?.filename || selectedVideo?.path || "";
+  const anchors = [
+    session?.pre_climax_offset_s != null ? `pre-climax marker ${fmtMmSs(session.pre_climax_offset_s)}` : null,
+    session?.climax_offset_s != null ? `climax marker ${fmtMmSs(session.climax_offset_s)}` : null,
+    session?.recovery_offset_s != null ? `recovery marker ${fmtMmSs(session.recovery_offset_s)}` : null,
+  ].filter(Boolean).join("; ");
+  const deviceLines = [
+    methods ? `Methods: ${methods}` : null,
+    session?.sleeve_type ? `Sleeve: ${session.sleeve_type}` : null,
+    session?.foley_type ? `Foley: ${session.foley_type}` : null,
+    session?.tens_placement ? `TENS placement: ${session.tens_placement}` : null,
+    session?.estim_notes ? `E-stim notes: ${compactText(session.estim_notes, 500)}` : null,
+    session?.refractory_notes ? `Refractory notes: ${compactText(session.refractory_notes, 500)}` : null,
+    tags ? `Tags: ${tags}` : null,
+  ].filter(Boolean);
+  const contextText = sessionContextEvidenceText(session);
+  const timelineEvents = (session?.event_timeline || [])
+    .filter((event) => String(event?.note || "").trim())
+    .slice()
+    .sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0))
+    .slice(0, 80)
+    .map((event) => `[${fmtMmSs(event.time_s)}] ${compactText(event.note, 180)}`)
+    .join(" | ");
+  const telemetrySpan = timelineRows.length
+    ? `Telemetry rows: ${timelineRows.length}; session span approximately ${fmtMmSs(estimateSessionEnd(session, timelineRows))}.`
+    : "";
+
+  return [
+    linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
+    anchors ? `Timing anchors: ${anchors}` : null,
+    telemetrySpan,
+    deviceLines.length ? `Known methods/devices/materials: ${deviceLines.join(" | ")}` : null,
+    contextText ? `Structured session context: ${contextText}` : null,
+    session?.notes ? `Full session notes: ${compactText(session.notes, 1800)}` : null,
+    timelineEvents ? `Manual/timestamped session notes: ${timelineEvents}` : null,
+  ].filter(Boolean).join("\n");
 }
 
 function candidateWindows(session, timelineRows, count = 6, clipSeconds = 24) {
@@ -105,6 +158,36 @@ function isStaticTrackingMarkerFinding(finding) {
   return !/(move|movement|shift|change|lost|loss|reacquir|occlud|hidden|blocked|asymmetr|toe curl|heel|plant|brace|bracing|foot position|feet position|marker placement changed|tracking quality)/.test(text);
 }
 
+function isTelemetryOnlyFinding(finding) {
+  const text = `${finding?.title || ""} ${finding?.text || finding?.findingText || ""} ${finding?.note || ""}`.toLowerCase();
+  if (!/(hr|heart rate|bpm|telemetry|overlay|phase label|trend chart|avg|max|sustained build|elevated|recovery label)/.test(text)) {
+    return false;
+  }
+  return !/(stimulation|contact|stroke|hand|shaft|glans|genital|penis|scrot|foreskin|meatus|erection|engorg|flaccid|ejaculate|pre-ejac|lubric|device|sleeve|foley|perine|pelvic|abdomen|chest|breath|respir|foot|feet|toe|heel|leg|tens|relax|tens)/.test(text);
+}
+
+function neutralizeIntentLanguage(text) {
+  return String(text || "")
+    .replace(/\b(second|third|another|repeated)\s+hand-lift\s+edging\s+maneuver\b/gi, "$1 hand-lift stimulation change")
+    .replace(/\bhand-lift\s+edging\s+maneuver\b/gi, "hand-lift stimulation change")
+    .replace(/\bedging\s+maneuver\b/gi, "stimulation pause/withdrawal")
+    .replace(/\bedging\s+pattern\b/gi, "pause/resume pattern")
+    .replace(/\bdeliberate\s+edging\b/gi, "observed stimulation modulation")
+    .replace(/\bintentional\s+edging\b/gi, "observed stimulation modulation")
+    .replace(/\bedging\b/gi, "near-threshold modulation");
+}
+
+function videoFocusInstruction(video = {}) {
+  const descriptor = `${video.label || ""} ${video.filename || ""} ${video.path || ""}`.toLowerCase();
+  if (/(foot|feet|lower|toe|heel)/.test(descriptor)) {
+    return "This appears to be a foot/lower-body angle. Prioritize foot behavior, toe/heel position, planting or lift, leg tensing/relaxing, tremor, shudder, left/right asymmetry, and lower-body transitions. Mention genital/stimulation state only if clearly visible.";
+  }
+  if (/(side|lateral|full|body|wide)/.test(descriptor)) {
+    return "This appears to be a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
+  }
+  return "This appears to be a main/composite session view. Prioritize stimulation mechanics, visible genital state, device/lubrication use, hand contact transitions, ejaculation/pre-ejaculate if visible, and only then supporting body movement.";
+}
+
 function normalizeAIResult(raw, fallbackWindow) {
   const value = typeof raw === "string" ? null : raw;
   const findings = Array.isArray(value?.findings) && value.findings.length
@@ -117,20 +200,20 @@ function normalizeAIResult(raw, fallbackWindow) {
     }];
   const events = Array.isArray(value?.events) ? value.events : [];
   return {
-    summary: value?.summary || findings[0]?.text || "Review complete.",
+    summary: neutralizeIntentLanguage(value?.summary || findings[0]?.text || "Review complete."),
     findings: findings.map((finding) => ({
-      title: finding.title || "Finding",
-      text: finding.text || finding.findingText || "",
+      title: neutralizeIntentLanguage(finding.title || "Finding"),
+      text: neutralizeIntentLanguage(finding.text || finding.findingText || ""),
       confidence: finding.confidence || "moderate",
       category: finding.category || "other",
-    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding)),
+    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding)),
     events: events.map((event) => ({
       time_s: Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
-      note: event.note || event.text || "",
+      note: neutralizeIntentLanguage(event.note || event.text || ""),
       category: Array.isArray(event.category) ? event.category : [event.category || "other"],
       annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
       confidence: event.confidence || "moderate",
-    })).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note })),
+    })).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note })),
   };
 }
 
@@ -264,11 +347,34 @@ function findSavedPriorContinuity(session, selectedVideo, window) {
   return compactSavedContinuity(entries[0]);
 }
 
+function sameClipRange(aStart, aEnd, bStart, bEnd) {
+  return Math.abs(Number(aStart) - Number(bStart)) < 0.75
+    && Math.abs(Number(aEnd) - Number(bEnd)) < 0.75;
+}
+
+function isCardAccepted(card, session, acceptedIds) {
+  if (acceptedIds.has(card.id)) return true;
+  const cardStart = Number(card.window?.start);
+  const cardEnd = Number(card.window?.end);
+  if (!Number.isFinite(cardStart) || !Number.isFinite(cardEnd)) return false;
+  const cardFingerprint = card.sourceVideo?.fingerprint || "";
+  const cardFilename = card.sourceVideo?.filename || card.sourceVideo?.label || "";
+  return normalizeSessionVideoPassFindings(session).some((entry) => {
+    if (!sameClipRange(cardStart, cardEnd, entry.clip?.start_s, entry.clip?.end_s)) return false;
+    const entryFingerprint = entry.source_video?.fingerprint || "";
+    const entryFilename = entry.source_video?.filename || entry.source_video?.label || "";
+    if (cardFingerprint && entryFingerprint) return cardFingerprint === entryFingerprint;
+    if (cardFilename && entryFilename) return cardFilename === entryFilename;
+    return true;
+  });
+}
+
 export default function AIVideoPassPanel({
   session,
   timelineRows = [],
   linkedLocalVideos = [],
   onSessionUpdate,
+  onCursorChange,
 }) {
   const availableVideos = useMemo(() => linkedLocalVideos.filter((video) => video?.path && video.exists !== false), [linkedLocalVideos]);
   const [selectedPath, setSelectedPath] = useState(availableVideos[0]?.path || "");
@@ -297,6 +403,14 @@ export default function AIVideoPassPanel({
     setStatus("");
   };
 
+  const setCursorFromTimeline = (seconds) => {
+    setScanMode("continue");
+    const nextCursor = clamp(Number(seconds) || 0, 0, Math.max(0, sessionEnd - clipSeconds));
+    setScanCursor(nextCursor);
+    onCursorChange?.(nextCursor);
+    setStatus(`Cursor set to ${fmtMmSs(seconds)}. Run Next Pass will continue from there.`);
+  };
+
   useEffect(() => {
     setScanCursor(0);
   }, [selectedVideo?.path]);
@@ -309,6 +423,7 @@ export default function AIVideoPassPanel({
     setAcceptedIds(new Set());
     try {
       const nextCards = [];
+      const sessionVideoContext = buildSessionVideoContext(session, selectedVideo, timelineRows);
       for (let i = 0; i < plannedWindows.length; i += 1) {
         const window = plannedWindows[i];
         const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
@@ -331,13 +446,14 @@ export default function AIVideoPassPanel({
           data: frame.data,
         }));
         const ai = await base44.integrations.Core.InvokeLLM({
-          max_tokens: 1800,
+          max_tokens: 2400,
           response_json_schema: {
             type: "object",
             properties: {
               summary: { type: "string" },
               findings: {
                 type: "array",
+                maxItems: 4,
                 items: {
                   type: "object",
                   properties: {
@@ -351,6 +467,7 @@ export default function AIVideoPassPanel({
               },
               events: {
                 type: "array",
+                maxItems: 3,
                 items: {
                   type: "object",
                   properties: {
@@ -375,16 +492,25 @@ export default function AIVideoPassPanel({
           images,
           prompt: `You are Sarah, reviewing sampled frames from a linked local session video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
+Session context grounding has priority when it identifies known setup, devices, materials, or technique. Use the session notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague "blue device near the scrotum and genitals." If context and visuals do not line up, state the uncertainty instead of forcing the label.
+
+Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
+
+Camera/view focus:
+${videoFocusInstruction(selectedVideo)}
+
 Observation priorities, in order:
-1. Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift.
-2. Visible physiological response: erection/engorgement quality, genital position/state, visible skin color or surface sheen, scrotal/testicular position when clearly visible, and whether these change from the prior window.
-3. Whole-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, and relaxation/tension cues.
-4. Telemetry trend: HR direction, stability, phase labels, and whether the visual state supports or conflicts with the HR trend.
-5. Relevant equipment or environment only when it affects interpretation.
+1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal state, visible skin color or surface sheen, pre-ejaculate/ejaculate if visible, pelvic lift/drop, and whether these change from the prior window.
+2. Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift.
+3. Whole-body and lower-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, tremor, shudder, and relaxation/tension cues.
+4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
+5. Telemetry only as supporting context from stored session data. Do not visually analyze or report the HR overlay, phase label, trend chart, AVG, MAX, or timer as a finding/event unless it directly supports a visible physiological or stimulation transition.
 
 Low-priority control objects: a mouse, remote, keyboard, phone, dark handheld object, or general control device is not itself a useful finding. Treat it as session-control context unless it directly explains a stimulation pause/resume or hand transition. Prefer "your hand leaves/returns to genital contact" over detailed discussion of the object. If the object could be a mouse/control, do not call it a stimulation device.
 
-Output style: write the summary as a flowing chronological observation with the most useful changes first. Findings should be compact cards about meaningful physiology, stimulation, movement, or telemetry deltas. Avoid spending a finding slot on static background objects, unchanged setup, or the mere presence of a control object.
+Output style: write the summary as a flowing chronological observation with the most useful visible physiology and stimulation changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only, each one sentence. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, or the mere presence of a control object.
+
+Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as "Left foot plants further while legs tense", "Pelvis lifts briefly then drops", "Lubrication applied to glans", "Stimulation resumes with mid-shaft to glans strokes", "Glans remains engorged with visible sheen", "Deep exhale visible through abdominal drop", or "Ejaculate visible on hand/shaft" when supported. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/stimulation change exists.
 
 Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context. If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
@@ -394,6 +520,9 @@ Do not create a standalone finding or timeline event just because static trackin
 
 Continuity rule: each window is part of a sequential review. Use the previous reviewed window below as context. In this current window, prioritize what continues, what changed, what started, what stopped, and what became more or less visible. Do not repeat stable background details from the prior window unless they changed or are needed to explain a new observation.
 ${continuityContext}
+
+Full session context for this video review:
+${sessionVideoContext || "No additional session context is available."}
 
 Session window: ${fmtMmSs(window.start)} to ${fmtMmSs(window.end)} (${window.start.toFixed(1)}s-${window.end.toFixed(1)}s).
 Telemetry in this window: ${telemetry}
@@ -409,7 +538,7 @@ Nearby session events: ${(session?.event_timeline || [])
   .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
   .join(" | ") || "None nearby."}
 
-Return concise visual findings and 1-3 proposed timeline events. Good targets are stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, body/feet bracing, telemetry-visible physiological changes, device/position changes, and important environment/setup context. Use low confidence or omit the finding when the evidence is ambiguous.`,
+Return concise visual findings and 1-3 proposed timeline events. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/pre-ejaculate/ejaculate observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
         });
         const normalized = normalizeAIResult(ai, window);
         const card = {
@@ -472,6 +601,7 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
     });
     onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, ai_analysis: nextAnalysis });
     setAcceptedIds((prev) => new Set([...prev, card.id]));
+    setExpanded((prev) => ({ ...prev, [card.id]: false }));
   };
 
   if (!availableVideos.length) {
@@ -554,10 +684,30 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
             Cursor {fmtMmSs(scanCursor)} / {fmtMmSs(sessionEnd)} · reset to 0:00
           </button>
         )}
+        <div className="flex min-w-[14rem] flex-1 items-center gap-2 rounded-full border border-border bg-card px-2 py-1">
+          <span className="shrink-0 text-[10px] font-semibold text-muted-foreground">Jump</span>
+          <input
+            type="range"
+            min="0"
+            max={Math.max(0, Math.round(sessionEnd))}
+            step={Math.max(1, Math.round(clipSeconds))}
+            value={Math.round(scanCursor)}
+            onChange={(event) => setCursorFromTimeline(Number(event.target.value))}
+            className="h-2 min-w-0 flex-1 accent-primary"
+            aria-label="Set AI video pass cursor"
+          />
+          <span className="shrink-0 font-mono text-primary">{fmtMmSs(scanCursor)}</span>
+        </div>
         {plannedWindows.map((window) => (
-          <span key={`${window.start}-${window.end}`} className="rounded-full border border-border bg-card px-2 py-1">
+          <button
+            key={`${window.start}-${window.end}`}
+            type="button"
+            onClick={() => setCursorFromTimeline(window.start)}
+            className="rounded-full border border-border bg-card px-2 py-1 hover:border-primary/50 hover:text-primary"
+            title={`Start processing at ${fmtMmSs(window.start)}`}
+          >
             {fmtMmSs(window.start)}-{fmtMmSs(window.end)}
-          </span>
+          </button>
         ))}
         {!plannedWindows.length && (
           <span className="rounded-full border border-border bg-card px-2 py-1">End reached</span>
@@ -574,10 +724,34 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
         <div className="mt-3 grid gap-3">
           {cards.map((card) => {
             const isExpanded = expanded[card.id];
-            const accepted = acceptedIds.has(card.id);
+            const accepted = isCardAccepted(card, session, acceptedIds);
+            const compactAccepted = accepted && !isExpanded;
             return (
-              <article key={card.id} className="overflow-hidden rounded-xl border border-border bg-card">
-                <div className="grid gap-3 p-3 lg:grid-cols-[minmax(15rem,22rem)_1fr]">
+              <article key={card.id} className={`overflow-hidden rounded-xl border bg-card transition-opacity ${accepted ? "border-primary/25 opacity-80" : "border-border"}`}>
+                <div className={`${compactAccepted ? "p-3" : "grid gap-3 p-3 lg:grid-cols-[minmax(15rem,22rem)_1fr]"}`}>
+                  {compactAccepted ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h5 className="font-semibold text-foreground">{card.label}</h5>
+                          <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                            Accepted
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {card.sourceVideo?.label || card.sourceVideo?.filename} · {fmtMmSs(card.window.start)} to {fmtMmSs(card.window.end)} · {card.events.length} timeline event{card.events.length === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setExpanded((prev) => ({ ...prev, [card.id]: true }))}
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" /> Review details
+                      </button>
+                    </div>
+                  ) : (
+                  <>
                   <button
                     type="button"
                     onClick={() => setExpanded((prev) => ({ ...prev, [card.id]: !prev[card.id] }))}
@@ -602,7 +776,14 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                   <div className="min-w-0 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <h5 className="font-semibold text-foreground">{card.label}</h5>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h5 className="font-semibold text-foreground">{card.label}</h5>
+                          {accepted && (
+                            <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                              Accepted
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {card.sourceVideo?.label || card.sourceVideo?.filename} · {fmtMmSs(card.window.start)} to {fmtMmSs(card.window.end)}
                         </p>
@@ -617,6 +798,9 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                       </button>
                     </div>
                     <p className="text-sm leading-relaxed text-foreground/90">{card.summary}</p>
+                    <p className="rounded-md border border-primary/15 bg-primary/5 px-2 py-1 text-[10px] text-muted-foreground">
+                      Accepting this card saves the summary, finding cards, clip range, and draft events into the session AI details.
+                    </p>
                     <div className="space-y-1.5">
                       {card.findings.map((finding, index) => (
                         <div key={`${finding.title}-${index}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
@@ -633,7 +817,7 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                         <div className="mb-1 flex items-center justify-between gap-2">
                           <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">Draft Video Sync Events</span>
                           <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => acceptEvents(card)} disabled={accepted}>
-                            <Check className="mr-1 h-3.5 w-3.5" /> {accepted ? "Accepted" : "Accept All"}
+                            <Check className="mr-1 h-3.5 w-3.5" /> {accepted ? "Accepted" : "Save Findings + Events"}
                           </Button>
                         </div>
                         <div className="space-y-1">
@@ -648,6 +832,8 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                     )}
                     <p className="text-[10px] text-muted-foreground">{card.telemetry}</p>
                   </div>
+                  </>
+                  )}
                 </div>
               </article>
             );

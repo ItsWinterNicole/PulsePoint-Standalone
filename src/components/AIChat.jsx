@@ -308,7 +308,6 @@ export default function AIChat({
   const [savingFindings, setSavingFindings] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [voiceArmed, setVoiceArmed] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [speakingIdx, setSpeakingIdx] = useState(null);
@@ -332,7 +331,6 @@ export default function AIChat({
   const micStreamRef = useRef(null);
   const speechDetectedRef = useRef(false);
   const silenceStartRef = useRef(null);
-  const voiceArmedRef = useRef(false);
   const suppressNextTranscriptionRef = useRef(false);
   const vadFrameRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -360,16 +358,6 @@ export default function AIChat({
   useEffect(() => {
     if (open || fullScreen) scrollToBottom("auto");
   }, [open, fullScreen, scrollToBottom]);
-
-  useEffect(() => {
-    if (!voiceArmed || recording || transcribing || loading) return undefined;
-    const timer = window.setTimeout(() => {
-      if (voiceArmedRef.current && !recording && !transcribing && !loading) {
-        startRecording(true).catch(() => disableVoiceMode());
-      }
-    }, 650);
-    return () => window.clearTimeout(timer);
-  }, [loading, recording, transcribing, voiceArmed]);
 
   useEffect(() => () => {
     audioUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -986,8 +974,6 @@ export default function AIChat({
   const releaseVoiceCaptureForPlayback = () => {
     if (!recording && !micStreamRef.current && !audioContextRef.current) return;
     suppressNextTranscriptionRef.current = true;
-    voiceArmedRef.current = false;
-    setVoiceArmed(false);
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop();
     } else {
@@ -998,8 +984,6 @@ export default function AIChat({
   };
 
   const disableVoiceMode = () => {
-    voiceArmedRef.current = false;
-    setVoiceArmed(false);
     if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
     stopVad();
     stopMicStream();
@@ -1043,10 +1027,8 @@ export default function AIChat({
     vadFrameRef.current = requestAnimationFrame(tick);
   };
 
-  const startRecording = async (keepArmed = true) => {
+  const startRecording = async () => {
     if (recording || transcribing || loading) return;
-    voiceArmedRef.current = keepArmed;
-    setVoiceArmed(keepArmed);
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStreamRef.current = stream;
     audioChunksRef.current = [];
@@ -1076,21 +1058,10 @@ export default function AIChat({
       const base64 = btoa(bin);
       const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: mimeType, prompt: WHISPER_PROMPT });
       const rawText = res.data?.text?.trim() || "";
-      const stopRequested = /(?:^|[\s.,!?;:])(stop|end)[\s.!?]*$/i.test(rawText);
       const text = rawText.replace(/(?:^|[\s.,!?;:])(stop|end)[\s.!?]*$/i, "").trim();
       if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
       setTranscribing(false);
       setTimeout(() => inputRef.current?.focus(), 100);
-      if (stopRequested) {
-        voiceArmedRef.current = false;
-        setVoiceArmed(false);
-        return;
-      }
-      if (voiceArmedRef.current) {
-        window.setTimeout(() => {
-          if (voiceArmedRef.current && !loading) startRecording(true).catch(() => disableVoiceMode());
-        }, 550);
-      }
     };
     mr.start();
     setRecording(true);
@@ -1779,14 +1750,14 @@ Return a conversational answer plus structured findings for review/persistence.`
     <div className="flex items-center justify-end gap-2">
       {renderAttachButton()}
       <button
-        onClick={voiceArmed ? disableVoiceMode : () => startRecording(true)}
+        onClick={recording ? stopRecording : startRecording}
         disabled={loading || transcribing || uploadingImages}
-        title={voiceArmed ? "Stop listening" : "Start listening"}
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all disabled:opacity-40 ${voiceArmed ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+        title={recording ? "Stop recording" : "Tap to dictate"}
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all disabled:opacity-40 ${recording ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
       >
         {transcribing
           ? <span className="h-3.5 w-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-          : voiceArmed ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          : recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
       </button>
       <button
         onClick={sendMessage}

@@ -9,6 +9,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 const PWA_FULL_SEND_V1 = true;
 const PWA_NO_FOCUS_RELOAD_V1 = true;
+const PWA_FOREGROUND_STABILITY_V1 = true;
 
 function isLocalDevHost() {
   return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
@@ -31,25 +32,16 @@ if (import.meta.env.DEV && 'serviceWorker' in navigator) {
   clearPulsePointShellCaches();
 } else if ('serviceWorker' in navigator && window.isSecureContext) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then((registration) => {
-      registration.addEventListener('updatefound', () => {
-        const worker = registration.installing;
-        if (!worker) return;
-        worker.addEventListener('statechange', () => {
-          if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-            window.dispatchEvent(new CustomEvent('pulsepoint:pwa-update-ready'));
-          }
-        });
-      });
-    }).catch((error) => {
+    navigator.serviceWorker.register('/sw.js').catch((error) => {
       console.warn('Service worker registration failed:', error);
     });
   });
 
   // PWA_NO_FOCUS_RELOAD_V1
-  // Do not auto-reload on service-worker controller changes. Android/Chrome can
-  // check for SW updates when the installed app regains focus, and an automatic
-  // reload here can interrupt live capture, Motion Lab analysis, AI jobs, or TTS.
+  // Do not auto-reload or prompt for service-worker swaps while PulsePoint is
+  // open. Android/Chrome can check for SW updates when the installed app
+  // regains focus, and foreground update bookkeeping can interrupt live capture,
+  // Motion Lab analysis, AI jobs, or TTS.
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     window.dispatchEvent(new CustomEvent('pulsepoint:pwa-controller-changed'));
   });
