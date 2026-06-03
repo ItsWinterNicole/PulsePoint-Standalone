@@ -131,6 +131,11 @@ export const base44 = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, startSeconds, endSeconds, label, frameCount }),
       }),
+      ProcessLocalVideoAudio: async ({ path, startSeconds = 0, windowSeconds = 300, maxSnippets = 10, transcribe = true }) => request('/files/local-video/audio-pass', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, startSeconds, windowSeconds, maxSnippets, transcribe }),
+      }),
       ConvertVideoForPlayback: async ({ file, label = '' }) => {
         const form = new FormData();
         form.append('file', file);

@@ -20,6 +20,7 @@ import HROverlay from './pages/HROverlay';
 import LongTermTrends from './pages/LongTermTrends';
 import Profile from './pages/Profile';
 import ProfileQA from './pages/ProfileQA';
+import AIAnnotation from './pages/AIAnnotation';
 import CorrelationMatrix from './pages/CorrelationMatrix';
 import VideoPlayer from './pages/VideoPlayer';
 import SessionReviewPlayer from './pages/SessionReviewPlayer';
@@ -64,6 +65,7 @@ const AuthenticatedApp = () => {
         <Route path="/" element={<Dashboard />} />
         <Route path="/sessions" element={<Sessions />} />
         <Route path="/sessions/:id" element={<SessionDetail />} />
+        <Route path="/sessions/:id/ai-annotation" element={<AIAnnotation />} />
         <Route path="/sessions/:id/edit" element={<EditSession />} />
         <Route path="/new" element={<NewSession />} />
         <Route path="/new/quick" element={<QuickEntry />} />
@@ -78,6 +80,7 @@ const AuthenticatedApp = () => {
         <Route path="/overlay" element={<HROverlay />} />
         <Route path="/trends" element={<LongTermTrends />} />
         <Route path="/profile-qa" element={<ProfileQA />} />
+        <Route path="/ai-annotation" element={<AIAnnotation />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/correlations" element={<CorrelationMatrix />} />
         <Route path="/video" element={<VideoPlayer />} />

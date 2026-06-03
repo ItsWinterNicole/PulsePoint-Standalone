@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Play, Sparkles } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
@@ -67,6 +67,18 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
     .slice(0, 80)
     .map((event) => `[${fmtMmSs(event.time_s)}] ${compactText(event.note, 180)}`)
     .join(" | ");
+  const audioPasses = (Array.isArray(session?.ai_analysis?.ai_audio_passes) ? session.ai_analysis.ai_audio_passes : [])
+    .slice(0, 12)
+    .map((pass) => {
+      const spoken = (pass.events || [])
+        .filter((event) => event.transcript)
+        .slice(0, 6)
+        .map((event) => `[${fmtMmSs(event.startSeconds)}] "${compactText(event.transcript, 140)}"`)
+        .join(" | ");
+      return `${fmtMmSs(pass.start_s)}-${fmtMmSs(pass.end_s)}: ${spoken || compactText(pass.summary, 220)}`;
+    })
+    .filter(Boolean)
+    .join(" || ");
   const telemetrySpan = timelineRows.length
     ? `Telemetry rows: ${timelineRows.length}; session span approximately ${fmtMmSs(estimateSessionEnd(session, timelineRows))}.`
     : "";
@@ -79,6 +91,7 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
     contextText ? `Structured session context: ${contextText}` : null,
     session?.notes ? `Full session notes: ${compactText(session.notes, 1800)}` : null,
     timelineEvents ? `Manual/timestamped session notes: ${timelineEvents}` : null,
+    audioPasses ? `Accepted audio-pass evidence: ${audioPasses}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -177,15 +190,80 @@ function neutralizeIntentLanguage(text) {
     .replace(/\bedging\b/gi, "near-threshold modulation");
 }
 
-function videoFocusInstruction(video = {}) {
+function cleanDraftEventNote(text) {
+  return neutralizeIntentLanguage(text)
+    .replace(/^\s*(?:this\s+)?window\s+opens\s+(?:with|at|showing)\s*/i, "")
+    .replace(/^\s*(?:this\s+)?window\s+closes\s+(?:with|at|showing)\s*/i, "")
+    .replace(/^\s*(?:the\s+)?window\s+opens[:\s-]*/i, "")
+    .replace(/^\s*(?:the\s+)?window\s+closes[:\s-]*/i, "")
+    .replace(/\b(?:this\s+)?window\s+opens\s+(?:with|at|showing)\b/gi, "")
+    .replace(/\b(?:this\s+)?window\s+closes\s+(?:with|at|showing)\b/gi, "")
+    .trim();
+}
+
+function normalizeDraftEventCategories(categories = [], note = "", fallbackWindow = {}) {
+  const list = (Array.isArray(categories) ? categories : [categories || "other"]).filter(Boolean);
+  const text = String(note || "").toLowerCase();
+  const windowStart = Number(fallbackWindow?.start || 0);
+  return list.map((category) => {
+    if (
+      category === "stimulation_started"
+      && windowStart > 30
+      && !/(initial|first\s+contact|first\s+obvious|session\s+start|masturbation\s+begins)/.test(text)
+    ) {
+      return "stimulation_resumed";
+    }
+    if (
+      category === "stimulation_stopped"
+      && !/(post[-\s]?climax|post[-\s]?orgasm|after\s+climax|after\s+orgasm|end[-\s]?of[-\s]?session|session\s+end|final|recovery)/.test(text)
+    ) {
+      return "stimulation_paused";
+    }
+    return category;
+  });
+}
+
+const VIDEO_ROLE_OPTIONS = [
+  {
+    value: "main",
+    label: "Main / genital composite",
+    shortLabel: "Main",
+    helper: "Stimulation, genital state, devices, lubrication, and composite context.",
+  },
+  {
+    value: "feet",
+    label: "Feet / lower body",
+    shortLabel: "Feet",
+    helper: "Toe/heel position, planting, bracing, tremor, lower-body symmetry.",
+  },
+  {
+    value: "lateral",
+    label: "Lateral / full body",
+    shortLabel: "Lateral",
+    helper: "Head-to-toe posture, pelvic lift/drop, breathing cues, whole-body transitions.",
+  },
+];
+
+function inferVideoRole(video = {}) {
   const descriptor = `${video.label || ""} ${video.filename || ""} ${video.path || ""}`.toLowerCase();
-  if (/(foot|feet|lower|toe|heel)/.test(descriptor)) {
-    return "This appears to be a foot/lower-body angle. Prioritize foot behavior, toe/heel position, planting or lift, leg tensing/relaxing, tremor, shudder, left/right asymmetry, and lower-body transitions. Mention genital/stimulation state only if clearly visible.";
+  if (/(foot|feet|lower|toe|heel)/.test(descriptor)) return "feet";
+  if (/(side|lateral|full|body|wide)/.test(descriptor)) return "lateral";
+  return "main";
+}
+
+function videoRoleLabel(role) {
+  return VIDEO_ROLE_OPTIONS.find((option) => option.value === role)?.shortLabel || "Main";
+}
+
+function videoFocusInstruction(video = {}, selectedRole = "") {
+  const role = selectedRole || inferVideoRole(video);
+  if (role === "feet") {
+    return "This is a foot/lower-body angle. Prioritize foot behavior, toe/heel position, planting or lift, leg tensing/relaxing, tremor, shudder, left/right asymmetry, and lower-body transitions. Mention genital/stimulation state only if clearly visible.";
   }
-  if (/(side|lateral|full|body|wide)/.test(descriptor)) {
-    return "This appears to be a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
+  if (role === "lateral") {
+    return "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
   }
-  return "This appears to be a main/composite session view. Prioritize stimulation mechanics, visible genital state, device/lubrication use, hand contact transitions, ejaculation/pre-ejaculate if visible, and only then supporting body movement.";
+  return "This is a main/genital-composite session view. Prioritize stimulation mechanics, visible genital state, device/lubrication use, hand contact transitions, cautious visible fluid/moisture labeling, and only then supporting body movement.";
 }
 
 function normalizeAIResult(raw, fallbackWindow) {
@@ -207,13 +285,16 @@ function normalizeAIResult(raw, fallbackWindow) {
       confidence: finding.confidence || "moderate",
       category: finding.category || "other",
     })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding)),
-    events: events.map((event) => ({
-      time_s: Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
-      note: neutralizeIntentLanguage(event.note || event.text || ""),
-      category: Array.isArray(event.category) ? event.category : [event.category || "other"],
-      annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
-      confidence: event.confidence || "moderate",
-    })).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note })),
+    events: events.map((event) => {
+      const note = cleanDraftEventNote(event.note || event.text || "");
+      return {
+        time_s: Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
+        note,
+        category: normalizeDraftEventCategories(event.category, note, fallbackWindow),
+        annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
+        confidence: event.confidence || "moderate",
+      };
+    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note })),
   };
 }
 
@@ -241,7 +322,9 @@ function eventFromCard(card, event, index) {
       clip_url: card.clipUrl,
       clip_start_s: card.window.start,
       clip_end_s: card.window.end,
+      source_video_role: card.sourceVideoRole || inferVideoRole(card.sourceVideo),
       source_video: card.sourceVideo?.filename || card.sourceVideo?.label || "",
+      source_video_fingerprint: card.sourceVideo?.fingerprint || "",
     },
     video_clip: {
       url: card.clipUrl,
@@ -264,6 +347,7 @@ function persistedCardFrom(card) {
       label: card.sourceVideo?.label || "",
       filename: card.sourceVideo?.filename || "",
       fingerprint: card.sourceVideo?.fingerprint || "",
+      role: card.sourceVideoRole || inferVideoRole(card.sourceVideo),
     },
     clip: {
       url: card.clipUrl,
@@ -273,6 +357,7 @@ function persistedCardFrom(card) {
       duration_s: Number((card.window.end - card.window.start).toFixed(2)),
     },
     summary: card.summary,
+    source_video_role: card.sourceVideoRole || inferVideoRole(card.sourceVideo),
     findings: card.findings,
     draft_events: card.events,
     telemetry: card.telemetry,
@@ -352,21 +437,63 @@ function sameClipRange(aStart, aEnd, bStart, bEnd) {
     && Math.abs(Number(aEnd) - Number(bEnd)) < 0.75;
 }
 
-function isCardAccepted(card, session, acceptedIds) {
-  if (acceptedIds.has(card.id)) return true;
-  const cardStart = Number(card.window?.start);
-  const cardEnd = Number(card.window?.end);
-  if (!Number.isFinite(cardStart) || !Number.isFinite(cardEnd)) return false;
+function sameCardSource(card, source = {}) {
   const cardFingerprint = card.sourceVideo?.fingerprint || "";
   const cardFilename = card.sourceVideo?.filename || card.sourceVideo?.label || "";
-  return normalizeSessionVideoPassFindings(session).some((entry) => {
-    if (!sameClipRange(cardStart, cardEnd, entry.clip?.start_s, entry.clip?.end_s)) return false;
-    const entryFingerprint = entry.source_video?.fingerprint || "";
-    const entryFilename = entry.source_video?.filename || entry.source_video?.label || "";
-    if (cardFingerprint && entryFingerprint) return cardFingerprint === entryFingerprint;
-    if (cardFilename && entryFilename) return cardFilename === entryFilename;
-    return true;
+  const sourceFingerprint = source.fingerprint || "";
+  const sourceFilename = source.filename || source.label || "";
+  if (cardFingerprint && sourceFingerprint) return cardFingerprint === sourceFingerprint;
+  if (cardFilename && sourceFilename) return cardFilename === sourceFilename;
+  return true;
+}
+
+function sameSavedCardClip(card, entry) {
+  return sameClipRange(card.window?.start, card.window?.end, entry.clip?.start_s, entry.clip?.end_s)
+    && sameCardSource(card, entry.source_video || {});
+}
+
+function persistedTimelineEventsForCard(card, session) {
+  const cardStart = Number(card.window?.start);
+  const cardEnd = Number(card.window?.end);
+  if (!Number.isFinite(cardStart) || !Number.isFinite(cardEnd)) return [];
+  return (session?.event_timeline || []).filter((event) => {
+    if (event?.source !== "ai_video_pass") return false;
+    const annotation = event.ai_annotation || {};
+    if (!sameClipRange(cardStart, cardEnd, annotation.clip_start_s, annotation.clip_end_s)) return false;
+    const sourceLabel = annotation.source_video || "";
+    return sameCardSource(card, { filename: sourceLabel, label: sourceLabel, fingerprint: annotation.source_video_fingerprint || "" });
   });
+}
+
+function isCardAccepted(card, session, acceptedIds) {
+  if (acceptedIds.has(card.id)) return true;
+  const savedCard = normalizeSessionVideoPassFindings(session).some((entry) => sameSavedCardClip(card, entry));
+  if (!savedCard) return false;
+  if (!card.events?.length) return true;
+  return persistedTimelineEventsForCard(card, session).length >= card.events.length;
+}
+
+function eventFromAudioResult(event, sourceVideo) {
+  return {
+    time_s: Number(event.startSeconds || 0),
+    note: event.note || "Audio activity detected.",
+    category: event.transcript ? ["other", "sensation"] : ["other"],
+    annotation_tags: event.transcript ? ["sensation_report", "other_context"] : ["other_context"],
+    source: "ai_audio_pass",
+    confidence: event.confidence || "moderate",
+    audio_review: {
+      source_video: {
+        filename: sourceVideo?.filename || sourceVideo?.label || "",
+        label: sourceVideo?.label || "",
+        fingerprint: sourceVideo?.fingerprint || "",
+      },
+      start_s: Number(event.startSeconds || 0),
+      end_s: Number(event.endSeconds || 0),
+      duration_s: Number(event.durationSeconds || 0),
+      transcript: event.transcript || "",
+      transcription_error: event.transcriptionError || "",
+    },
+  };
 }
 
 export default function AIVideoPassPanel({
@@ -381,6 +508,7 @@ export default function AIVideoPassPanel({
   const [clipSeconds, setClipSeconds] = useState(24);
   const [windowCount, setWindowCount] = useState(5);
   const [scanMode, setScanMode] = useState("smart");
+  const [autoContinue, setAutoContinue] = useState(false);
   const [scanCursor, setScanCursor] = useState(0);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
@@ -388,8 +516,17 @@ export default function AIVideoPassPanel({
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState({});
   const [acceptedIds, setAcceptedIds] = useState(new Set());
+  const [audioRunning, setAudioRunning] = useState(false);
+  const [audioStatus, setAudioStatus] = useState("");
+  const [audioError, setAudioError] = useState("");
+  const [audioWindowSeconds, setAudioWindowSeconds] = useState(300);
+  const [audioMaxSnippets, setAudioMaxSnippets] = useState(10);
+  const [audioResult, setAudioResult] = useState(null);
+  const [audioAccepted, setAudioAccepted] = useState(false);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
+  const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
+  const selectedVideoRoleHelper = VIDEO_ROLE_OPTIONS.find((option) => option.value === selectedVideoRole)?.helper;
   const sessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
   const plannedWindows = useMemo(
     () => scanMode === "continue"
@@ -415,6 +552,16 @@ export default function AIVideoPassPanel({
     setScanCursor(0);
   }, [selectedVideo?.path]);
 
+  useEffect(() => {
+    if (!selectedPath && availableVideos[0]?.path) {
+      setSelectedPath(availableVideos[0].path);
+    }
+  }, [availableVideos, selectedPath]);
+
+  useEffect(() => {
+    setSelectedVideoRole(inferVideoRole(selectedVideo));
+  }, [selectedVideo?.path]);
+
   const runPass = async () => {
     if (!selectedVideo?.path || running) return;
     setRunning(true);
@@ -424,83 +571,96 @@ export default function AIVideoPassPanel({
     try {
       const nextCards = [];
       const sessionVideoContext = buildSessionVideoContext(session, selectedVideo, timelineRows);
-      for (let i = 0; i < plannedWindows.length; i += 1) {
-        const window = plannedWindows[i];
-        const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
-        setStatus(`Preparing ${label}`);
-        const preview = await base44.integrations.Core.ProcessLocalVideoClip({
-          path: selectedVideo.path,
-          startSeconds: window.start,
-          endSeconds: window.end,
-          label,
-          frameCount: 10,
-        });
-        const telemetry = nearestTelemetrySummary(timelineRows, window.start, window.end);
-        setStatus(`Sarah reviewing ${label}`);
-        const continuityContext = compactCardContinuity(nextCards[nextCards.length - 1])
-          || findSavedPriorContinuity(session, selectedVideo, window)
-          || "No prior reviewed window is available. Treat this as the first observed window, then establish baseline context for the next window.";
-        const images = (preview.frames || []).map((frame) => ({
-          filename: frame.filename,
-          media_type: frame.mimeType || "image/jpeg",
-          data: frame.data,
-        }));
-        const ai = await base44.integrations.Core.InvokeLLM({
-          max_tokens: 2400,
-          response_json_schema: {
-            type: "object",
-            properties: {
-              summary: { type: "string" },
-              findings: {
-                type: "array",
-                maxItems: 4,
-                items: {
-                  type: "object",
-                  properties: {
-                    title: { type: "string" },
-                    text: { type: "string" },
-                    category: { type: "string", enum: ["stimulation", "physiology", "physical", "movement", "environment", "equipment", "other"] },
-                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
-                  },
-                  required: ["title", "text", "category", "confidence"],
-                },
-              },
-              events: {
-                type: "array",
-                maxItems: 3,
-                items: {
-                  type: "object",
-                  properties: {
-                    time_s: { type: "number" },
-                    note: { type: "string" },
-                    category: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                        enum: ["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"],
-                      },
+      let cursor = scanMode === "continue" ? scanCursor : 0;
+      let batchNumber = 0;
+      let windowsToRun = plannedWindows;
+      while (windowsToRun.length) {
+        batchNumber += 1;
+        for (let i = 0; i < windowsToRun.length; i += 1) {
+          const window = windowsToRun[i];
+          const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
+          setStatus(`Preparing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
+          const preview = await base44.integrations.Core.ProcessLocalVideoClip({
+            path: selectedVideo.path,
+            startSeconds: window.start,
+            endSeconds: window.end,
+            label,
+            frameCount: 10,
+          });
+          const telemetry = nearestTelemetrySummary(timelineRows, window.start, window.end);
+          setStatus(`Sarah reviewing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
+          const continuityContext = compactCardContinuity(nextCards[nextCards.length - 1])
+            || findSavedPriorContinuity(session, selectedVideo, window)
+            || "No prior reviewed window is available. Treat this as the first observed window, then establish baseline context for the next window.";
+          const images = (preview.frames || []).map((frame) => ({
+            filename: frame.filename,
+            media_type: frame.mimeType || "image/jpeg",
+            data: frame.data,
+          }));
+          const ai = await base44.integrations.Core.InvokeLLM({
+            max_tokens: 2400,
+            response_json_schema: {
+              type: "object",
+              properties: {
+                summary: { type: "string" },
+                findings: {
+                  type: "array",
+                  maxItems: 4,
+                  items: {
+                    type: "object",
+                    properties: {
+                      title: { type: "string" },
+                      text: { type: "string" },
+                      category: { type: "string", enum: ["stimulation", "physiology", "physical", "movement", "environment", "equipment", "other"] },
+                      confidence: { type: "string", enum: ["low", "moderate", "high"] },
                     },
-                    annotation_tags: { type: "array", items: { type: "string" } },
-                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                    required: ["title", "text", "category", "confidence"],
                   },
-                  required: ["time_s", "note", "category", "annotation_tags", "confidence"],
+                },
+                events: {
+                  type: "array",
+                  maxItems: 3,
+                  items: {
+                    type: "object",
+                    properties: {
+                      time_s: { type: "number" },
+                      note: { type: "string" },
+                      category: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                          enum: ["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"],
+                        },
+                      },
+                      annotation_tags: { type: "array", items: { type: "string" } },
+                      confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                    },
+                    required: ["time_s", "note", "category", "annotation_tags", "confidence"],
+                  },
                 },
               },
+              required: ["summary", "findings", "events"],
             },
-            required: ["summary", "findings", "events"],
-          },
-          images,
-          prompt: `You are Sarah, reviewing sampled frames from a linked local session video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+            images,
+            prompt: `You are Sarah, reviewing sampled frames from a linked local session video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
 Session context grounding has priority when it identifies known setup, devices, materials, or technique. Use the session notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague "blue device near the scrotum and genitals." If context and visuals do not line up, state the uncertainty instead of forcing the label.
 
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
+Ejaculation and fluid evidence rule: do not infer orgasm, climax, ejaculation, or cum from shiny/clear wetness, glans sheen, lubrication sheen, hand movement, erection state, or a stimulation pause alone. Clear or glossy moisture on the glans/shaft is more likely lubricant, pre-ejaculate, or unspecified moisture unless there is strong supporting context. Only call ejaculate when the visible fluid is clearly whitish/opaque or there is a visible emission/spurt, new opaque residue, or a nearby confirmed climax/ejaculation event in the session notes/timeline. Treat HR/telemetry as consistency context: if the window does not align with the session climax marker, recovery transition, or a plausible autonomic peak, label fluid as "visible moisture/sheen" or "possible lubricant/pre-ejaculate" rather than ejaculate. Never create multiple orgasms/climax events from repeated wetness or sheen across adjacent windows; carry forward that it is likely the same lubricant/moisture unless there is a clear new emission or confirmed event.
+
+Perineum and underside anatomy rule: do not label the area under the scrotum as "base of penis" unless the penile shaft base is clearly visible and contacted. If contact is below or behind the scrotum, use "perineum", "perineal region", "underside/perineal contact", or "scrotal-base/perineal region" depending on what is visible. If the location is ambiguous between penile base, scrotal base, and perineum, state the uncertainty instead of forcing a penile-base label.
+
+Timeline timing rule: sampled frames can lag the true transition. Do not assume the event happened exactly at the window start or window end. Use the most likely visible transition time from the sampled frames and nearby session notes. If the exact second is uncertain, keep the note phrased as "visible by", "around", "continues", "pauses", or "resumes" rather than claiming a precise start/stop. Never write filler such as "This window opens with", "Window opens at", "This window closes with", or "Window closes with" in event notes.
+
+Stimulation lifecycle rule: there should usually be only one "stimulation_started" event for the initial obvious masturbation/contact and only one "stimulation_stopped" event for the true post-climax/end-of-session cessation. Inside the session, use "stimulation_paused", "stimulation_resumed", or plain "stimulation" for hand lifts, contact changes, technique shifts, lubrication breaks, device handling, and post-climax milking/recovery transitions. Do not create repeated start/stop events for adjacent windows that are really pause/resume or method changes.
+
 Camera/view focus:
-${videoFocusInstruction(selectedVideo)}
+${videoFocusInstruction(selectedVideo, selectedVideoRole)}
 
 Observation priorities, in order:
-1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal state, visible skin color or surface sheen, pre-ejaculate/ejaculate if visible, pelvic lift/drop, and whether these change from the prior window.
+1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal/perineal state, visible skin color or surface sheen, cautious visible fluid/moisture labeling, pelvic lift/drop, and whether these change from the prior window.
 2. Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift.
 3. Whole-body and lower-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, tremor, shudder, and relaxation/tension cues.
 4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
@@ -510,7 +670,7 @@ Low-priority control objects: a mouse, remote, keyboard, phone, dark handheld ob
 
 Output style: write the summary as a flowing chronological observation with the most useful visible physiology and stimulation changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only, each one sentence. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, or the mere presence of a control object.
 
-Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as "Left foot plants further while legs tense", "Pelvis lifts briefly then drops", "Lubrication applied to glans", "Stimulation resumes with mid-shaft to glans strokes", "Glans remains engorged with visible sheen", "Deep exhale visible through abdominal drop", or "Ejaculate visible on hand/shaft" when supported. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/stimulation change exists.
+Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as "Left foot plants further while legs tense", "Pelvis lifts briefly then drops", "Lubrication applied to glans", "Perineal contact resumes below scrotum", "Stimulation resumes with mid-shaft to glans strokes", "Glans remains engorged with visible sheen", "Deep exhale visible through abdominal drop", or "Whitish ejaculate clearly visible after confirmed climax marker" only when strongly supported. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/stimulation change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
 Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context. If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
@@ -538,27 +698,35 @@ Nearby session events: ${(session?.event_timeline || [])
   .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
   .join(" | ") || "None nearby."}
 
-Return concise visual findings and 1-3 proposed timeline events. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/pre-ejaculate/ejaculate observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
-        });
-        const normalized = normalizeAIResult(ai, window);
-        const card = {
-          id: `${Date.now()}-${i}`,
-          label,
-          window,
-          sourceVideo: selectedVideo,
-          clipUrl: preview.clip_url || preview.url,
-          thumbnailUrl: preview.frames?.[0]?.url || "",
-          motionSummary: preview.motion_summary,
-          telemetry,
-          ...normalized,
-        };
-        nextCards.push(card);
-        setCards([...nextCards]);
+Return concise visual findings and 1-3 proposed timeline events. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
+          });
+          const normalized = normalizeAIResult(ai, window);
+          const card = {
+            id: `${Date.now()}-${batchNumber}-${i}`,
+            label,
+            window,
+            sourceVideo: selectedVideo,
+            sourceVideoRole: selectedVideoRole,
+            clipUrl: preview.clip_url || preview.url,
+            thumbnailUrl: preview.frames?.[0]?.url || "",
+            motionSummary: preview.motion_summary,
+            telemetry,
+            ...normalized,
+          };
+          nextCards.push(card);
+          setCards([...nextCards]);
+        }
+        if (scanMode !== "continue" || !autoContinue) break;
+        cursor = nextCards[nextCards.length - 1]?.window?.end || cursor;
+        setScanCursor(cursor);
+        onCursorChange?.(cursor);
+        if (cursor >= sessionEnd - 0.5) break;
+        windowsToRun = sequentialWindows(cursor, session, timelineRows, windowCount, clipSeconds);
       }
       if (scanMode === "continue" && nextCards.length) {
         setScanCursor(nextCards[nextCards.length - 1].window.end);
       }
-      setStatus(`Review complete: ${nextCards.length} windows ready.`);
+      setStatus(`Review complete: ${nextCards.length} windows ready${autoContinue && scanMode === "continue" ? " through the current forward run" : ""}.`);
     } catch (err) {
       setError(err?.data?.error || err?.message || "AI video pass failed.");
       setStatus("");
@@ -567,23 +735,108 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
     }
   };
 
+  const runAudioPass = async () => {
+    if (!selectedVideo?.path || audioRunning) return;
+    setAudioRunning(true);
+    setAudioError("");
+    setAudioAccepted(false);
+    setAudioStatus(`Listening from ${fmtMmSs(scanCursor)}...`);
+    try {
+      const result = await base44.integrations.Core.ProcessLocalVideoAudio({
+        path: selectedVideo.path,
+        startSeconds: scanCursor,
+        windowSeconds: audioWindowSeconds,
+        maxSnippets: audioMaxSnippets,
+        transcribe: true,
+      });
+      setAudioResult(result);
+      setAudioStatus(result.summary || "Audio pass complete.");
+    } catch (err) {
+      setAudioError(err?.data?.error || err?.message || "Audio pass failed.");
+      setAudioStatus("");
+    } finally {
+      setAudioRunning(false);
+    }
+  };
+
+  const acceptAudioEvents = async () => {
+    const events = (audioResult?.events || []).filter((event) => event.note);
+    if (!events.length) return;
+    const nextEvents = [
+      ...(session?.event_timeline || []),
+      ...events.map((event) => eventFromAudioResult(event, selectedVideo)),
+    ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
+    const existingAnalysis = session?.ai_analysis || {};
+    const audioReview = {
+      source_video: {
+        filename: selectedVideo?.filename || selectedVideo?.label || "",
+        label: selectedVideo?.label || "",
+        fingerprint: selectedVideo?.fingerprint || "",
+      },
+      start_s: audioResult.startSeconds,
+      end_s: audioResult.endSeconds,
+      summary: audioResult.summary,
+      events,
+      created_at: new Date().toISOString(),
+    };
+    const nextAnalysis = {
+      ...existingAnalysis,
+      ai_audio_passes: [
+        audioReview,
+        ...(Array.isArray(existingAnalysis.ai_audio_passes) ? existingAnalysis.ai_audio_passes : []),
+      ].slice(0, 80),
+    };
+    const updated = { event_timeline: nextEvents, ai_analysis: nextAnalysis };
+    await base44.entities.Session.update(session.id, updated);
+    onSessionUpdate?.({ ...session, ...updated });
+    setAudioAccepted(true);
+  };
+
+  const updateCardEventNote = (cardId, eventIndex, note) => {
+    setCards((currentCards) => currentCards.map((card) => (
+      card.id === cardId
+        ? {
+            ...card,
+            events: (card.events || []).map((event, index) => (
+              index === eventIndex ? { ...event, note } : event
+            )),
+          }
+        : card
+    )));
+  };
+
   const acceptEvents = async (card, eventIndexes = null) => {
     const selectedEvents = eventIndexes
       ? card.events.filter((_, index) => eventIndexes.includes(index))
       : card.events;
+    const cleanedEvents = selectedEvents
+      .map((event) => ({ ...event, note: String(event.note || "").trim() }))
+      .filter((event) => event.note);
     if (!selectedEvents.length && !card.findings.length) return;
+    if (!cleanedEvents.length && !card.findings.length) return;
+    const retainedEvents = (session?.event_timeline || []).filter((event) => {
+      if (event?.source !== "ai_video_pass") return true;
+      const annotation = event.ai_annotation || {};
+      return !sameClipRange(card.window?.start, card.window?.end, annotation.clip_start_s, annotation.clip_end_s)
+        || !sameCardSource(card, {
+          filename: annotation.source_video || "",
+          label: annotation.source_video || "",
+          fingerprint: annotation.source_video_fingerprint || "",
+        });
+    });
     const nextEvents = [
-      ...(session?.event_timeline || []),
-      ...selectedEvents.map((event, index) => eventFromCard(card, event, index)),
+      ...retainedEvents,
+      ...cleanedEvents.map((event, index) => eventFromCard(card, event, index)),
     ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
     const existingAnalysis = session?.ai_analysis || {};
     const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
       ? existingAnalysis._video_pass_findings
       : [];
-    const persistedCard = persistedCardFrom(card);
+    const cardToPersist = { ...card, events: cleanedEvents };
+    const persistedCard = persistedCardFrom(cardToPersist);
     const nextVideoPassFindings = [
       persistedCard,
-      ...existingVideoPassFindings.filter((item) => item?.id !== persistedCard.id),
+      ...existingVideoPassFindings.filter((item) => item?.id !== persistedCard.id && !sameSavedCardClip(card, item)),
     ].slice(0, 80);
     const nextAnalysisBase = {
       ...existingAnalysis,
@@ -602,6 +855,68 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
     onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, ai_analysis: nextAnalysis });
     setAcceptedIds((prev) => new Set([...prev, card.id]));
     setExpanded((prev) => ({ ...prev, [card.id]: false }));
+  };
+
+  const acceptAllDraftCards = async () => {
+    const draftCards = cards.filter((card) => !isCardAccepted(card, session, acceptedIds));
+    if (!draftCards.length) return;
+    const cardsToPersist = draftCards
+      .map((card) => ({
+        ...card,
+        events: (card.events || [])
+          .map((event) => ({ ...event, note: String(event.note || "").trim() }))
+          .filter((event) => event.note),
+      }))
+      .filter((card) => card.events.length || card.findings.length);
+    if (!cardsToPersist.length) return;
+
+    const retainedEvents = (session?.event_timeline || []).filter((event) => {
+      if (event?.source !== "ai_video_pass") return true;
+      const annotation = event.ai_annotation || {};
+      return !cardsToPersist.some((card) => (
+        sameClipRange(card.window?.start, card.window?.end, annotation.clip_start_s, annotation.clip_end_s)
+          && sameCardSource(card, {
+            filename: annotation.source_video || "",
+            label: annotation.source_video || "",
+            fingerprint: annotation.source_video_fingerprint || "",
+          })
+      ));
+    });
+    const nextEvents = [
+      ...retainedEvents,
+      ...cardsToPersist.flatMap((card) => card.events.map((event, index) => eventFromCard(card, event, index))),
+    ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
+
+    const existingAnalysis = session?.ai_analysis || {};
+    const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
+      ? existingAnalysis._video_pass_findings
+      : [];
+    const persistedCards = cardsToPersist.map((card) => persistedCardFrom(card));
+    const nextVideoPassFindings = [
+      ...persistedCards,
+      ...existingVideoPassFindings.filter((item) => (
+        !persistedCards.some((persistedCard) => item?.id === persistedCard.id)
+          && !cardsToPersist.some((card) => sameSavedCardClip(card, item))
+      )),
+    ].slice(0, 80);
+    const updatedAt = new Date().toISOString();
+    const nextAnalysisBase = {
+      ...existingAnalysis,
+      _video_pass_findings: nextVideoPassFindings,
+      _video_pass_findings_updated_at: updatedAt,
+      _video_pass_detail_flow: compactVideoPassFlow(nextVideoPassFindings),
+    };
+    const nextAnalysis = {
+      ...nextAnalysisBase,
+      _video_pass_digest: buildSessionVideoPassDigest({ ai_analysis: nextAnalysisBase }),
+    };
+    const updated = await base44.entities.Session.update(session.id, {
+      event_timeline: nextEvents,
+      ai_analysis: nextAnalysis,
+    });
+    onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, ai_analysis: nextAnalysis });
+    setAcceptedIds((prev) => new Set([...prev, ...cardsToPersist.map((card) => card.id)]));
+    setExpanded((prev) => cardsToPersist.reduce((next, card) => ({ ...next, [card.id]: false }), { ...prev }));
   };
 
   if (!availableVideos.length) {
@@ -629,7 +944,7 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
         </Button>
       </div>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto_auto_auto]">
+      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto_auto_auto_auto_auto]">
         <select
           value={selectedVideo?.path || selectedPath}
           onChange={(event) => setSelectedPath(event.target.value)}
@@ -640,6 +955,18 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
           ))}
         </select>
         <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
+          View
+          <select
+            value={selectedVideoRole}
+            onChange={(event) => setSelectedVideoRole(event.target.value)}
+            className="max-w-44 bg-transparent text-foreground outline-none"
+          >
+            {VIDEO_ROLE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
           Mode
           <select
             value={scanMode}
@@ -649,6 +976,16 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
             <option value="smart">Smart windows</option>
             <option value="continue">Continue forward</option>
           </select>
+        </label>
+        <label className={`flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs ${scanMode === "continue" ? "text-muted-foreground" : "text-muted-foreground/50"}`}>
+          <input
+            type="checkbox"
+            checked={autoContinue}
+            disabled={scanMode !== "continue"}
+            onChange={(event) => setAutoContinue(event.target.checked)}
+            className="h-3.5 w-3.5 accent-primary"
+          />
+          Auto-continue
         </label>
         <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
           Windows
@@ -673,6 +1010,11 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
           />
         </label>
       </div>
+      {selectedVideoRoleHelper && (
+        <p className="mt-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-semibold text-primary">{videoRoleLabel(selectedVideoRole)} focus:</span> {selectedVideoRoleHelper}
+        </p>
+      )}
 
       <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
         {scanMode === "continue" && (
@@ -720,6 +1062,78 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
         </div>
       )}
 
+      <div className="mt-3 rounded-xl border border-border bg-card/60 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h5 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
+              <Mic className="h-3.5 w-3.5" /> AI Audio Pass
+            </h5>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Local audio scan from the current cursor. Only short active snippets are sent to Whisper for spoken notes.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={runAudioPass} disabled={audioRunning || !selectedVideo} className="h-8">
+            {audioRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Mic className="mr-2 h-3.5 w-3.5" />}
+            Listen from {fmtMmSs(scanCursor)}
+          </Button>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+            Scan minutes
+            <input
+              type="number"
+              min="1"
+              max="15"
+              value={Math.round(audioWindowSeconds / 60)}
+              onChange={(event) => setAudioWindowSeconds(clamp((Number(event.target.value) || 5) * 60, 60, 900))}
+              className="w-14 bg-transparent text-foreground outline-none"
+            />
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+            Max snippets
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={audioMaxSnippets}
+              onChange={(event) => setAudioMaxSnippets(clamp(Number(event.target.value) || 10, 1, 20))}
+              className="w-14 bg-transparent text-foreground outline-none"
+            />
+          </label>
+        </div>
+        {(audioStatus || audioError) && (
+          <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${audioError ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-primary/20 bg-primary/10 text-primary"}`}>
+            {audioError || audioStatus}
+          </div>
+        )}
+        {audioResult?.events?.length > 0 && (
+          <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/15 px-3 py-2">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Draft Audio Timeline Notes</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {fmtMmSs(audioResult.startSeconds)} to {fmtMmSs(audioResult.endSeconds)} · {audioResult.transcribedSegments} spoken segment{audioResult.transcribedSegments === 1 ? "" : "s"}
+                </p>
+              </div>
+              <Button type="button" size="sm" variant="outline" className="h-7" onClick={acceptAudioEvents} disabled={audioAccepted}>
+                <Check className="mr-1 h-3.5 w-3.5" /> {audioAccepted ? "Accepted" : "Save Audio Notes"}
+              </Button>
+            </div>
+            <div className="space-y-1 p-2">
+              {audioResult.events.map((event, index) => (
+                <div key={`${event.startSeconds}-${index}`} className="rounded-md bg-background/70 px-2 py-1.5 text-sm">
+                  <span className="mr-2 font-mono font-semibold text-primary">{fmtMmSs(event.startSeconds)}</span>
+                  <span>{event.note}</span>
+                  {event.transcriptionError && (
+                    <p className="mt-1 text-[10px] text-destructive">{event.transcriptionError}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {cards.length > 0 && (
         <div className="mt-3 grid gap-3">
           {cards.map((card) => {
@@ -740,6 +1154,7 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {card.sourceVideo?.label || card.sourceVideo?.filename} · {fmtMmSs(card.window.start)} to {fmtMmSs(card.window.end)} · {card.events.length} timeline event{card.events.length === 1 ? "" : "s"}
+                          {" "}· {videoRoleLabel(card.sourceVideoRole || inferVideoRole(card.sourceVideo))}
                         </p>
                       </div>
                       <button
@@ -786,6 +1201,7 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                         </div>
                         <p className="text-xs text-muted-foreground">
                           {card.sourceVideo?.label || card.sourceVideo?.filename} · {fmtMmSs(card.window.start)} to {fmtMmSs(card.window.end)}
+                          {" "}· {videoRoleLabel(card.sourceVideoRole || inferVideoRole(card.sourceVideo))}
                         </p>
                       </div>
                       <button
@@ -823,8 +1239,15 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
                         <div className="space-y-1">
                           {card.events.map((event, index) => (
                             <div key={`${event.time_s}-${index}`} className="flex items-start gap-2 rounded-md bg-background/60 px-2 py-1.5 text-xs">
-                              <span className="font-mono font-bold text-primary">{fmtMmSs(event.time_s)}</span>
-                              <span className="leading-relaxed text-foreground/85">{event.note}</span>
+                              <span className="mt-1.5 shrink-0 font-mono font-bold text-primary">{fmtMmSs(event.time_s)}</span>
+                              <textarea
+                                value={event.note || ""}
+                                onChange={(changeEvent) => updateCardEventNote(card.id, index, changeEvent.target.value)}
+                                disabled={accepted}
+                                rows={2}
+                                className="min-h-10 flex-1 resize-y rounded-md border border-border bg-background/80 px-2 py-1.5 leading-relaxed text-foreground/85 outline-none focus:border-primary/50 disabled:cursor-not-allowed disabled:opacity-70"
+                                aria-label={`Edit draft event note ${index + 1}`}
+                              />
                             </div>
                           ))}
                         </div>
@@ -838,6 +1261,19 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
               </article>
             );
           })}
+          {cards.some((card) => !isCardAccepted(card, session, acceptedIds)) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/5 px-3 py-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Batch Review Ready</p>
+                <p className="text-xs text-muted-foreground">
+                  Saves all unaccepted Sarah video-pass finding cards and edited timeline events in this list.
+                </p>
+              </div>
+              <Button type="button" size="sm" onClick={acceptAllDraftCards} className="h-8">
+                <Check className="mr-2 h-3.5 w-3.5" /> Accept All Findings & Events
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

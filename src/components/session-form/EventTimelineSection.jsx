@@ -3,6 +3,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, Pencil, Check, X } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
+} from "@/components/ui/alert-dialog";
 
 export const EVENT_CATEGORIES = [
   { value: "stimulation", label: "Stimulation", color: "#3b82f6" },
@@ -213,6 +217,7 @@ export default function EventTimelineSection({ data, onChange }) {
   };
 
   const removeEvent = (idx) => update(events.filter((_, i) => i !== idx));
+  const clearAllEvents = () => update([]);
 
   const updateEvent = (idx, updated) => {
     const newEvents = events.map((e, i) => i === idx ? updated : e).sort((a, b) => a.time_s - b.time_s);
@@ -221,9 +226,34 @@ export default function EventTimelineSection({ data, onChange }) {
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">
-        {isExploration ? "Observation Timeline" : "Event Timeline"}
-      </h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">
+          {isExploration ? "Observation Timeline" : "Event Timeline"}
+        </h3>
+        {events.length > 0 && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button type="button" variant="outline" size="sm" className="h-8 border-destructive/30 text-destructive hover:bg-destructive/10">
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete all
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete all event notes?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This clears every event note in this timeline editor. Save the session afterward to persist the change.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={clearAllEvents} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                  Delete all event notes
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+      </div>
       <p className="text-xs text-muted-foreground -mt-2">
         {isExploration
           ? "Log notable moments, sensations, instrumentation changes, comfort shifts, or physical observations. Select multiple tags."

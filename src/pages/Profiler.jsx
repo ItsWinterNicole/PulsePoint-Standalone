@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
+import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw, History } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
@@ -25,6 +25,8 @@ function briefText(value, max = 180) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
+
+const PROFILE_ARCHIVE_LIMIT = 30;
 
 function avg(values) {
   const nums = values.map(Number).filter(Number.isFinite);
@@ -241,6 +243,60 @@ async function saveClusterAnalysisPatch(patch, sessionCount) {
     ...patch,
     ...(sessionCount != null ? { session_count: sessionCount } : {}),
   });
+}
+
+function profileArchiveId(kind, result) {
+  const generated = result?._meta?.last_generated_at || result?._meta?.updated_at || new Date().toISOString();
+  const sourceCount = result?._meta?.source_session_count ?? "unknown";
+  return `${kind}-${generated}-${sourceCount}`;
+}
+
+function buildProfileArchiveEntry(kind, label, result) {
+  const meta = result?._meta || {};
+  const generatedAt = meta.last_generated_at || meta.updated_at || new Date().toISOString();
+  return {
+    id: profileArchiveId(kind, result),
+    kind,
+    label,
+    archived_at: new Date().toISOString(),
+    generated_at: generatedAt,
+    source_session_count: meta.source_session_count ?? null,
+    motion_evidence_session_count: meta.motion_evidence_session_count ?? null,
+    source_signature: meta.source_signature || "",
+    result,
+  };
+}
+
+function mergeProfileArchive(existingArchive = [], entry) {
+  const archive = Array.isArray(existingArchive) ? existingArchive : [];
+  return [
+    entry,
+    ...archive.filter((item) => item?.id !== entry.id && item?.generated_at !== entry.generated_at),
+  ].slice(0, PROFILE_ARCHIVE_LIMIT);
+}
+
+async function saveProfileResultWithArchive({
+  resultKey,
+  archiveKey,
+  kind,
+  label,
+  result,
+  sessionCount,
+}) {
+  const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
+  const entry = buildProfileArchiveEntry(kind, label, result);
+  const archive = mergeProfileArchive(existing[0]?.[archiveKey], entry);
+  const patch = {
+    [resultKey]: result,
+    [archiveKey]: archive,
+    ...(sessionCount != null ? { session_count: sessionCount } : {}),
+  };
+  if (existing[0]) {
+    await base44.entities.SessionClusterAnalysis.update(existing[0].id, patch);
+  } else {
+    await base44.entities.SessionClusterAnalysis.create(patch);
+  }
+  return archive;
 }
 
 async function runProfilerAIJob(payload, label, onProgress) {
@@ -550,16 +606,93 @@ function SectionCard({ icon, title, color, children, defaultCollapsed = false })
   );
 }
 
+function profileArchivePreview(entry) {
+  const result = entry?.result || {};
+  const firstArrayText = [
+    result.arousal_physiology,
+    result.constitutional_and_systemic_context,
+    result.pelvic_and_external_anatomy,
+    result.stimulation_profile,
+  ].find((items) => Array.isArray(items) && items.length)?.[0];
+  return briefText(result.profile_overview || result.overview || firstArrayText || "No preview available for this archived run.", 320);
+}
+
+function profileArchiveGeneratedLabel(entry) {
+  return entry?.generated_at ? formatGeneratedAt(entry.generated_at) : "Unknown generation time";
+}
+
+function isCurrentArchiveEntry(entry, currentResult) {
+  const currentGenerated = currentResult?._meta?.last_generated_at || currentResult?._meta?.updated_at || "";
+  return Boolean(currentGenerated && entry?.generated_at === currentGenerated);
+}
+
+function ProfileArchiveList({ title = "Profile Run Archive", archive = [], currentResult, onViewRun }) {
+  if (!archive.length) return null;
+  return (
+    <div className="rounded-lg border border-border bg-muted/10 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+            <History className="h-3.5 w-3.5" /> {title}
+          </h4>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            Saved profiler runs for longitudinal review. Latest {PROFILE_ARCHIVE_LIMIT} are retained.
+          </p>
+        </div>
+        <Badge variant="secondary" className="text-[10px]">{archive.length} saved</Badge>
+      </div>
+      <div className="mt-3 space-y-2">
+        {archive.map((entry) => {
+          const current = isCurrentArchiveEntry(entry, currentResult);
+          return (
+            <details key={entry.id || entry.generated_at} className="rounded-lg border border-border bg-background/60 px-3 py-2">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-semibold text-foreground">
+                    {profileArchiveGeneratedLabel(entry)}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                    {entry.source_session_count ?? "?"} source sessions
+                    {entry.motion_evidence_session_count != null ? ` · ${entry.motion_evidence_session_count} with motion evidence` : ""}
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  {current && <Badge variant="outline" className="text-[10px]">Current</Badge>}
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+              </summary>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{profileArchivePreview(entry)}</p>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => onViewRun?.(entry.result)}
+                >
+                  View This Run
+                </Button>
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = false }) {
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
+  const [archive, setArchive] = useState([]);
   const [error, setError] = useState("");
   const profileStale = isProfileAIContentStale(result, sessions);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
       if (rows[0]?.result) setResult(rows[0].result);
+      if (Array.isArray(rows[0]?.profile_result_archive)) setArchive(rows[0].profile_result_archive);
     });
   }, []);
 
@@ -610,7 +743,15 @@ function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = fal
           _meta: buildProfileAIContentMeta(sessions, result?._meta, completedAt(completedJob)),
         };
         setResult(storedResult);
-        await saveClusterAnalysisPatch({ result: storedResult }, sessions.length);
+        const nextArchive = await saveProfileResultWithArchive({
+          resultKey: "result",
+          archiveKey: "profile_result_archive",
+          kind: "comprehensive_profile",
+          label: "Comprehensive Physiological Profile",
+          result: storedResult,
+          sessionCount: sessions.length,
+        });
+        if (!cancelled) setArchive(nextArchive);
       } catch (err) {
         if (!cancelled) console.warn("AI profile reconnect skipped:", err);
       } finally {
@@ -797,7 +938,15 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
     };
     setResult(storedResult);
 
-    await saveClusterAnalysisPatch({ result: storedResult }, sessions.length);
+    const nextArchive = await saveProfileResultWithArchive({
+      resultKey: "result",
+      archiveKey: "profile_result_archive",
+      kind: "comprehensive_profile",
+      label: "Comprehensive Physiological Profile",
+      result: storedResult,
+      sessionCount: sessions.length,
+    });
+    setArchive(nextArchive);
     } catch (err) {
       console.error("AI profile generation failed:", err);
       setError(aiErrorMessage(err));
@@ -926,6 +1075,13 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
           }}
         />
       )}
+
+      <ProfileArchiveList
+        title="Comprehensive Profile Run Archive"
+        archive={archive}
+        currentResult={result}
+        onViewRun={(archivedResult) => archivedResult && setResult(archivedResult)}
+      />
     </SectionCard>
   );
 }
@@ -934,6 +1090,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoa
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
+  const [archive, setArchive] = useState([]);
   const [error, setError] = useState("");
   const profileStale = isProfileAIContentStale(result, sessions);
 
@@ -941,6 +1098,9 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoa
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
       if (rows[0]?.anatomical_physiological_profile_result) {
         setResult(rows[0].anatomical_physiological_profile_result);
+      }
+      if (Array.isArray(rows[0]?.anatomical_physiological_profile_archive)) {
+        setArchive(rows[0].anatomical_physiological_profile_archive);
       }
     });
   }, []);
@@ -992,7 +1152,15 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoa
           _meta: buildProfileAIContentMeta(sessions, result?._meta, completedAt(completedJob)),
         };
         setResult(storedResult);
-        await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: storedResult }, sessions.length);
+        const nextArchive = await saveProfileResultWithArchive({
+          resultKey: "anatomical_physiological_profile_result",
+          archiveKey: "anatomical_physiological_profile_archive",
+          kind: "anatomical_physiological_profile",
+          label: "Anatomical & Physiological Profile",
+          result: storedResult,
+          sessionCount: sessions.length,
+        });
+        if (!cancelled) setArchive(nextArchive);
       } catch (err) {
         if (!cancelled) console.warn("Anatomical physiological profile reconnect skipped:", err);
       } finally {
@@ -1082,7 +1250,15 @@ Write directly to the person in clear, clinically grounded language. Favor meani
         _meta: buildProfileAIContentMeta(sessions, result?._meta),
       };
       setResult(storedResult);
-      await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: storedResult }, sessions.length);
+      const nextArchive = await saveProfileResultWithArchive({
+        resultKey: "anatomical_physiological_profile_result",
+        archiveKey: "anatomical_physiological_profile_archive",
+        kind: "anatomical_physiological_profile",
+        label: "Anatomical & Physiological Profile",
+        result: storedResult,
+        sessionCount: sessions.length,
+      });
+      setArchive(nextArchive);
     } catch (err) {
       console.error("Anatomical physiological profile generation failed:", err);
       setError(aiErrorMessage(err));
@@ -1216,6 +1392,13 @@ Write directly to the person in clear, clinically grounded language. Favor meani
           }}
         />
       )}
+
+      <ProfileArchiveList
+        title="A&P Profile Run Archive"
+        archive={archive}
+        currentResult={result}
+        onViewRun={(archivedResult) => archivedResult && setResult(archivedResult)}
+      />
     </SectionCard>
   );
 }

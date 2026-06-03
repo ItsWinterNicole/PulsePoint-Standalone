@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard } from "lucide-react";
+import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard, Sparkles } from "lucide-react";
 import AITagSuggester from "../components/AITagSuggester";
 import AIChat from "../components/AIChat";
 import SessionExportButton from "../components/SessionExportButton";
@@ -22,7 +22,6 @@ import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
-import AIVideoPassPanel from "../components/AIVideoPassPanel";
 import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
 import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
@@ -92,6 +91,7 @@ function EventNotesPanel({
   motionSummary,
   selectedIndex,
   onSelect,
+  onDeleteAll,
   onUpdateMotionVerification,
   title = "Timeline Notes",
   helper = "Click a note to highlight its pin.",
@@ -125,7 +125,35 @@ function EventNotesPanel({
           <h4 className="text-xs font-semibold uppercase tracking-wider text-primary">{title}</h4>
           {helper && <p className="text-xs text-muted-foreground">{helper}</p>}
         </div>
-        <span className="text-xs font-mono text-muted-foreground">{events.length}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono text-muted-foreground">{events.length}</span>
+          {onDeleteAll && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/10"
+                >
+                  <Trash2 className="h-3 w-3" /> Delete all
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete all event notes?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This clears every event note for this session. Telemetry, media, AI summaries, and the session itself will remain.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={onDeleteAll} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    Delete all event notes
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {[
@@ -244,7 +272,6 @@ export default function SessionDetail() {
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
-  const [mediaSeekTime, setMediaSeekTime] = useState(null);
   const handleAnalysisSaved = useCallback((field, value) => {
     setSession((current) => (current ? { ...current, [field]: value } : current));
   }, []);
@@ -264,6 +291,12 @@ export default function SessionDetail() {
     await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
     setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
   }, [session]);
+  const handleDeleteAllEventNotes = useCallback(async () => {
+    if (!session?.id) return;
+    await base44.entities.Session.update(session.id, { event_timeline: [] });
+    setSelectedEventIdx(null);
+    setSession((current) => (current ? { ...current, event_timeline: [] } : current));
+  }, [session?.id]);
 
   const nearClimaxEvents = useMemo(() => {
     if (!session) return [];
@@ -1002,22 +1035,28 @@ export default function SessionDetail() {
                     session={s}
                     timelineRows={timelineRows}
                     recordType="session"
-                    externalSeekTime={mediaSeekTime}
                   />
                 </div>
               </details>
             )}
             {linkedLocalVideos.length > 0 && (
-              <AIVideoPassPanel
-                session={s}
-                timelineRows={timelineRows}
-                linkedLocalVideos={linkedLocalVideos}
-                onSessionUpdate={setSession}
-                onCursorChange={(seconds) => {
-                  setInspectionTime(seconds);
-                  setMediaSeekTime({ time: seconds, nonce: Date.now() });
-                }}
-              />
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
+                      <Sparkles className="h-3.5 w-3.5" /> AI Assisted Annotation
+                    </h4>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Run Sarah video/audio passes, choose main vs feet vs lateral interpretation, and accept findings into this session.
+                    </p>
+                  </div>
+                  <Button asChild type="button" size="sm" className="h-8">
+                    <Link to={`/sessions/${s.id}/ai-annotation`}>
+                      <Clapperboard className="mr-2 h-3.5 w-3.5" /> Open Workbench
+                    </Link>
+                  </Button>
+                </div>
+              </div>
             )}
             {s.media_images?.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
@@ -1170,6 +1209,7 @@ export default function SessionDetail() {
               motionSummary={s.motion_analysis_summary}
               selectedIndex={selectedEventIdx}
               onSelect={setSelectedEventIdx}
+              onDeleteAll={handleDeleteAllEventNotes}
               onUpdateMotionVerification={handleMotionVerificationUpdate}
               title="Event Notes"
               helper="Use this as the readable log beside the timeline visualizations."

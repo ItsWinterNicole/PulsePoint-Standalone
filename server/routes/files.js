@@ -31,6 +31,12 @@ const LOCAL_VIDEO_MIME = {
   '.wmv': 'video/x-ms-wmv',
 };
 
+const AUDIO_PASS_WHISPER_PROMPT = [
+  'PulsePoint session audio note.',
+  'Common phrases include: near climax event passed, Foley near the internal sphincter, stimulation paused, stimulation resumed, perineum pressure, internal sphincter, glans, foreskin, sleeve, vibrator, TENS, e-stim, catheter, ejaculation, recovery.',
+  'Transcribe short spoken session notes accurately. Preserve anatomical terms.',
+].join(' ');
+
 function normalizeLocalVideoPath(value) {
   const raw = String(value || '').trim().replace(/^file:\/+/, '');
   if (!raw) return '';
@@ -68,6 +74,144 @@ async function localVideoMetadata(filePath) {
     checkedAt: new Date().toISOString(),
     stream_url: `/api/files/local-video/stream?path=${encodeURIComponent(resolved)}`,
   };
+}
+
+async function getMediaDurationSeconds(filePath) {
+  const { stdout } = await runProcess('ffprobe', [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1',
+    filePath,
+  ]);
+  const value = Number.parseFloat(String(stdout || '').trim());
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function parseSilenceDetect(stderr, start, end) {
+  const silenceEvents = [];
+  String(stderr || '').split(/\r?\n/).forEach((line) => {
+    const startMatch = line.match(/silence_start:\s*([0-9.]+)/);
+    if (startMatch) {
+      silenceEvents.push({ type: 'start', time: Number(startMatch[1]) });
+      return;
+    }
+    const endMatch = line.match(/silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)/);
+    if (endMatch) {
+      silenceEvents.push({ type: 'end', time: Number(endMatch[1]), duration: Number(endMatch[2]) });
+    }
+  });
+
+  const active = [];
+  let cursor = start;
+  let silenceStart = null;
+  silenceEvents
+    .filter((event) => Number.isFinite(event.time))
+    .sort((a, b) => a.time - b.time)
+    .forEach((event) => {
+      const absolute = start + event.time;
+      if (event.type === 'start') {
+        if (absolute > cursor + 0.35) active.push({ start: cursor, end: Math.min(absolute, end) });
+        silenceStart = absolute;
+      } else if (event.type === 'end') {
+        cursor = Math.min(Math.max(absolute, silenceStart || cursor), end);
+        silenceStart = null;
+      }
+    });
+  if (cursor < end - 0.35) active.push({ start: cursor, end });
+
+  return active
+    .map((segment) => ({
+      start: Math.max(start, segment.start),
+      end: Math.min(end, segment.end),
+      duration: Math.max(0, Math.min(end, segment.end) - Math.max(start, segment.start)),
+    }))
+    .filter((segment) => segment.duration >= 0.75);
+}
+
+function mergeAudioSegments(segments, maxGapSeconds = 0.55, maxDurationSeconds = 12) {
+  const merged = [];
+  segments.forEach((segment) => {
+    const last = merged[merged.length - 1];
+    if (last && segment.start - last.end <= maxGapSeconds && segment.end - last.start <= maxDurationSeconds) {
+      last.end = segment.end;
+      last.duration = last.end - last.start;
+      return;
+    }
+    merged.push({ ...segment });
+  });
+  return merged;
+}
+
+async function detectAudioActivity(sourcePath, start, duration) {
+  try {
+    const { stderr } = await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-nostats',
+      '-ss', String(start),
+      '-t', String(duration),
+      '-i', sourcePath,
+      '-vn',
+      '-af', 'silencedetect=noise=-38dB:d=0.45',
+      '-f', 'null',
+      '-',
+    ]);
+    return mergeAudioSegments(parseSilenceDetect(stderr, start, start + duration));
+  } catch (error) {
+    const fallback = mergeAudioSegments(parseSilenceDetect(error?.message || '', start, start + duration));
+    if (fallback.length) return fallback;
+    throw error;
+  }
+}
+
+async function extractAudioSnippet(sourcePath, segment, filename) {
+  const outputPath = path.join(uploadDir, filename);
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-ss', String(Math.max(0, segment.start - 0.15)),
+    '-t', String(Math.min(14, segment.duration + 0.3)),
+    '-i', sourcePath,
+    '-vn',
+    '-ac', '1',
+    '-ar', '16000',
+    '-c:a', 'libmp3lame',
+    '-b:a', '48k',
+    outputPath,
+  ]);
+  return outputPath;
+}
+
+async function transcribeAudioSnippet(filePath) {
+  if (!process.env.OPENAI_API_KEY) {
+    const error = new Error('Missing OPENAI_API_KEY for speech transcription.');
+    error.status = 500;
+    throw error;
+  }
+  const bytes = await fsp.readFile(filePath);
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: 'audio/mpeg' }), path.basename(filePath));
+  form.append('model', 'whisper-1');
+  form.append('language', 'en');
+  form.append('prompt', AUDIO_PASS_WHISPER_PROMPT);
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: form,
+  });
+  if (!response.ok) {
+    const error = new Error(await response.text());
+    error.status = response.status;
+    throw error;
+  }
+  const data = await response.json();
+  return String(data?.text || '').trim();
+}
+
+function audioEventFromTranscript(segment, transcript) {
+  const text = String(transcript || '').trim();
+  if (text) return `Spoken note/audio: "${text}"`;
+  if (segment.duration >= 3) return 'Sustained audible breathing, sigh, or vocalization candidate detected.';
+  return 'Brief audio activity detected.';
 }
 
 async function handleLocalVideoError(res, error) {
@@ -401,6 +545,76 @@ filesRouter.post('/local-video/clip-preview', async (req, res) => {
   } catch (error) {
     const status = error?.status || (error?.code === 'ENOENT' ? 404 : 500);
     res.status(status).json({ error: error?.message || 'Could not generate local video clip preview' });
+  }
+});
+
+filesRouter.post('/local-video/audio-pass', async (req, res) => {
+  const tempFiles = [];
+  try {
+    const requestedPath = normalizeLocalVideoPath(req.body?.path);
+    if (!requestedPath) return res.status(400).json({ error: 'Missing local video path.' });
+    const meta = await localVideoMetadata(requestedPath);
+    const duration = await getMediaDurationSeconds(meta.path).catch(() => 0);
+    const start = Math.max(0, Number(req.body?.startSeconds || 0));
+    const requestedWindow = Math.max(15, Math.min(900, Number(req.body?.windowSeconds || 300)));
+    const end = duration ? Math.min(duration, start + requestedWindow) : start + requestedWindow;
+    const windowDuration = Math.max(0.25, end - start);
+    const maxSnippets = Math.max(1, Math.min(20, Number(req.body?.maxSnippets || 10)));
+    const transcribe = req.body?.transcribe !== false;
+    const rawSegments = await detectAudioActivity(meta.path, start, windowDuration);
+    const segments = rawSegments
+      .filter((segment) => segment.duration >= 0.9)
+      .sort((a, b) => b.duration - a.duration)
+      .slice(0, maxSnippets)
+      .sort((a, b) => a.start - b.start);
+
+    const events = [];
+    for (let i = 0; i < segments.length; i += 1) {
+      const segment = segments[i];
+      let transcript = '';
+      let transcriptionError = '';
+      if (transcribe) {
+        const snippetFilename = `${Date.now()}-${crypto.randomUUID()}-audio-pass-${i + 1}.mp3`;
+        const snippetPath = await extractAudioSnippet(meta.path, segment, snippetFilename);
+        tempFiles.push(snippetPath);
+        try {
+          transcript = await transcribeAudioSnippet(snippetPath);
+        } catch (error) {
+          transcriptionError = error?.message || 'Could not transcribe this snippet.';
+        }
+      }
+      events.push({
+        startSeconds: Number(segment.start.toFixed(2)),
+        endSeconds: Number(segment.end.toFixed(2)),
+        durationSeconds: Number(segment.duration.toFixed(2)),
+        transcript,
+        transcriptionError,
+        note: audioEventFromTranscript(segment, transcript),
+        category: transcript ? ['audio_note', 'spoken_note'] : ['audio_activity'],
+        annotation_tags: transcript ? ['spoken_note', 'audio_evidence'] : ['audio_evidence'],
+        confidence: transcript ? 'high' : 'moderate',
+      });
+    }
+
+    res.json({
+      ok: true,
+      source_filename: meta.filename,
+      source_fingerprint: meta.fingerprint,
+      startSeconds: start,
+      endSeconds: end,
+      durationSeconds: windowDuration,
+      detectedSegments: rawSegments.length,
+      transcribedSegments: events.filter((event) => event.transcript).length,
+      events,
+      summary: events.length
+        ? `${events.length} audio activity segment${events.length === 1 ? '' : 's'} found; ${events.filter((event) => event.transcript).length} contained recognized speech.`
+        : 'No clear audio activity segments were detected in this window.',
+    });
+  } catch (error) {
+    const status = error?.status || (error?.code === 'ENOENT' ? 404 : 500);
+    res.status(status).json({ error: error?.message || 'Could not analyze local video audio.' });
+  } finally {
+    await Promise.all(tempFiles.map((file) => fsp.unlink(file).catch(() => {})));
   }
 });
 
