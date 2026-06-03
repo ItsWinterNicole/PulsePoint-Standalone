@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
@@ -179,6 +179,14 @@ function isTelemetryOnlyFinding(finding) {
   return !/(stimulation|contact|stroke|hand|shaft|glans|genital|penis|scrot|foreskin|meatus|erection|engorg|flaccid|ejaculate|pre-ejac|lubric|device|sleeve|foley|perine|pelvic|abdomen|chest|breath|respir|foot|feet|toe|heel|leg|tens|relax|tens)/.test(text);
 }
 
+function isGenericControlObjectMention(item) {
+  const text = `${item?.title || ""} ${item?.text || item?.findingText || ""} ${item?.note || ""}`.toLowerCase();
+  if (!/(control object|control device|dark handheld object|handheld controller|remote|mouse|keyboard|phone|side-table object)/.test(text)) {
+    return false;
+  }
+  return !/(vibrator|sleeve|foley|catheter|lubric|lube|bottle|ring|pump|tens|e-stim|estim|electrode|known device|identified device)/.test(text);
+}
+
 function neutralizeIntentLanguage(text) {
   return String(text || "")
     .replace(/\b(second|third|another|repeated)\s+hand-lift\s+edging\s+maneuver\b/gi, "$1 hand-lift stimulation change")
@@ -258,7 +266,7 @@ function videoRoleLabel(role) {
 function videoFocusInstruction(video = {}, selectedRole = "") {
   const role = selectedRole || inferVideoRole(video);
   if (role === "feet") {
-    return "This is a foot/lower-body angle. Prioritize foot behavior, toe/heel position, planting or lift, leg tensing/relaxing, tremor, shudder, left/right asymmetry, and lower-body transitions. Mention genital/stimulation state only if clearly visible.";
+    return "This is the feet/lower-body evidence lane. Findings and draft timeline events must be about feet, toes, heels, soles, ankles, legs, lower-body tension/relaxation/bracing/asymmetry, tremor, shudder, and lower-body transitions. Do not create hand, genital, stimulation, device, lubricant, control-object, or erection events from the feet lane; those belong to main/composite or lateral views. You may mention an upper-body/genital/session-note detail only as brief context inside a lower-body observation when it directly explains a visible foot or leg change.";
   }
   if (role === "lateral") {
     return "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
@@ -266,7 +274,117 @@ function videoFocusInstruction(video = {}, selectedRole = "") {
   return "This is a main/genital-composite session view. Prioritize stimulation mechanics, visible genital state, device/lubrication use, hand contact transitions, cautious visible fluid/moisture labeling, and only then supporting body movement.";
 }
 
-function normalizeAIResult(raw, fallbackWindow) {
+const LOWER_BODY_TERMS = [
+  "foot",
+  "feet",
+  "toe",
+  "toes",
+  "heel",
+  "heels",
+  "sole",
+  "soles",
+  "ankle",
+  "ankles",
+  "leg",
+  "legs",
+  "thigh",
+  "thighs",
+  "knee",
+  "knees",
+  "calf",
+  "calves",
+  "lower-body",
+  "lower body",
+  "plant",
+  "planted",
+  "planting",
+  "brace",
+  "bracing",
+  "tremor",
+  "shudder",
+  "tension",
+  "tensing",
+  "relax",
+  "relaxed",
+  "splay",
+  "outward",
+  "inward",
+  "curl",
+  "curled",
+  "flex",
+  "flexes",
+  "dorsiflex",
+  "plantar",
+  "asymmetry",
+];
+
+const NON_FEET_LANE_TERMS = [
+  "hand",
+  "hands",
+  "finger",
+  "fingers",
+  "thumb",
+  "palm",
+  "wrist",
+  "control object",
+  "mouse",
+  "remote",
+  "side table",
+  "genital",
+  "penis",
+  "penile",
+  "shaft",
+  "glans",
+  "scrot",
+  "foreskin",
+  "perine",
+  "stimulation",
+  "contact",
+  "stroke",
+  "stroking",
+  "lubrication",
+  "lubricant",
+  "lube",
+  "device",
+  "sleeve",
+  "foley",
+  "erection",
+  "engorgement",
+  "flaccid",
+  "ejaculation",
+  "ejaculate",
+  "pre-ejaculate",
+  "orgasm",
+  "climax",
+  "cum",
+];
+
+function firstTermIndex(text, terms) {
+  const value = String(text || "").toLowerCase();
+  return terms.reduce((best, term) => {
+    const index = value.indexOf(term);
+    if (index === -1) return best;
+    return best === -1 ? index : Math.min(best, index);
+  }, -1);
+}
+
+function isOutOfLaneForRole(item, role) {
+  if (role !== "feet") return false;
+  const text = [
+    item?.title,
+    item?.text,
+    item?.note,
+    item?.category,
+    Array.isArray(item?.annotation_tags) ? item.annotation_tags.join(" ") : "",
+  ].filter(Boolean).join(" ");
+  const lowerIndex = firstTermIndex(text, LOWER_BODY_TERMS);
+  const otherIndex = firstTermIndex(text, NON_FEET_LANE_TERMS);
+  if (otherIndex === -1) return false;
+  if (lowerIndex === -1) return true;
+  return otherIndex < lowerIndex;
+}
+
+function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
   const value = typeof raw === "string" ? null : raw;
   const findings = Array.isArray(value?.findings) && value.findings.length
     ? value.findings
@@ -284,7 +402,7 @@ function normalizeAIResult(raw, fallbackWindow) {
       text: neutralizeIntentLanguage(finding.text || finding.findingText || ""),
       confidence: finding.confidence || "moderate",
       category: finding.category || "other",
-    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding)),
+    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isOutOfLaneForRole(finding, selectedRole)),
     events: events.map((event) => {
       const note = cleanDraftEventNote(event.note || event.text || "");
       return {
@@ -294,7 +412,7 @@ function normalizeAIResult(raw, fallbackWindow) {
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
         confidence: event.confidence || "moderate",
       };
-    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note })),
+    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isOutOfLaneForRole(event, selectedRole)),
   };
 }
 
@@ -504,6 +622,7 @@ export default function AIVideoPassPanel({
   onCursorChange,
 }) {
   const availableVideos = useMemo(() => linkedLocalVideos.filter((video) => video?.path && video.exists !== false), [linkedLocalVideos]);
+  const previewVideoRef = useRef(null);
   const [selectedPath, setSelectedPath] = useState(availableVideos[0]?.path || "");
   const [clipSeconds, setClipSeconds] = useState(24);
   const [windowCount, setWindowCount] = useState(5);
@@ -525,6 +644,7 @@ export default function AIVideoPassPanel({
   const [audioAccepted, setAudioAccepted] = useState(false);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
+  const selectedVideoStreamUrl = selectedVideo?.path ? base44.integrations.Core.localVideoStreamUrl(selectedVideo.path) : "";
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
   const selectedVideoRoleHelper = VIDEO_ROLE_OPTIONS.find((option) => option.value === selectedVideoRole)?.helper;
   const sessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
@@ -535,8 +655,20 @@ export default function AIVideoPassPanel({
     [scanMode, scanCursor, session, timelineRows, windowCount, clipSeconds],
   );
 
+  const seekPreviewVideo = (seconds) => {
+    const video = previewVideoRef.current;
+    if (!video || !Number.isFinite(Number(seconds))) return;
+    try {
+      video.currentTime = clamp(Number(seconds) || 0, 0, Math.max(0, video.duration || sessionEnd || 0));
+    } catch {
+      // Some browser/container combinations reject seeking before metadata is ready.
+    }
+  };
+
   const resetScanCursor = () => {
     setScanCursor(0);
+    onCursorChange?.(0);
+    seekPreviewVideo(0);
     setStatus("");
   };
 
@@ -545,11 +677,14 @@ export default function AIVideoPassPanel({
     const nextCursor = clamp(Number(seconds) || 0, 0, Math.max(0, sessionEnd - clipSeconds));
     setScanCursor(nextCursor);
     onCursorChange?.(nextCursor);
+    seekPreviewVideo(nextCursor);
     setStatus(`Cursor set to ${fmtMmSs(seconds)}. Run Next Pass will continue from there.`);
   };
 
   useEffect(() => {
     setScanCursor(0);
+    onCursorChange?.(0);
+    seekPreviewVideo(0);
   }, [selectedVideo?.path]);
 
   useEffect(() => {
@@ -659,6 +794,8 @@ Stimulation lifecycle rule: there should usually be only one "stimulation_starte
 Camera/view focus:
 ${videoFocusInstruction(selectedVideo, selectedVideoRole)}
 
+Source-lane rule: treat the selected camera as its own evidence lane. Main/composite owns genital, stimulation, hand contact, device, lubricant, and technique observations. Feet/lower-body owns feet, toes, heels, soles, ankles, legs, planting, bracing, tremor, shudder, and lower-body tension/relaxation observations. Lateral/full-body owns posture, pelvic lift/drop, breathing cues, whole-body tension, and major body transitions. For a feet/lower-body pass, do not draft timeline events about right/left hand movement, genital contact, control objects, lube/device handling, erection/genital state, or stimulation pause/resume unless a visible foot/leg change is the main event.
+
 Observation priorities, in order:
 1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal/perineal state, visible skin color or surface sheen, cautious visible fluid/moisture labeling, pelvic lift/drop, and whether these change from the prior window.
 2. Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift.
@@ -666,7 +803,7 @@ Observation priorities, in order:
 4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
 5. Telemetry only as supporting context from stored session data. Do not visually analyze or report the HR overlay, phase label, trend chart, AVG, MAX, or timer as a finding/event unless it directly supports a visible physiological or stimulation transition.
 
-Low-priority control objects: a mouse, remote, keyboard, phone, dark handheld object, or general control device is not itself a useful finding. Treat it as session-control context unless it directly explains a stimulation pause/resume or hand transition. Prefer "your hand leaves/returns to genital contact" over detailed discussion of the object. If the object could be a mouse/control, do not call it a stimulation device.
+Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object, side-table object, or generic "control object" details. Do not write "reaches for control object", "returns to control object", "handheld controller", or similar language in findings or draft events. If the hand leaves or returns to the body, describe only the relevant body/session change, such as "genital contact pauses", "stimulation resumes", "hand leaves genital contact", or "hand returns to genital contact." Only identify an object when it is a known or clearly visible session-relevant item such as a silicone sleeve, vibrator, lubricant bottle, Foley catheter, TENS/e-stim component, pump, towel, or explicitly user-labeled device.
 
 Output style: write the summary as a flowing chronological observation with the most useful visible physiology and stimulation changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only, each one sentence. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, or the mere presence of a control object.
 
@@ -700,7 +837,7 @@ Nearby session events: ${(session?.event_timeline || [])
 
 Return concise visual findings and 1-3 proposed timeline events. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
           });
-          const normalized = normalizeAIResult(ai, window);
+          const normalized = normalizeAIResult(ai, window, selectedVideoRole);
           const card = {
             id: `${Date.now()}-${batchNumber}-${i}`,
             label,
@@ -1015,6 +1152,50 @@ Return concise visual findings and 1-3 proposed timeline events. Good targets ar
           <span className="font-semibold text-primary">{videoRoleLabel(selectedVideoRole)} focus:</span> {selectedVideoRoleHelper}
         </p>
       )}
+
+      <div className="mt-3 rounded-xl border border-border bg-background/70 p-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-foreground">
+              {selectedVideo?.label || selectedVideo?.filename || "Selected local video"}
+            </p>
+            <p className="text-muted-foreground">
+              Preview at <span className="font-mono text-primary">{fmtMmSs(scanCursor)}</span> · {videoRoleLabel(selectedVideoRole)} lane
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8"
+            onClick={() => seekPreviewVideo(scanCursor)}
+          >
+            Jump video to cursor
+          </Button>
+        </div>
+        {selectedVideoStreamUrl ? (
+          <video
+            key={selectedVideo?.path}
+            ref={previewVideoRef}
+            src={selectedVideoStreamUrl}
+            controls
+            preload="metadata"
+            className="max-h-[34rem] w-full rounded-lg bg-black object-contain"
+            onLoadedMetadata={() => seekPreviewVideo(scanCursor)}
+            onSeeked={(event) => {
+              const nextCursor = clamp(event.currentTarget.currentTime || 0, 0, Math.max(0, sessionEnd - clipSeconds));
+              if (Math.abs(nextCursor - scanCursor) > 0.75) {
+                setScanCursor(nextCursor);
+                onCursorChange?.(nextCursor);
+              }
+            }}
+          />
+        ) : (
+          <div className="flex aspect-video items-center justify-center rounded-lg bg-black text-sm text-muted-foreground">
+            Select a linked local video to preview it here.
+          </div>
+        )}
+      </div>
 
       <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
         {scanMode === "continue" && (
