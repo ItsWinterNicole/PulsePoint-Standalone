@@ -3,6 +3,7 @@ import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkl
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
+import { EXPLORATION_EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 import {
   buildBodyExplorationVideoPassDigest,
   buildSessionVideoPassDigest,
