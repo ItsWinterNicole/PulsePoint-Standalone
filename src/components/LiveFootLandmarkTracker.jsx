@@ -606,7 +606,7 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
   const lastEmitRef = useRef(0);
   const lastCsvRef = useRef(0);
 
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(!compact);
   const [status, setStatus] = useState("Ready");
   const [selectedLabel, setSelectedLabel] = useState("left_toe");
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...readStoredJson(SETTINGS_STORAGE_KEY, {}) }));
@@ -1000,7 +1000,7 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const showFullPanel = open && !compact;
+  const showFullPanel = open;
   const hiddenEngineClass = "fixed -left-[10000px] top-0 h-[180px] w-[320px] overflow-hidden opacity-0 pointer-events-none";
 
   return (

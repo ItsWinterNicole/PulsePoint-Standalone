@@ -281,6 +281,39 @@ function ReadinessItem({ label, value, helper, ready, optional = false }) {
   );
 }
 
+function CollapsibleControlSection({
+  icon: Icon,
+  title,
+  helper,
+  status,
+  defaultOpen = false,
+  children,
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <details
+      className="group rounded-xl border border-border bg-card"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-start gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        {Icon && <Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">{title}</p>
+          {helper && <p className="mt-1 text-sm text-muted-foreground">{helper}</p>}
+        </div>
+        {status && (
+          <span className="shrink-0 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">
+            {status}
+          </span>
+        )}
+        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-border p-4">{children}</div>
+    </details>
+  );
+}
+
 function HrSourceSelector({
   settings,
   status,
@@ -2148,39 +2181,67 @@ export default function LiveCapture() {
         </div>
       )}
 
+      {!focusView && !mainTelemetryView && (
+        <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-3">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: "1. Sources", value: hrConnected ? "HR ready" : "Check HR source", active: hrConnected },
+              { label: "2. Session", value: recordingActive ? "Recording live" : liveSession?.activeSessionId ? "Shell ready" : "Waiting for OBS", active: recordingActive || Boolean(liveSession?.activeSessionId) },
+              { label: "3. Annotate", value: annotationRecording ? "Recording note" : voiceWakeEnabled ? "Wake listening on" : "Record when needed", active: annotationRecording || voiceWakeEnabled },
+              { label: "4. Watch", value: hrTelemetry?.currentHr != null ? `${fmtNumber(hrTelemetry.currentHr, 0)} bpm live` : "Waiting for telemetry", active: hrTelemetry?.currentHr != null },
+            ].map((item) => (
+              <div key={item.label} className={`rounded-lg border px-3 py-2 ${item.active ? "border-primary/30 bg-primary/10" : "border-border bg-card/70"}`}>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{item.label}</p>
+                <p className="mt-1 text-sm font-semibold text-foreground">{item.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <LiveFootLandmarkTracker
         sessionId={liveSession?.activeSessionId}
         recordingActive={recordingActive}
         getSessionTimeS={getCurrentSessionTime}
         onTrackingSnapshot={handleFootTrackingSnapshot}
-        compact={focusView || mainTelemetryView || captureMode === "media"}
+        compact
       />
 
       {mediaPanel}
 
       {!focusView && !mainTelemetryView && (
-        <HrSourceSelector
-          settings={hrSourceSettings}
-          status={status}
-          recordingActive={recordingActive}
-          saving={hrSourceSaving}
-          error={hrSourceError}
-          directStatus={directH10Status}
-          onChange={updateHrSourceSettings}
-          onApply={() => applyHrSourceSettings()}
-          onConnectDirectH10={connectDirectH10}
-          onDisconnectDirectH10={disconnectDirectH10}
-          onForgetDirectH10={forgetDirectH10}
-        />
+        <CollapsibleControlSection
+          icon={HeartPulse}
+          title="Heart-Rate Source Settings"
+          helper="Switch providers, connect Direct H10, or update Pulsoid settings."
+          status={hrConnected ? `${status?.hr?.sourceStatus?.label || "HR"} live` : "Needs attention"}
+        >
+          <HrSourceSelector
+            settings={hrSourceSettings}
+            status={status}
+            recordingActive={recordingActive}
+            saving={hrSourceSaving}
+            error={hrSourceError}
+            directStatus={directH10Status}
+            onChange={updateHrSourceSettings}
+            onApply={() => applyHrSourceSettings()}
+            onConnectDirectH10={connectDirectH10}
+            onDisconnectDirectH10={disconnectDirectH10}
+            onForgetDirectH10={forgetDirectH10}
+          />
+        </CollapsibleControlSection>
       )}
 
-      {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
+      {!focusView && !mainTelemetryView && <CollapsibleControlSection
+        icon={CheckCircle2}
+        title="Capture Readiness"
+        helper="OBS is the session boundary; HR can run alone and EMG stays optional."
+        status={recordingActive ? "Recording live" : hrConnected && obsReady ? "Ready" : "Review setup"}
+        defaultOpen={!hrConnected || !obsReady}
+      >
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-primary">Capture Readiness</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Quick check before the recording window starts. OBS is the session boundary; HR can run alone and EMG stays optional.
-            </p>
+            <p className="text-sm text-muted-foreground">Quick check before the recording window starts.</p>
           </div>
           <p className="text-xs text-muted-foreground">
             {recordingActive ? "Recording is live" : liveSession?.activeSessionId ? "Session shell ready" : "Waiting for capture start"}
@@ -2221,7 +2282,7 @@ export default function LiveCapture() {
             optional
           />
         </div>
-      </div>}
+      </CollapsibleControlSection>}
 
       {!focusView && !mainTelemetryView && voiceAnnotationPanel}
 
@@ -2385,12 +2446,19 @@ export default function LiveCapture() {
 
       {captureMode !== "media" && (
         <>
-      {!focusView && !mainTelemetryView && <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
-        <MetricCard icon={<Radio className="w-4 h-4" />} label="PulsePoint Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
-        <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Source" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.sourceStatus?.label || status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
-        {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
-        <MetricCard icon={<Video className="w-4 h-4" />} label="OBS Recording" value={recordingActive ? "Recording" : "Stopped"} helper={recording?.filename || "No active capture"} active={recordingActive} />
-      </div>}
+      {!focusView && !mainTelemetryView && <CollapsibleControlSection
+        icon={Radio}
+        title="Connection Details"
+        helper="Relay, provider, EMG, and OBS status for troubleshooting."
+        status={connected && hrConnected ? "Core feeds connected" : "Review connections"}
+      >
+        <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+          <MetricCard icon={<Radio className="w-4 h-4" />} label="PulsePoint Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Source" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.sourceStatus?.label || status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
+          {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
+          <MetricCard icon={<Video className="w-4 h-4" />} label="OBS Recording" value={recordingActive ? "Recording" : "Stopped"} helper={recording?.filename || "No active capture"} active={recordingActive} />
+        </div>
+      </CollapsibleControlSection>}
 
       {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -2630,11 +2698,13 @@ export default function LiveCapture() {
         </div>
       </div>
 
-      {!focusView && <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
-            <FileText className="w-4 h-4" /> Capture Files
-          </h3>
+      {!focusView && <CollapsibleControlSection
+        icon={FileText}
+        title="Capture Files"
+        helper="Latest finalized HR and EMG exports."
+        status={files?.latestHrCsv ? "HR CSV available" : "Waiting for capture"}
+      >
+        <div className="flex items-center justify-end gap-2">
           <button
             onClick={refreshFiles}
             className="rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
@@ -2646,7 +2716,7 @@ export default function LiveCapture() {
           <FileCard title="Latest Heart Rate CSV" file={files?.latestHrCsv} />
           {emgLive && <FileCard title="Latest EMG CSV" file={files?.latestEmgCsv} />}
         </div>
-      </div>}
+      </CollapsibleControlSection>}
         </>
       )}
     </div>
