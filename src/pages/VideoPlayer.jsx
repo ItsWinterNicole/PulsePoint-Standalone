@@ -145,7 +145,24 @@ export default function VideoPlayer() {
 
         {/* Player */}
         {selectedRecord && !loadingSession && (
-          <VideoSyncPlayer key={`${recordType}:${selectedRecord.id}`} session={selectedRecord} timelineRows={timelineRows} recordType={recordType} />
+          <VideoSyncPlayer
+            key={`${recordType}:${selectedRecord.id}`}
+            session={selectedRecord}
+            timelineRows={timelineRows}
+            recordType={recordType}
+            onEventsChange={(eventTimeline) => {
+              setSelectedRecord((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
+              if (recordType === "body_exploration") {
+                setExplorations((current) => current.map((record) => (
+                  record.id === selectedRecord.id ? { ...record, event_timeline: eventTimeline } : record
+                )));
+              } else {
+                setSessions((current) => current.map((record) => (
+                  record.id === selectedRecord.id ? { ...record, event_timeline: eventTimeline } : record
+                )));
+              }
+            }}
+          />
         )}
 
         {/* Empty state */}

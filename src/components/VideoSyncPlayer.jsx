@@ -9,6 +9,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid,
 } from "recharts";
@@ -388,7 +399,13 @@ Annotation:
   }
 }
 
-export default function VideoSyncPlayer({ session, timelineRows, recordType = "session", externalSeekTime = null }) {
+export default function VideoSyncPlayer({
+  session,
+  timelineRows,
+  recordType = "session",
+  externalSeekTime = null,
+  onEventsChange,
+}) {
   const isExploration = recordType === "body_exploration";
   const recordLabel = isExploration ? "exploration" : "session";
   const categoryOptions = isExploration ? EXPLORATION_EVENT_CATEGORIES : EVENT_CATEGORIES;
@@ -596,6 +613,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     setEvents(sorted);
     const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
     await entity.update(session.id, { event_timeline: sorted });
+    onEventsChange?.(sorted);
   };
 
   const startEdit = (ev, idx) => {
@@ -2068,9 +2086,27 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                       <button onClick={() => startEdit(ev, i)} className="text-muted-foreground hover:text-primary transition-colors p-0.5">
                         <Pencil className="w-3 h-3" />
                       </button>
-                      <button onClick={() => deleteEvent(i)} className="text-muted-foreground hover:text-destructive transition-colors p-0.5">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <button type="button" className="text-muted-foreground hover:text-destructive transition-colors p-0.5" aria-label={`Delete event annotation at ${fmtMmSs(ev.time_s)}`}>
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete this event annotation?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This removes the note at {fmtMmSs(ev.time_s)} from the synchronized timeline. This cannot be undone.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => deleteEvent(i)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                              Delete annotation
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
                     <span className="text-[10px] font-mono text-muted-foreground">
                       {dist < 1 ? "now" : isNearby ? `${Math.round(dist)}s ${ev.time_s < playheadS ? "ago" : "ahead"}` : fmtMmSs(ev.time_s)}

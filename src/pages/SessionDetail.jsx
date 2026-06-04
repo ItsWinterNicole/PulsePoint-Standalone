@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,7 @@ import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
 import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
-import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
+import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 
 function _getCategoryMeta(value) {
@@ -91,6 +91,8 @@ function EventNotesPanel({
   motionSummary,
   selectedIndex,
   onSelect,
+  onUpdateEvent,
+  onDeleteEvent,
   onDeleteAll,
   onUpdateMotionVerification,
   title = "Timeline Notes",
@@ -98,6 +100,11 @@ function EventNotesPanel({
   maxHeight = true,
 }) {
   const [filter, setFilter] = useState("all");
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editNote, setEditNote] = useState("");
+  const [editMinutes, setEditMinutes] = useState("");
+  const [editSeconds, setEditSeconds] = useState("");
+  const [editCategories, setEditCategories] = useState([]);
   const showPausePrecedenceNote = hasMixedPauseResumeEvidence({ event_timeline: events, motion_analysis_summary: motionSummary });
   const filteredEvents = events
     .map((event, index) => ({ event, index }))
@@ -109,6 +116,35 @@ function EventNotesPanel({
       if (filter === "phase") return categories.some((category) => ["climax", "pre_climax", "recovery"].includes(category));
       return true;
     });
+
+  const startEdit = (event, index) => {
+    setEditingIndex(index);
+    setEditNote(event.note || "");
+    setEditMinutes(String(Math.floor(Number(event.time_s) / 60)));
+    setEditSeconds(String(Math.round(Number(event.time_s) % 60)));
+    const categories = normalizeCategoryArray(event.category);
+    setEditCategories(categories.length ? categories : ["other"]);
+  };
+
+  const cancelEdit = () => {
+    setEditingIndex(null);
+    setEditNote("");
+    setEditMinutes("");
+    setEditSeconds("");
+    setEditCategories([]);
+  };
+
+  const saveEdit = async (event, index) => {
+    const minutes = Math.max(0, parseInt(editMinutes, 10) || 0);
+    const seconds = Math.min(59, Math.max(0, parseInt(editSeconds, 10) || 0));
+    await onUpdateEvent?.(index, {
+      ...event,
+      time_s: minutes * 60 + seconds,
+      note: editNote.trim(),
+      category: editCategories.length ? editCategories : ["other"],
+    });
+    cancelEdit();
+  };
 
   if (!events.length) {
     return (
@@ -186,6 +222,71 @@ function EventNotesPanel({
           const primary = _getCategoryMeta(categories[0]);
           const selected = selectedIndex === index;
           const verified = isVerifiedMotionEvent(event);
+          const editing = editingIndex === index;
+          if (editing) {
+            return (
+              <div
+                key={`${event.time_s}-${index}`}
+                className="w-full space-y-2 rounded-lg border border-primary/40 bg-primary/[0.06] px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    value={editMinutes}
+                    onChange={(e) => setEditMinutes(e.target.value)}
+                    className="h-8 w-14 rounded border border-border bg-background px-2 text-center font-mono text-xs"
+                    aria-label="Event minutes"
+                  />
+                  <span className="font-bold text-muted-foreground">:</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={editSeconds}
+                    onChange={(e) => setEditSeconds(e.target.value)}
+                    className="h-8 w-14 rounded border border-border bg-background px-2 text-center font-mono text-xs"
+                    aria-label="Event seconds"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {EVENT_CATEGORIES.map((category) => {
+                    const active = editCategories.includes(category.value);
+                    return (
+                      <button
+                        key={category.value}
+                        type="button"
+                        onClick={() => setEditCategories((current) => (
+                          active ? current.filter((value) => value !== category.value) : [...current, category.value]
+                        ))}
+                        className="rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors"
+                        style={active
+                          ? { background: category.color, color: "#fff", borderColor: category.color }
+                          : { background: `${category.color}18`, color: category.color, borderColor: `${category.color}44` }}
+                      >
+                        {category.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <textarea
+                  value={editNote}
+                  onChange={(e) => setEditNote(e.target.value)}
+                  rows={3}
+                  className="w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+                  aria-label="Event annotation"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" className="h-7 text-xs" onClick={() => saveEdit(event, index)}>
+                    Save annotation
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            );
+          }
           return (
             <div
               key={`${event.time_s}-${index}`}
@@ -227,18 +328,50 @@ function EventNotesPanel({
                 </div>
                 <p className="mt-1 text-sm leading-relaxed text-foreground/90">{event.note || "No note"}</p>
               </button>
-              {event.source === "motion_derived" && onUpdateMotionVerification && (
+              {(onUpdateEvent || onDeleteEvent || (event.source === "motion_derived" && onUpdateMotionVerification)) && (
                 <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/70 pt-2">
-                  <button type="button" onClick={() => onUpdateMotionVerification(index, "reviewed_verified")} className="rounded-md border border-emerald-400/25 px-2 py-1 text-[10px] font-medium text-emerald-300 hover:bg-emerald-400/10">
-                    Mark verified
-                  </button>
-                  <button type="button" onClick={() => onUpdateMotionVerification(index, "reviewed_adjusted")} className="rounded-md border border-amber-400/25 px-2 py-1 text-[10px] font-medium text-amber-300 hover:bg-amber-400/10">
-                    Mark adjusted
-                  </button>
-                  {verified && (
-                    <button type="button" onClick={() => onUpdateMotionVerification(index, "unverified")} className="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground">
-                      Clear verification
+                  {onUpdateEvent && (
+                    <button type="button" onClick={() => startEdit(event, index)} className="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:border-primary/40 hover:text-primary">
+                      <Pencil className="mr-1 inline h-3 w-3" /> Edit
                     </button>
+                  )}
+                  {onDeleteEvent && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <button type="button" className="rounded-md border border-destructive/30 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/10">
+                          <Trash2 className="mr-1 inline h-3 w-3" /> Delete
+                        </button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete this event annotation?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This removes the note at {_fmtMmSs(event.time_s)} from the session timeline. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => onDeleteEvent(index)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                            Delete annotation
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                  {event.source === "motion_derived" && onUpdateMotionVerification && (
+                    <>
+                      <button type="button" onClick={() => onUpdateMotionVerification(index, "reviewed_verified")} className="rounded-md border border-emerald-400/25 px-2 py-1 text-[10px] font-medium text-emerald-300 hover:bg-emerald-400/10">
+                        Mark verified
+                      </button>
+                      <button type="button" onClick={() => onUpdateMotionVerification(index, "reviewed_adjusted")} className="rounded-md border border-amber-400/25 px-2 py-1 text-[10px] font-medium text-amber-300 hover:bg-amber-400/10">
+                        Mark adjusted
+                      </button>
+                      {verified && (
+                        <button type="button" onClick={() => onUpdateMotionVerification(index, "unverified")} className="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                          Clear verification
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -259,6 +392,8 @@ export default function SessionDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
+  const sessionRef = useRef(null);
+  const aiAnalysisSaveQueueRef = useRef(Promise.resolve());
   const [timelineRows, setTimelineRows] = useState([]);
   const [emgRows, setEmgRows] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
@@ -272,6 +407,64 @@ export default function SessionDetail() {
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  const handleChatMessagesSave = useCallback(async (messages) => {
+    const currentSession = sessionRef.current;
+    if (!currentSession?.id) return;
+    const aiAnalysis = {
+      ...(currentSession.ai_analysis || {}),
+      _chat_messages: messages,
+    };
+    const nextSession = { ...currentSession, ai_analysis: aiAnalysis };
+    sessionRef.current = nextSession;
+    setChatMessages(messages);
+    setSession(nextSession);
+    aiAnalysisSaveQueueRef.current = aiAnalysisSaveQueueRef.current
+      .catch(() => {})
+      .then(() => base44.entities.Session.update(currentSession.id, { ai_analysis: aiAnalysis }));
+    await aiAnalysisSaveQueueRef.current;
+  }, []);
+
+  const handleSessionNotesSave = useCallback(async (merged, meta = {}) => {
+    const currentSession = sessionRef.current;
+    if (!currentSession?.id) return;
+    setSessionNotes(merged);
+    const patch = { notes: merged };
+    let nextSession = { ...currentSession, notes: merged };
+
+    if (isVisualReviewSource(meta.source)) {
+      const conversation = Array.isArray(meta.conversation)
+        ? meta.conversation
+        : currentSession.ai_analysis?._chat_messages || [];
+      setChatMessages(conversation);
+      const visualEntry = makeSessionVisualEvidenceEntry(meta, merged);
+      const visualFindings = normalizeSessionVisualEvidence([
+        visualEntry,
+        ...(currentSession.ai_analysis?._visual_findings || []),
+      ]);
+      patch.ai_analysis = {
+        ...(currentSession.ai_analysis || {}),
+        _chat_messages: conversation,
+        _visual_findings: visualFindings,
+      };
+      nextSession = { ...nextSession, ai_analysis: patch.ai_analysis };
+    }
+
+    sessionRef.current = nextSession;
+    setSession(nextSession);
+    if (patch.ai_analysis) {
+      aiAnalysisSaveQueueRef.current = aiAnalysisSaveQueueRef.current
+        .catch(() => {})
+        .then(() => base44.entities.Session.update(currentSession.id, patch));
+      await aiAnalysisSaveQueueRef.current;
+      return;
+    }
+    await base44.entities.Session.update(currentSession.id, patch);
+  }, []);
+
   const handleAnalysisSaved = useCallback((field, value) => {
     setSession((current) => (current ? { ...current, [field]: value } : current));
   }, []);
@@ -289,6 +482,24 @@ export default function SessionDetail() {
     };
     const eventTimeline = currentEvents.map((event, index) => (index === eventIndex ? nextEvent : event));
     await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
+    setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
+  }, [session]);
+  const handleEventAnnotationUpdate = useCallback(async (eventIndex, updatedEvent) => {
+    if (!session?.id) return;
+    const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+    const eventTimeline = currentEvents
+      .map((event, index) => (index === eventIndex ? updatedEvent : event))
+      .sort((a, b) => Number(a.time_s) - Number(b.time_s));
+    await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
+    setSelectedEventIdx(null);
+    setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
+  }, [session]);
+  const handleEventAnnotationDelete = useCallback(async (eventIndex) => {
+    if (!session?.id) return;
+    const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+    const eventTimeline = currentEvents.filter((_event, index) => index !== eventIndex);
+    await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
+    setSelectedEventIdx(null);
     setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
   }, [session]);
   const handleDeleteAllEventNotes = useCallback(async () => {
@@ -346,6 +557,7 @@ export default function SessionDetail() {
         base44.auth.me(),
       ]);
       const s = all[0];
+      sessionRef.current = s;
       setSession(s);
       setUserProfile(me);
       setChatMessages(s?.ai_analysis?._chat_messages || []);
@@ -818,6 +1030,8 @@ export default function SessionDetail() {
                         motionSummary={s.motion_analysis_summary}
                         selectedIndex={selectedEventIdx}
                         onSelect={setSelectedEventIdx}
+                        onUpdateEvent={handleEventAnnotationUpdate}
+                        onDeleteEvent={handleEventAnnotationDelete}
                         onUpdateMotionVerification={handleMotionVerificationUpdate}
                         helper="Tap a note to highlight its marker on the heart-rate chart."
                       />
@@ -1035,6 +1249,10 @@ export default function SessionDetail() {
                     session={s}
                     timelineRows={timelineRows}
                     recordType="session"
+                    onEventsChange={(eventTimeline) => {
+                      setSelectedEventIdx(null);
+                      setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
+                    }}
                   />
                 </div>
               </details>
@@ -1209,6 +1427,8 @@ export default function SessionDetail() {
               motionSummary={s.motion_analysis_summary}
               selectedIndex={selectedEventIdx}
               onSelect={setSelectedEventIdx}
+              onUpdateEvent={handleEventAnnotationUpdate}
+              onDeleteEvent={handleEventAnnotationDelete}
               onDeleteAll={handleDeleteAllEventNotes}
               onUpdateMotionVerification={handleMotionVerificationUpdate}
               title="Event Notes"
@@ -1276,40 +1496,8 @@ export default function SessionDetail() {
           ].filter(Boolean).join("\n")}
           savedMessages={chatMessages}
           savedNotes={sessionNotes}
-          onSaveMessages={async (msgs) => {
-            setChatMessages(msgs);
-            let updated = { ...(session?.ai_analysis || s.ai_analysis || {}), _chat_messages: msgs };
-            setSession((prev) => {
-              if (!prev) return prev;
-              updated = { ...(prev.ai_analysis || updated), _chat_messages: msgs };
-              return { ...prev, ai_analysis: updated };
-            });
-            await base44.entities.Session.update(id, { ai_analysis: updated });
-          }}
-          onSaveNotes={async (merged, meta = {}) => {
-            setSessionNotes(merged);
-            const patch = { notes: merged };
-            if (isVisualReviewSource(meta.source)) {
-              const conversation = Array.isArray(meta.conversation) ? meta.conversation : chatMessages;
-              if (Array.isArray(conversation)) setChatMessages(conversation);
-              const visualEntry = makeSessionVisualEvidenceEntry(meta, merged);
-              const visualFindings = normalizeSessionVisualEvidence([
-                visualEntry,
-                ...((session?.ai_analysis || s.ai_analysis)?._visual_findings || []),
-              ]);
-              patch.ai_analysis = {
-                ...(session?.ai_analysis || s.ai_analysis || {}),
-                _chat_messages: conversation,
-                _visual_findings: visualFindings,
-              };
-              setSession((prev) => ({
-                ...prev,
-                notes: merged,
-                ai_analysis: { ...(prev?.ai_analysis || {}), ...patch.ai_analysis },
-              }));
-            }
-            await base44.entities.Session.update(id, patch);
-          }}
+          onSaveMessages={handleChatMessagesSave}
+          onSaveNotes={handleSessionNotesSave}
         />
           </div>
         </details>
