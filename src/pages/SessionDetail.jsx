@@ -404,6 +404,7 @@ export default function SessionDetail() {
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [sessionNotes, setSessionNotes] = useState("");
+  const [sessionInterviewOpen, setSessionInterviewOpen] = useState(false);
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
@@ -560,7 +561,9 @@ export default function SessionDetail() {
       sessionRef.current = s;
       setSession(s);
       setUserProfile(me);
-      setChatMessages(s?.ai_analysis?._chat_messages || []);
+      const savedChatMessages = s?.ai_analysis?._chat_messages || [];
+      setChatMessages(savedChatMessages);
+      setSessionInterviewOpen(savedChatMessages.length > 0);
       setSessionNotes(s?.notes || "");
       const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
 
@@ -1464,8 +1467,15 @@ export default function SessionDetail() {
         </details>
 
         {/* Ask the AI — Session Deep Dive */}
-        <details id="session-interview" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Ask the AI</summary>
+        <details
+          id="session-interview"
+          open={sessionInterviewOpen}
+          onToggle={(event) => setSessionInterviewOpen(event.currentTarget.open)}
+          className="scroll-mt-24 rounded-xl border border-border bg-card p-4"
+        >
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+            Ask the AI{chatMessages.length > 0 ? ` (${chatMessages.length} saved messages)` : ""}
+          </summary>
           <div className="mt-3">
         <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
           Attach images or a short local video clip for Sarah to review visible technique, device fit, anatomy, marker placement, telemetry overlays, or body movement for this session.
@@ -1496,6 +1506,7 @@ export default function SessionDetail() {
           ].filter(Boolean).join("\n")}
           savedMessages={chatMessages}
           savedNotes={sessionNotes}
+          defaultOpen={chatMessages.length > 0}
           onSaveMessages={handleChatMessagesSave}
           onSaveNotes={handleSessionNotesSave}
         />
