@@ -5,6 +5,7 @@ import { Mic, MicOff, Brain, BookOpen, ChevronDown, ChevronUp, Trash2, Save } fr
 import AIOutputReader from "./AIOutputReader";
 import JournalPrompts from "./JournalPrompts";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
+import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 
 const WHISPER_PROMPT =
   "Post-session reflection. Physiological sensations. Arousal buildup. Climax experience. Heart rate. Muscle tension. Pelvic floor. E-stim. Foley catheter. Refractory period. Emotional state. What worked well. What to try next time.";
@@ -81,8 +82,8 @@ export default function JournalRecorder({ session, timelineRows = [], userProfil
         mime_type:    mimeType,
         prompt:       WHISPER_PROMPT,
       });
-      const text = res.data?.text?.trim() || "";
-      setTranscript(text);
+      const text = cleanWhisperTranscript(res.data?.text);
+      if (text) setTranscript(text);
       setTranscribing(false);
     };
 

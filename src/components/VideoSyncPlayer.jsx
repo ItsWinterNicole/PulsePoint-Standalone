@@ -29,6 +29,7 @@ import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import MotionPlaybackReadout from "./MotionPlaybackReadout";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
+import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -596,7 +597,7 @@ export default function VideoSyncPlayer({
           mime_type: mimeType,
           prompt: WHISPER_PROMPT,
         });
-        const text = res.data?.text?.trim();
+        const text = cleanWhisperTranscript(res.data?.text);
         if (text) {
           setNewNote((prev) => {
             const base = prev.trim();

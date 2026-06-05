@@ -6,6 +6,7 @@ import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/aiGrounding";
 import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
+import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -322,6 +323,7 @@ export default function AIChat({
   const [imageError, setImageError] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
   const bottomRef = useRef(null);
+  const messageRefs = useRef(new Map());
   const inputRef = useRef(null);
   const imageInputRef = useRef(null);
   const videoInputRef = useRef(null);
@@ -337,6 +339,7 @@ export default function AIChat({
   const audioRef = useRef(null);
   const audioUrlCacheRef = useRef(new Map());
   const ttsRequestIdRef = useRef(0);
+  const lastAssistantScrollKeyRef = useRef("");
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
   const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
@@ -347,13 +350,37 @@ export default function AIChat({
     setMessages(savedMessages || []);
   }, [savedMessages]);
 
+  const isMobileViewport = useCallback(() => (
+    typeof window !== "undefined" && window.matchMedia?.("(max-width: 640px)")?.matches
+  ), []);
+
   const scrollToBottom = useCallback((behavior = "smooth") => {
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior, block: "end" }));
   }, []);
 
   useEffect(() => {
+    const lastIndex = messages.length - 1;
+    const lastMessage = messages[lastIndex];
+    const assistantScrollKey = lastMessage?.role === "assistant"
+      ? `${lastIndex}:${lastMessage.text?.length || 0}`
+      : "";
+
+    if (
+      !loading
+      && assistantScrollKey
+      && assistantScrollKey !== lastAssistantScrollKeyRef.current
+      && isMobileViewport()
+    ) {
+      lastAssistantScrollKeyRef.current = assistantScrollKey;
+      requestAnimationFrame(() => {
+        messageRefs.current.get(lastIndex)?.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+      });
+      return;
+    }
+
+    if (assistantScrollKey) lastAssistantScrollKeyRef.current = assistantScrollKey;
     scrollToBottom("smooth");
-  }, [messages, loading, scrollToBottom]);
+  }, [messages, loading, isMobileViewport, scrollToBottom]);
 
   useEffect(() => {
     if (open || fullScreen) scrollToBottom("auto");
@@ -1058,7 +1085,7 @@ export default function AIChat({
       const base64 = btoa(bin);
       const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: mimeType, prompt: WHISPER_PROMPT });
       const rawText = res.data?.text?.trim() || "";
-      const text = rawText.replace(/(?:^|[\s.,!?;:])(stop|end)[\s.!?]*$/i, "").trim();
+      const text = cleanWhisperTranscript(rawText);
       if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
       setTranscribing(false);
       setTimeout(() => inputRef.current?.focus(), 100);
@@ -1867,7 +1894,14 @@ Return a conversational answer plus structured findings for review/persistence.`
           ) : (
             <div className={threadClass}>
               {messages.map((msg, i) => (
-                <div key={i} className={`flex gap-2 items-start ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+                <div
+                  key={i}
+                  ref={(el) => {
+                    if (el) messageRefs.current.set(i, el);
+                    else messageRefs.current.delete(i);
+                  }}
+                  className={`scroll-mt-4 flex gap-2 items-start ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+                >
                   {msg.role === "assistant" && (
                     <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-1" />
                   )}
