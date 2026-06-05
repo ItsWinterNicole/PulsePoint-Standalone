@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { base44 } from "@/api/base44Client";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE } from "@/lib/aiGrounding";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
@@ -556,6 +567,8 @@ function eventFromCard(card, event, index, isExploration = false) {
     note: event.note,
     category: normalizeEventCategories(event.category, isExploration),
     source: "ai_video_pass",
+    ai_generated: true,
+    annotation_origin: "ai",
     annotation_tags: event.annotation_tags?.length ? event.annotation_tags : ["other_context"],
     ai_annotation: {
       source: "sarah_video_pass",
@@ -581,6 +594,16 @@ function eventFromCard(card, event, index, isExploration = false) {
     },
     title: `${card.label} finding ${index + 1}`,
   };
+}
+
+function isAIGeneratedPassEvent(event) {
+  return event?.source === "ai_video_pass"
+    || event?.source === "ai_audio_pass"
+    || event?.ai_generated === true
+    || event?.annotation_origin === "ai"
+    || event?.ai_annotation?.source === "sarah_video_pass"
+    || event?.ai_annotation?.source === "sarah_audio_pass"
+    || Boolean(event?.audio_review);
 }
 
 function persistedCardFrom(card) {
@@ -743,7 +766,17 @@ function eventFromAudioResult(event, sourceVideo, isExploration = false) {
       ? (event.transcript ? ["instrumentation_action", "sensation_report", "other_context"] : ["other_context"])
       : (event.transcript ? ["sensation_report", "other_context"] : ["other_context"]),
     source: "ai_audio_pass",
+    ai_generated: true,
+    annotation_origin: "ai",
     confidence: event.confidence || "moderate",
+    ai_annotation: {
+      source: "sarah_audio_pass",
+      confidence: event.confidence || "moderate",
+      source_video: sourceVideo?.filename || sourceVideo?.label || "",
+      source_video_fingerprint: sourceVideo?.fingerprint || "",
+      clip_start_s: Number(event.startSeconds || 0),
+      clip_end_s: Number(event.endSeconds || 0),
+    },
     audio_review: {
       source_video: {
         filename: sourceVideo?.filename || sourceVideo?.label || "",
@@ -807,6 +840,20 @@ export default function AIVideoPassPanel({
       : candidateWindows(session, timelineRows, windowCount, clipSeconds),
     [scanMode, scanCursor, session, timelineRows, windowCount, clipSeconds],
   );
+  const storedAIPassEventCount = useMemo(
+    () => (session?.event_timeline || []).filter(isAIGeneratedPassEvent).length,
+    [session?.event_timeline],
+  );
+
+  const clearStoredAIPassEvents = async () => {
+    const retainedEvents = (session?.event_timeline || []).filter((event) => !isAIGeneratedPassEvent(event));
+    const updated = { event_timeline: retainedEvents };
+    await entity.update(session.id, updated);
+    onSessionUpdate?.({ ...session, ...updated });
+    setAcceptedIds(new Set());
+    setAudioAccepted(false);
+    setStatus(`Cleared ${storedAIPassEventCount} stored AI-generated annotation${storedAIPassEventCount === 1 ? "" : "s"} from this ${recordLabel}.`);
+  };
 
   const seekPreviewVideo = (seconds) => {
     const video = previewVideoRef.current;
@@ -1290,10 +1337,36 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             Sarah scans candidate windows, creates short preview clips, and drafts {recordLabel} timeline findings for review.
           </p>
         </div>
-        <Button type="button" onClick={runPass} disabled={running || !selectedVideo || !plannedWindows.length} className="h-8">
-          {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
-          {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Pass" : "Start at 0:00") : "Run Pass"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {storedAIPassEventCount > 0 && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button type="button" variant="outline" className="h-8 border-destructive/30 text-destructive hover:bg-destructive/10">
+                  <Trash2 className="mr-2 h-3.5 w-3.5" />
+                  Clear AI Events ({storedAIPassEventCount})
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear stored AI-generated annotations?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes {storedAIPassEventCount} Sarah video/audio pass annotation{storedAIPassEventCount === 1 ? "" : "s"} from this {recordLabel}'s timeline. Manual event notes are kept.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={clearStoredAIPassEvents} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    Clear AI annotations
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+          <Button type="button" onClick={runPass} disabled={running || !selectedVideo || !plannedWindows.length} className="h-8">
+            {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
+            {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Pass" : "Start at 0:00") : "Run Pass"}
+          </Button>
+        </div>
       </div>
 
       <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto_auto_auto_auto_auto]">

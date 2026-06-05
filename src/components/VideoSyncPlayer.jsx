@@ -95,6 +95,8 @@ const EXPLORATION_AI_EVENT_TAGS = [
 ];
 const VALID_AI_EVENT_TAGS = new Set(Object.keys(AI_EVENT_TAGS));
 const EVENT_FILTERS = [
+  { key: "ai_generated", label: "AI Generated", matches: (ev) => isAIGeneratedAnnotation(ev) },
+  { key: "non_ai", label: "Non-AI", matches: (ev) => !isAIGeneratedAnnotation(ev) },
   { key: "stimulation", label: "Stimulation", matches: (ev) => normalizeCategoryArray(ev.category).includes("stimulation") || (ev.annotation_tags || []).includes("stimulation_action") },
   { key: "stimulation_change", label: "Stimulation Change", matches: (ev) => (ev.annotation_tags || []).includes("stimulation_change") || normalizeCategoryArray(ev.category).some((cat) => cat.includes("stimulation_")) },
   { key: "physical", label: "Physical", matches: (ev) => normalizeCategoryArray(ev.category).includes("physical") || (ev.annotation_tags || []).includes("physical_finding") },
@@ -234,6 +236,24 @@ function normalizeTagResult(result, categoryOptions, annotationTagOptions) {
 function getAnnotationTags(ev) {
   const tags = Array.isArray(ev?.annotation_tags) ? ev.annotation_tags : [];
   return tags.filter((tag) => VALID_AI_EVENT_TAGS.has(tag));
+}
+
+function isAIGeneratedAnnotation(ev) {
+  return ev?.source === "ai_video_pass"
+    || ev?.source === "ai_audio_pass"
+    || ev?.ai_generated === true
+    || ev?.annotation_origin === "ai"
+    || ev?.ai_annotation?.source === "sarah_video_pass"
+    || ev?.ai_annotation?.source === "sarah_audio_pass"
+    || Boolean(ev?.audio_review);
+}
+
+function AIGeneratedBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-primary">
+      AI
+    </span>
+  );
 }
 
 function heuristicTagEventNote(note, isExploration) {
@@ -1522,6 +1542,7 @@ export default function VideoSyncPlayer({
                       );
                     })}
                     {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge event={closestVisibleEvent.ev} />}
+                    {isAIGeneratedAnnotation(closestVisibleEvent.ev) && <AIGeneratedBadge />}
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-white/90">
                     {closestVisibleEvent.ev.note || "Event note"}
@@ -1914,6 +1935,7 @@ export default function VideoSyncPlayer({
                     const color = EVENT_COLORS[i % EVENT_COLORS.length];
                     const cats = normalizeCategoryArray(ev.category);
                     const annotationTags = getAnnotationTags(ev);
+                    const aiGenerated = isAIGeneratedAnnotation(ev);
                     const isCurrent = dist < 5;
                     return (
                       <button
@@ -1941,6 +1963,7 @@ export default function VideoSyncPlayer({
                               );
                             })}
                             {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
+                            {aiGenerated && <AIGeneratedBadge />}
                           </div>
                           {annotationTags.length > 0 && (
                             <div className="mb-0.5 flex flex-wrap gap-0.5">
@@ -1974,6 +1997,7 @@ export default function VideoSyncPlayer({
                     const color = EVENT_COLORS[i % EVENT_COLORS.length];
                     const cats = normalizeCategoryArray(ev.category);
                     const annotationTags = getAnnotationTags(ev);
+                    const aiGenerated = isAIGeneratedAnnotation(ev);
                     const isCurrent = diff < 5;
                     return (
                       <button
@@ -2000,6 +2024,7 @@ export default function VideoSyncPlayer({
                             );
                           })}
                           {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
+                          {aiGenerated && <AIGeneratedBadge />}
                         </div>
                         {annotationTags.length > 0 && (
                           <div className="flex flex-wrap gap-0.5">
@@ -2042,6 +2067,7 @@ export default function VideoSyncPlayer({
               const color = EVENT_COLORS[i % EVENT_COLORS.length];
               const cats = normalizeCategoryArray(ev.category);
               const annotationTags = getAnnotationTags(ev);
+              const aiGenerated = isAIGeneratedAnnotation(ev);
               const dist = Math.abs(ev.time_s - playheadS);
               const isNearby = dist <= 30;
               const isCurrent = dist < 5;
@@ -2104,6 +2130,7 @@ export default function VideoSyncPlayer({
                         );
                       })}
                       {ev.source === "motion_derived" && <MotionDerivedBadge event={ev} />}
+                      {aiGenerated && <AIGeneratedBadge />}
                     </div>
                     {annotationTags.length > 0 && (
                       <div className="mb-0.5 flex flex-wrap gap-0.5">
