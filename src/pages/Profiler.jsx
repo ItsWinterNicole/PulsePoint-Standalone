@@ -14,6 +14,16 @@ import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale }
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildProfileQaFindingCards, normalizeProfileQaFindings } from "@/lib/profileQa";
+import {
+  buildBodyExplorationVideoPassDigest,
+  buildBodyExplorationVisualEvidenceDigest,
+  buildSessionVideoPassDigest,
+  buildSessionVisualEvidenceDigest,
+  normalizeBodyExplorationVideoPassFindings,
+  normalizeBodyExplorationVisualEvidence,
+  normalizeSessionVideoPassFindings,
+  normalizeSessionVisualEvidence,
+} from "@/lib/visualEvidence";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -721,9 +731,61 @@ function compactProfileJsonValue(value) {
   return null;
 }
 
-function buildProfileImageReviewContext({ userProfile, sessions = [] }) {
+function buildExistingVisualEvidenceDigest({ sessions = [], bodyExplorations = [] }) {
+  const sortedSessions = [...(sessions || [])]
+    .sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0));
+  const sortedExplorations = [...(bodyExplorations || [])]
+    .sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0));
+
+  const sessionVisualEntryCount = sortedSessions.reduce((count, session) => count + normalizeSessionVisualEvidence(session).length, 0);
+  const sessionVideoPassCount = sortedSessions.reduce((count, session) => count + normalizeSessionVideoPassFindings(session).length, 0);
+  const explorationVisualEntryCount = sortedExplorations.reduce((count, exploration) => count + normalizeBodyExplorationVisualEvidence(exploration).length, 0);
+  const explorationVideoPassCount = sortedExplorations.reduce((count, exploration) => count + normalizeBodyExplorationVideoPassFindings(exploration).length, 0);
+
+  const sessionBlocks = sortedSessions
+    .flatMap((session) => [
+      buildSessionVisualEvidenceDigest(session, { limit: 4 }),
+      buildSessionVideoPassDigest(session, { limit: 4, findingsPerCard: 3, eventsPerCard: 2 }),
+    ])
+    .filter(Boolean)
+    .slice(0, 80);
+  const explorationBlocks = sortedExplorations
+    .flatMap((exploration) => [
+      buildBodyExplorationVisualEvidenceDigest(exploration, { limit: 4 }),
+      buildBodyExplorationVideoPassDigest(exploration, { limit: 4, findingsPerCard: 3, eventsPerCard: 2 }),
+    ])
+    .filter(Boolean)
+    .slice(0, 60);
+
+  return {
+    counts: {
+      session_visual_entries: sessionVisualEntryCount,
+      session_video_passes: sessionVideoPassCount,
+      body_exploration_visual_entries: explorationVisualEntryCount,
+      body_exploration_video_passes: explorationVideoPassCount,
+    },
+    hasAny: Boolean(sessionVisualEntryCount || sessionVideoPassCount || explorationVisualEntryCount || explorationVideoPassCount),
+    text: `
+EXISTING UPLOADED / REVIEWED VISUAL EVIDENCE:
+- Session Sarah visual-review entries: ${sessionVisualEntryCount}.
+- Session Sarah video-pass finding cards: ${sessionVideoPassCount}.
+- Body exploration Sarah visual-review entries: ${explorationVisualEntryCount}.
+- Body exploration Sarah video-pass finding cards: ${explorationVideoPassCount}.
+- Treat these as previously reviewed evidence from uploaded images, uploaded/sampled video frames, and AI video passes. Do not claim to be directly viewing the original media again unless fresh images are attached in this run.
+
+SESSION VISUAL / VIDEO EVIDENCE DIGEST:
+${sessionBlocks.length ? sessionBlocks.join("\n\n") : "- No saved session visual/video evidence digest available."}
+
+BODY EXPLORATION VISUAL / VIDEO EVIDENCE DIGEST:
+${explorationBlocks.length ? explorationBlocks.join("\n\n") : "- No saved body exploration visual/video evidence digest available."}
+`,
+  };
+}
+
+function buildProfileImageReviewContext({ userProfile, sessions = [], bodyExplorations = [] }) {
   const qaEntries = normalizeProfileQaFindings(userProfile?.profile_qa_findings);
   const qaCards = buildProfileQaFindingCards(userProfile?.profile_qa_findings, userProfile?.first_name).slice(0, 45);
+  const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const compactMetrics = compactProfileJsonValue({
     anatomical_mechanical_profile: userProfile?.anatomical_mechanical_profile,
     profile_notes: userProfile?.profile_notes || userProfile?.notes,
@@ -742,9 +804,10 @@ function buildProfileImageReviewContext({ userProfile, sessions = [] }) {
 
   return `
 PROFILE IMAGE REVIEW SOURCE CONTEXT:
-- Use the uploaded images as the primary source for directly visible anatomy, position, tissue state, and image-limited observations.
-- Use saved Q&A findings, entered profile metrics, and session evidence as historical/mechanical context. Reconcile them with the images instead of ignoring them.
-- If existing context conflicts with the image, state the mismatch and explain which source is stronger for that claim.
+- If fresh images are attached in this run, use them as the primary source for directly visible anatomy, position, tissue state, and image-limited observations.
+- If no fresh images are attached, synthesize from the existing uploaded/reviewed evidence below: saved Q&A visual reviews, session image/video findings, body-exploration image/video findings, entered profile metrics, and session evidence.
+- Use saved Q&A findings, entered profile metrics, and session/body-exploration evidence as historical/mechanical context. Reconcile them with fresh images when present instead of ignoring them.
+- If saved context conflicts with fresh images or with another saved visual review, state the mismatch and explain which source is stronger for that claim.
 - Do not let profile history make you overcall something that is not visible.
 
 SAVED PROFILE Q&A FINDINGS (${qaEntries.length} entries; showing up to ${qaCards.length} deduplicated findings):
@@ -758,15 +821,19 @@ ${evidenceDigest || "- No session evidence loaded."}
 
 SELECTED SESSION-BY-SESSION ANATOMICAL / PHYSIOLOGICAL EVIDENCE:
 ${sessionLines.length ? sessionLines.join("\n") : "- No session-level anatomical evidence available."}
+
+${visualEvidence.text}
 `;
 }
 
-function buildImageReviewMeta(images = [], sessions = [], previousMeta = null) {
+function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, evidenceCounts = {}) {
   return {
     ...buildProfileAIContentMeta(sessions, previousMeta, null),
+    fresh_image_count: images.length,
     image_count: images.length,
     image_filenames: images.map((image) => image.filename).filter(Boolean),
     source_kind: "profile_image_review",
+    existing_visual_evidence_counts: evidenceCounts,
   };
 }
 
@@ -784,8 +851,8 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   icon: <ImageIcon className="w-4 h-4" />,
   color: "hsl(var(--chart-4))",
   purpose: "Nude whole-body image review in anatomical position, standing, prone, supine, seated, or on-table positioning.",
-  helper: "Upload whole-body reference images for a structured visual review of posture, alignment, body habitus, skin/surface findings, table positioning, and profile-context fit. Images are sent only for this AI review and are not stored by this panel.",
-  emptyText: "Add anatomical-position or table-position whole-body images when you want Sarah to build a head-to-toe profile reference.",
+  helper: "Review saved whole-body/profile evidence from Q&A, sessions, body exploration, entered metrics, and prior Sarah media reviews. Fresh images are optional add-on evidence for posture, alignment, body habitus, skin/surface findings, table positioning, and profile-context fit.",
+  emptyText: "Click Review Existing Evidence to synthesize saved profile/media evidence, or add anatomical-position/table-position images if you want a fresh visual reference in this run.",
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
 - Focus on whole-body anatomy and physiology-relevant visual context: posture, alignment, symmetry, body habitus, soft tissue distribution, skin/surface findings, limb positioning, hands, feet, and table/standing setup.
@@ -815,8 +882,8 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   icon: <User className="w-4 h-4" />,
   color: "hsl(var(--chart-2))",
   purpose: "Detailed pelvis, external genital, glans/meatus/foreskin, scrotal/perineal, pelvic positioning, tissue state, and visible instrumentation or device-fit context review.",
-  helper: "Upload pelvic/genital reference images for a focused anatomical review tied to saved Q&A, session evidence, and entered measurements. Keep this separate from the whole-body panel so the output can go deep without muddying the head-to-toe profile.",
-  emptyText: "Add focused pelvic/genital images when you want Sarah to review external anatomy, state, tissue context, meatus/glans/foreskin, scrotum/perineum, and fit/instrumentation context.",
+  helper: "Review saved pelvic/genital evidence from Q&A, sessions, body exploration, entered measurements, and prior Sarah media reviews. Fresh focused images are optional when you want to add new visible evidence to the existing profile.",
+  emptyText: "Click Review Existing Evidence to synthesize saved pelvic/genital findings, or add focused images if you want fresh review of external anatomy, tissue context, meatus/glans/foreskin, scrotum/perineum, and fit/instrumentation context.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
 - Focus on visible pelvic positioning, external genital anatomy, shaft, glans, foreskin or circumcision context, meatus, scrotum, perineum, lower abdomen/groin, tissue state, surface findings, and image-limited pelvic-floor context.
@@ -839,6 +906,7 @@ PELVIC / GENITAL REVIEW SCOPE:
 function ProfileImageReviewPanel({
   config,
   sessions = [],
+  bodyExplorations = [],
   userProfile,
   profileLoading = false,
   evidenceLoading = false,
@@ -874,12 +942,12 @@ function ProfileImageReviewPanel({
   };
 
   const analyze = async () => {
-    if (!images.length) return;
     setLoading(true);
     setError("");
     try {
       const groundingContext = buildAIGroundingContext(userProfile);
-      const imageReviewContext = buildProfileImageReviewContext({ userProfile, sessions });
+      const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+      const imageReviewContext = buildProfileImageReviewContext({ userProfile, sessions, bodyExplorations });
       const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
       const imagePayload = images.map((image) => ({
         filename: image.filename,
@@ -889,7 +957,7 @@ function ProfileImageReviewPanel({
       const raw = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         max_tokens: 7000,
-        images: imagePayload,
+        ...(imagePayload.length ? { images: imagePayload } : {}),
         prompt: `You are Sarah, performing a dedicated profile image review for PulsePoint.
 
 Review type: ${config.title}
@@ -903,8 +971,9 @@ ${SESSION_CONTEXT_GROUNDING_RULE}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
-- Analyze only what is visible in the images and supported by saved profile context.
-- Use existing Q&A findings, entered profile metrics, and session/video evidence as context, not as permission to invent visible findings.
+- If fresh images are attached to this request, analyze what is visible in those images and reconcile it with saved profile context.
+- If no fresh images are attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying you are directly seeing the original media again.
+- Use existing Q&A findings, entered profile metrics, and session/video/body-exploration evidence as context, not as permission to invent visible findings.
 - Do not eroticize the image or write arousal-focused prose.
 - Do not infer identity, diagnosis, pathology, intent, pain, force, or sexual activity.
 - If image quality, angle, lighting, posture, tissue state, cropping, or camera distortion limits confidence, say so clearly.
@@ -918,8 +987,8 @@ ${config.reviewInstructions}
 
 Return a detailed structured review. Keep each paragraph TTS-ready: complete sentences, no markdown bullets, no clipped fragments.
 
-Uploaded image filenames:
-${images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n")}`,
+Fresh uploaded image filenames for this run:
+${images.length ? images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n") : "- None. Use existing uploaded/reviewed evidence and entered metrics."}`,
         response_json_schema: {
           type: "object",
           properties: {
@@ -933,7 +1002,7 @@ ${images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n")}`,
       if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
       const storedResult = {
         ...parsed,
-        _meta: buildImageReviewMeta(images, sessions, result?._meta),
+        _meta: buildImageReviewMeta(images, sessions, result?._meta, visualEvidence.counts),
       };
       setResult(storedResult);
       const nextArchive = await saveProfileResultWithArchive({
@@ -954,6 +1023,8 @@ ${images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n")}`,
   };
 
   const sections = profileReviewResultSections(config);
+  const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+  const existingEvidenceCount = Object.values(visualEvidence.counts).reduce((sum, value) => sum + (Number(value) || 0), 0);
   const paragraphs = [];
   const paragraphMeta = [];
   if (result) {
@@ -985,18 +1056,29 @@ ${images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n")}`,
               <Upload className="h-3.5 w-3.5" /> Add Images
               <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageFiles} />
             </label>
-            <Button size="sm" onClick={analyze} disabled={loading || profileLoading || evidenceLoading || !userProfile || !images.length} className="h-8 gap-1.5 text-xs">
+            <Button size="sm" onClick={analyze} disabled={loading || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
-                : <><ImageIcon className="h-3.5 w-3.5" />{result ? "Re-review" : "Review Images"}</>}
+                : <><ImageIcon className="h-3.5 w-3.5" />{images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
           </div>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{existingEvidenceCount} saved visual/video evidence items</Badge>
+          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{sessions.length} sessions loaded</Badge>
+          {bodyExplorations.length > 0 && (
+            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{bodyExplorations.length} body exploration sessions loaded</Badge>
+          )}
+          {images.length > 0 && (
+            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
+          )}
         </div>
 
         {result && (
           <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
             <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
-            <span>Images reviewed: {result?._meta?.image_count ?? "?"}</span>
+            <span>Fresh images reviewed: {result?._meta?.fresh_image_count ?? result?._meta?.image_count ?? 0}</span>
             {Array.isArray(result?._meta?.image_filenames) && result._meta.image_filenames.length > 0 && (
               <span className="max-w-full truncate">Files: {result._meta.image_filenames.join(", ")}</span>
             )}
@@ -2237,6 +2319,7 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
 
 export default function Profiler() {
   const [sessions, setSessions] = useState([]);
+  const [bodyExplorations, setBodyExplorations] = useState([]);
   const [allTimelines, setAllTimelines] = useState({});
   const [userProfile, setUserProfile] = useState(null);
   const [journals, setJournals] = useState([]);
@@ -2256,9 +2339,13 @@ export default function Profiler() {
 
     const loadSessionsAndTimelines = async () => {
       try {
-        const all = await base44.entities.Session.list("-date", 300);
+        const [all, explorations] = await Promise.all([
+          base44.entities.Session.list("-date", 300),
+          base44.entities.BodyExploration.list("-date", 150).catch(() => []),
+        ]);
         if (cancelled) return;
         setSessions(all);
+        setBodyExplorations(explorations || []);
         setSessionEvidenceLoading(false);
 
         // HR timelines are useful for secondary analysis, but should never block the saved profile UI.
@@ -2325,8 +2412,12 @@ export default function Profiler() {
     setRefreshingEvidence(true);
     setLoadError("");
     try {
-      const all = await base44.entities.Session.list("-date", 300);
+      const [all, explorations] = await Promise.all([
+        base44.entities.Session.list("-date", 300),
+        base44.entities.BodyExploration.list("-date", 150).catch(() => []),
+      ]);
       setSessions(all);
+      setBodyExplorations(explorations || []);
     } catch (error) {
       setLoadError(error?.message || "Could not refresh current profiler evidence.");
     } finally {
@@ -2342,7 +2433,7 @@ export default function Profiler() {
           <p className="text-sm text-muted-foreground mt-0.5">
             {sessionEvidenceLoading
               ? "Loading saved session evidence..."
-              : `${sessions.length} sessions · ${timelineLoading ? "loading HR timelines" : `${Object.keys(allTimelines).length} with HR data`} · ${summarizeMotionEvidenceCoverage(sessions).any} with motion evidence`}
+              : `${sessions.length} sessions · ${bodyExplorations.length} explorations · ${timelineLoading ? "loading HR timelines" : `${Object.keys(allTimelines).length} with HR data`} · ${summarizeMotionEvidenceCoverage(sessions).any} with motion evidence`}
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={refreshEvidence} disabled={refreshingEvidence} className="gap-1.5 text-xs">
@@ -2372,6 +2463,7 @@ export default function Profiler() {
       <ProfileImageReviewPanel
         config={HEAD_TO_TOE_IMAGE_REVIEW_CONFIG}
         sessions={sessions}
+        bodyExplorations={bodyExplorations}
         userProfile={userProfile}
         profileLoading={profileContextLoading}
         evidenceLoading={sessionEvidenceLoading}
@@ -2379,6 +2471,7 @@ export default function Profiler() {
       <ProfileImageReviewPanel
         config={PELVIC_GENITAL_IMAGE_REVIEW_CONFIG}
         sessions={sessions}
+        bodyExplorations={bodyExplorations}
         userProfile={userProfile}
         profileLoading={profileContextLoading}
         evidenceLoading={sessionEvidenceLoading}
