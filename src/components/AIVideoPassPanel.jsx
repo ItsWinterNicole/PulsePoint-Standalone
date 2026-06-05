@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { base44 } from "@/api/base44Client";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE } from "@/lib/aiGrounding";
+import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
 import { EXPLORATION_EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 import {
@@ -635,6 +636,50 @@ function persistedCardFrom(card) {
   };
 }
 
+function cardFromAIVideoJob(job, isExploration = false) {
+  const meta = job?.meta || {};
+  const cardMeta = meta.card || {};
+  const result = job?.result;
+  if (!result || !cardMeta.window) return null;
+  const normalized = normalizeAIResult(result, cardMeta.window, cardMeta.sourceVideoRole || "main", isExploration);
+  return {
+    id: `job-${job.id}`,
+    label: cardMeta.label || meta.title || "AI video pass",
+    window: cardMeta.window,
+    sourceWindow: cardMeta.sourceWindow || cardMeta.window,
+    sourceVideo: cardMeta.sourceVideo || {},
+    sourceVideoRole: cardMeta.sourceVideoRole || "main",
+    clipUrl: cardMeta.clipUrl || "",
+    thumbnailUrl: cardMeta.thumbnailUrl || "",
+    motionSummary: cardMeta.motionSummary || null,
+    telemetry: cardMeta.telemetry || "",
+    ...normalized,
+  };
+}
+
+async function runBackgroundAIVideoReview({ aiPayload, cardMeta, session, recordType, label, onProgress }) {
+  const route = recordType === "body_exploration"
+    ? `/ai-annotation?type=body_exploration&id=${encodeURIComponent(session.id)}`
+    : `/sessions/${encodeURIComponent(session.id)}/ai-annotation`;
+  const startedJob = await startBackgroundJob("ai_invoke", {
+    ...aiPayload,
+    label,
+  }, {
+    source: "ai_video_pass",
+    sessionId: session.id,
+    recordType,
+    title: label,
+    route,
+    card: cardMeta,
+  });
+  onProgress?.(startedJob);
+  const completedJob = await waitForBackgroundJob(startedJob.id, {
+    intervalMs: 1200,
+    onProgress,
+  });
+  return completedJob;
+}
+
 function normalizeVideoPassFindingsForRecord(recordOrEntries, isExploration = false) {
   return isExploration
     ? normalizeBodyExplorationVideoPassFindings(recordOrEntries)
@@ -844,6 +889,54 @@ export default function AIVideoPassPanel({
     () => (session?.event_timeline || []).filter(isAIGeneratedPassEvent).length,
     [session?.event_timeline],
   );
+  const refreshCompletedVideoPassJobs = useCallback(async ({ quiet = false } = {}) => {
+    if (!session?.id) return;
+    try {
+      const response = await listBackgroundJobs({
+        type: "ai_invoke",
+        status: "complete",
+        limit: 30,
+        metaSessionId: session.id,
+        metaSource: "ai_video_pass",
+      });
+      const completedCards = (response.jobs || [])
+        .filter((job) => job?.meta?.recordType === recordType)
+        .map((job) => cardFromAIVideoJob(job, isExploration))
+        .filter(Boolean)
+        .sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0));
+      if (!completedCards.length) return;
+      setCards((current) => {
+        const existingKeys = new Set(current.map((card) => `${card.sourceVideo?.fingerprint || card.sourceVideo?.path || ""}:${Math.round(Number(card.window?.start || 0) * 10)}:${Math.round(Number(card.window?.end || 0) * 10)}`));
+        const additions = completedCards.filter((card) => {
+          const key = `${card.sourceVideo?.fingerprint || card.sourceVideo?.path || ""}:${Math.round(Number(card.window?.start || 0) * 10)}:${Math.round(Number(card.window?.end || 0) * 10)}`;
+          if (existingKeys.has(key)) return false;
+          existingKeys.add(key);
+          return true;
+        });
+        if (!additions.length) return current;
+        if (!quiet) setStatus(`Caught up ${additions.length} completed background video review${additions.length === 1 ? "" : "s"}.`);
+        return [...current, ...additions].sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0));
+      });
+    } catch (err) {
+      if (!quiet) setError(err?.message || "Could not refresh background video pass results.");
+    }
+  }, [isExploration, recordType, session?.id]);
+
+  useEffect(() => {
+    refreshCompletedVideoPassJobs({ quiet: true });
+    const interval = window.setInterval(() => refreshCompletedVideoPassJobs({ quiet: true }), 5000);
+    const handleFocus = () => refreshCompletedVideoPassJobs({ quiet: false });
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") handleFocus();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [refreshCompletedVideoPassJobs]);
 
   const clearStoredAIPassEvents = async () => {
     const retainedEvents = (session?.event_timeline || []).filter((event) => !isAIGeneratedPassEvent(event));
@@ -943,7 +1036,7 @@ export default function AIVideoPassPanel({
             media_type: frame.mimeType || "image/jpeg",
             data: frame.data,
           }));
-          const ai = await base44.integrations.Core.InvokeLLM({
+          const aiPayload = {
             max_tokens: 2400,
             response_json_schema: {
               type: "object",
@@ -1079,7 +1172,37 @@ Nearby ${recordLabel} events: ${(session?.event_timeline || [])
   .join(" | ") || "None nearby."}
 
 Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are ${isExploration ? "visible swab/wipe/applicator contact, circular cleaning or mapping around the meatus/glans, meatal or urethral context when visible/supported, Foley/catheter/sound/dilator presence or movement only when the object is clearly distinguishable, genital/body state changes, tissue appearance, lubricant/tool handling, comfort/tolerance cues, breathing/body settling, leg/feet tension or relaxation, procedure setup changes, and telemetry-supported autonomic response" : "genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation"}. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
+          };
+          const cardMeta = {
+            label,
+            window: reviewWindow,
+            sourceWindow: { start: sourceStart, end: sourceEnd },
+            sourceVideo: {
+              id: selectedVideo?.id || null,
+              label: selectedVideo?.label || "",
+              filename: selectedVideo?.filename || "",
+              fingerprint: selectedVideo?.fingerprint || "",
+              path: selectedVideo?.path || "",
+            },
+            sourceVideoRole: selectedVideoRole,
+            clipUrl: preview.clip_url || preview.url || "",
+            thumbnailUrl: preview.frames?.[0]?.url || "",
+            motionSummary: preview.motion_summary || null,
+            telemetry,
+          };
+          const completedJob = await runBackgroundAIVideoReview({
+            aiPayload,
+            cardMeta,
+            session,
+            recordType,
+            label,
+            onProgress: (job) => {
+              const progress = job?.progress || {};
+              const countText = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+              setStatus(progress.message || `Sarah reviewing ${label} in the background${countText}…`);
+            },
           });
+          const ai = completedJob.result;
           const normalized = normalizeAIResult(ai, reviewWindow, selectedVideoRole, isExploration);
           const card = {
             id: `${Date.now()}-${batchNumber}-${i}`,
