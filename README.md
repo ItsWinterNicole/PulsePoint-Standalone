@@ -1,61 +1,102 @@
-# PulsePoint Standalone 🫀
+# PulsePoint Standalone
 
-PulsePoint is a private, local-first review workspace for intimate physiology sessions: recorded media, heart-rate and optional EMG telemetry, timestamped observations, session notes, AI-assisted analysis, Motion Lab evidence, and narrated audio summaries.
+PulsePoint is a private, local-first review workspace for personal physiology sessions. It brings together session notes, heart-rate and HRV telemetry, optional EMG, local video, audio, annotations, body-exploration records, Profile Q&A, and AI-assisted review.
 
-It is not trying to be a generic health dashboard. It is the **“what actually happened here?”** pass after a recorded session — the place where signals, notes, video, and body-context get reviewed together instead of living in five different folders.
+It is not a generic wellness dashboard. PulsePoint is the "what actually happened here?" workspace: the place where signals, observations, media, and body context can be reviewed together instead of living in disconnected files.
 
-This project began as a Base44 app and is being migrated into a standalone local web app with a local API server. The overall design goal is simple: **high-context review, strong privacy boundaries, and useful analysis without pretending the app is a medical device.**
+The project began as a Base44 app and is being migrated into a standalone local web app with a local API server. The goal is high-context review, strong privacy boundaries, exportable data, and useful analysis without pretending the app is a medical device.
 
-## What PulsePoint Does ✨
+## Current Shape
 
-### 🎥 Review and annotate sessions
+PulsePoint now covers five main workflows:
 
-- Session detail pages for subjective metrics, notes, physiology markers, media, and post-session review.
-- A Video Sync Player that aligns local video with heart-rate data and timestamped event notes.
-- AI-assisted event tagging for observations such as stimulation changes, physical findings, sensation, approach, climax, and recovery.
-- Session review flows that preserve both the signal data and the human context around it.
+- **Session review:** create, edit, annotate, analyze, compare, export, and listen back to recorded sessions.
+- **Body exploration:** track non-session anatomical/procedure-style exploration separately from active stimulation sessions.
+- **Live capture:** monitor HR, HRV/RR intervals, capture phase context, Pulsoid, Polar H10, and optional EMG while recording.
+- **AI evidence building:** use Profile Q&A, session Q&A, image/video review, AI video passes, annotations, and profile metrics as persistent context.
+- **Longitudinal analysis:** build profile, cascade, insight, correlation, trend, predictive, and profiler views from accumulated evidence.
 
-### 📈 Follow physiology and movement signals
+The app is still evolving quickly, but the core standalone stack is usable locally.
 
-- Heart-rate CSV import and timeline visualization.
-- Live Capture telemetry with current HR, trend lines, phase watch, and optional EMG data.
-- EMG import and visualization for MyoWare-derived signal data when available.
-- Motion Lab for local-only video-derived movement evidence, including region motion, hand activity, foot/leg activity, manual landmarks, and marker-assisted foot geometry experiments.
-- Session, trend, cascade, insight, profiler, and comparison views for longitudinal analysis.
+## Major Features
 
-### 🧠 Add AI interpretation carefully
+### Sessions and Annotations
 
-- AI Session Analysis, Technical Deep Dive, Cascade Analysis, Profiler, Insights, phase suggestions, and journal/storyline generation.
-- Shared profile context so analysis can use session details, event timelines, notes, journal entries, saved profile context, and reviewed Motion Lab evidence.
-- Background jobs for heavier AI and audio work so long tasks can continue while the UI changes focus.
-- Guardrails that treat telemetry and motion evidence as **observational support**, not diagnostic proof.
+- Rich session detail pages with subjective metrics, notes, physiological markers, linked local videos, event timelines, and post-session review.
+- Editable in-place event annotations on Session Detail and Video Sync pages, including delete confirmation.
+- AI-assisted annotation workbench for finding useful event candidates from existing session context.
+- AI phase marker suggestions for climax/recovery timing with explicit caution around ambiguous fluid, pre-ejaculate, lubricant, HR peaks, and unsupported timeline claims.
+- Persistent Session Details AI Q&A history, including saved chat restoration on page load.
+- Export helpers for session data and summaries.
 
-### 🎧 Listen back
+### Body Exploration
 
-- Tuned Nova TTS narration with a centralized Settings & Status page.
-- Premium server-side audio rendering and an Audio Library for completed exports.
-- Downloadable audio summaries for slower, more immersive review away from the screen.
+- Separate body-exploration records for anatomical/procedure-focused review that should not be interpreted as active stimulation by default.
+- Dedicated Body Exploration detail pages with AI chat, linked local video review, AI video/audio passes, and timeline drafting.
+- Prompt grounding for procedure/body-state interpretation: swabs, applicators, glans/meatus contact, Foley catheters, urethral sounds/dilators, tissue state, body response, and comfort/tolerance cues.
+- Stronger anti-overcall rules so visual review does not turn a swab, wipe, or applicator into a catheter/sound advancement unless the device is clearly visible or explicitly anchored by notes.
 
-## Current Status 🚧
+### AI Video and Audio Review
 
-PulsePoint is actively evolving. The core app runs locally, but some areas are still in “move carefully, there are wires everywhere” territory:
+- AI video-pass review for regular sessions and body explorations.
+- Sampled frame evidence from linked local video clips, with media context saved back into session/body-exploration AI evidence.
+- Audio pass support for AI interpretation where audio adds useful context.
+- Draft timeline event generation for meaningful visual or audio findings.
+- Source-lane rules for main/genital-composite, body exploration/procedure, feet/lower-body, and lateral/full-body camera views.
+- Direct, clinically accurate wording rules where useful. For example, future video review says `ejaculate` or `visible ejaculate` when evidence supports it, instead of euphemistic residue language.
 
-- Base44-to-standalone migration is mostly working but still being hardened.
-- Motion Lab UI and marker-assisted foot geometry tracking are under active iteration.
-- AI prompts and evidence plumbing are being refined so session analysis, technical deep dives, profiler output, and cascade analysis all see the right context.
-- TTS quality, chunking, and narration behavior are important parts of the experience and get treated as first-class features.
+### AI Profiler
 
-Contributions are welcome, especially when they help make the app more stable, understandable, private, and maintainable.
+- Comprehensive Physiological Profile synthesis from sessions, journals, profile metrics, Q&A, telemetry, and reviewed evidence.
+- Anatomical & Physiological Profile with run archive and TTS playback.
+- Head-to-Toe Image Review and Pelvic & Genital Image Review panels.
+- Existing-evidence-first profiler reviews: Sarah can synthesize from saved Profile Q&A findings, session visual reviews, body-exploration visual reviews, AI video-pass findings, entered profile metrics, and session evidence without requiring a fresh upload.
+- Fresh images remain optional supplemental evidence.
+- Profile Q&A findings are persisted and reused as structured evidence rather than relying on a model's hidden memory.
 
-## Tech Stack 🛠️
+### Live Capture
+
+- Condensed Live Capture flow with collapsed settings and cleaner controls.
+- Current HR, trend, phase context, status cards, and telemetry dashboard.
+- Direct Polar H10 support through Web Bluetooth where the browser supports it.
+- Direct H10 RR/HRV ingestion and session evidence plumbing.
+- Pulsoid and HeartRateOnStream-compatible relay paths.
+- Optional EMG telemetry display and capture helper integration.
+- Foreground stability work for Android installed PWA/SWA usage so returning to the app is less likely to reload the whole shell.
+
+### Motion and Media Evidence
+
+- Motion Lab for local-only video-derived movement evidence.
+- Region motion, hand activity, cadence proxy experiments, lower-body/foot activity, position segments, manual landmarks, and marker-assisted foot geometry.
+- Reviewed motion findings can be promoted into session timelines.
+- Local video is used in-browser; PulsePoint is designed to persist reviewed findings and derived evidence, not raw private video.
+
+### TTS and Audio Library
+
+- Centralized TTS settings for Nova-style narration.
+- TTSReader / AIOutputReader playback for long AI outputs with sentence highlighting.
+- Premium server-side rendering for longer audio summaries.
+- Audio Library for completed exports.
+- Background jobs for AI/TTS work with visible status, cancellation, completion notifications, and stale/hung indicators.
+
+### Mobile / PWA
+
+- Installable PWA/SWA-style experience on Android.
+- Service worker shell caching tuned to reduce foreground-return reloads.
+- Local notification support for Settings test alerts and background task completion alerts while the app/service worker is available.
+- Current notification support is local browser/PWA notification support, not full remote push. True closed-app push would require VAPID keys, push subscriptions, subscription storage, and backend send routes.
+
+## Tech Stack
 
 - **Frontend:** React 18, Vite, Tailwind, Radix UI, Recharts
 - **Backend:** Node.js, Express, SQLite via `better-sqlite3`
-- **AI/TTS providers:** OpenAI and Anthropic, configured through local environment variables
-- **Local telemetry helpers:** Heart-rate relay, OBS-aware capture helpers, optional EMG scripts
-- **Computer vision:** MediaPipe Tasks Vision for local video-derived motion evidence
+- **AI/TTS providers:** Anthropic and OpenAI through local environment variables
+- **TTS/STT:** OpenAI TTS and Whisper-backed voice input where configured
+- **Computer vision:** MediaPipe Tasks Vision for local video-derived evidence
+- **Telemetry helpers:** WebSocket HR relay, OBS-aware capture helpers, optional Python EMG scripts
+- **Mobile shell:** browser PWA/service worker
 
-## Quick Start 🚀
+## Quick Start
 
 Install dependencies:
 
@@ -69,7 +110,7 @@ Create a local environment file:
 cp .env.example .env
 ```
 
-Add whichever provider keys you want to use:
+Add provider keys as needed:
 
 ```bash
 OPENAI_API_KEY=your_openai_key
@@ -87,142 +128,42 @@ Default local URLs:
 - App: `http://localhost:5173`
 - API: `http://localhost:8787`
 
-You can also run them separately:
+Run separately when useful:
 
 ```bash
 npm run server
 npm run dev -- --host
 ```
 
-Build the frontend:
+Build:
 
 ```bash
 npm run build
 ```
 
-Run lint:
+Lint:
 
 ```bash
 npm run lint
 ```
 
-## Current Capture Stack 🎛️
+## Local Configuration
 
-PulsePoint can work from manually entered sessions and imported files alone. The richer live-capture workflow uses a small hardware/software chain.
+`server/config.js` centralizes local paths and runtime knobs. The defaults keep the current local data layout working, while `.env` can override it.
 
-### Required for the core app
-
-- Node.js and npm
-- a local browser
-- PulsePoint frontend and local API server
-
-### Used for heart-rate capture
-
-- **HeartRateOnStream** for live heart-rate telemetry
-- currently tested wearable source: **Samsung Galaxy Watch 7**
-- embedded PulsePoint HR relay started by the local API server
-- fallback helper assets in [`tools/capture/heart-rate`](tools/capture/heart-rate)
-
-The heart-rate relay receives live telemetry, exposes the WebSocket feed used by Live Capture, and writes HR CSV recordings when the OBS-driven recording flow is active. In the default setup it lives inside `npm run server`, so HR capture does not need its own extra terminal.
-
-### Used for EMG capture
-
-- **MyoWare EMG** hardware
-- a serial-connected microcontroller feed for the MyoWare signal
-- Python helpers and OBS overlays in [`tools/capture/emg`](tools/capture/emg)
-
-PulsePoint treats EMG as optional. HR can stand alone. EMG appears in Live Capture and analysis only when the signal source is live or session data has been attached.
-
-### Used for recorded media
-
-- **OBS Studio** is the current recording and automation center.
-- OBS is not required for imported-session review.
-- OBS is very useful for synchronized capture timing, overlays, and a clean video record to review later.
-
-In the current live workflow, OBS recording start is the natural session boundary: HR/EMG helper tools can log around that recording window, and PulsePoint can turn the finished capture into a new session for review. 🎬
-
-## Motion Lab 🧪
-
-Motion Lab is the local-only video review and movement-evidence workspace. It is designed to extract **derived evidence**, not store raw video.
-
-Current capabilities include:
-
-- local video loading from the browser
-- region-based left/right foot or lower-body activity tracking
-- optional forefoot/toe-region comparison
-- hand movement activity and cadence proxy experiments
-- position-change / region-segment handling for videos where framing shifts
-- manual foot landmark calibration
-- marker-assisted foot geometry experiments using high-contrast / reflective markers
-- reviewed findings that can be promoted into the session timeline
-
-Important caveat: Motion Lab movement signals are observational. They should be verified against the video and interpreted alongside session notes, HR/EMG telemetry, and context.
-
-## Capture Helper Code Lives Here Now 📦
-
-The HeartRate and EMG helper source used by this setup lives inside the repo:
-
-- [`tools/capture/heart-rate`](tools/capture/heart-rate)
-- [`tools/capture/emg`](tools/capture/emg)
-- [`tools/capture/README.md`](tools/capture/README.md)
-
-Only source code, helper overlays, and local dependency metadata belong there. Recordings, text feeds, EMG session exports, calibration files, and generated telemetry are intentionally ignored.
-
-The standalone API still keeps the existing sibling-folder defaults for capture data so a working setup does not silently break. When ready, point `.env` at the in-repo helper output paths or run the in-repo helpers directly.
-
-## Capture Helper Setup
-
-### Heart-rate relay
-
-The PulsePoint API starts the HR relay by default:
-
-```bash
-npm run server
-```
-
-The standalone helper is still available for troubleshooting or older workflows:
-
-```bash
-npm run capture:hr:install
-npm run capture:hr
-```
-
-### EMG helpers
-
-Install the Python requirements for the EMG scripts:
-
-```bash
-npm run capture:emg:install
-```
-
-Run the helper that matches the setup:
-
-```bash
-npm run capture:emg:dual
-```
-
-or
-
-```bash
-npm run capture:emg:single
-```
-
-Common capture knobs can be set through environment values such as `EMG_SERIAL_PORT`, `EMG_SERIAL_BAUD`, `OBS_HOST`, `OBS_PORT`, and `EMG_OBS_ENABLED`. When launched from the repo root, their live text files and session CSVs stay under `tools/capture/emg/`.
-
-## Local Configuration ⚙️
-
-`server/config.js` centralizes local paths. The defaults keep the current sibling-folder capture layout working, while `.env` can override it:
+Common values:
 
 - `DATABASE_PATH`, `UPLOAD_DIR`, and `TTS_RENDER_DIR` control local app storage.
-- `HR_CAPTURE_RELAY_ENABLED` controls the embedded HR relay started with the API.
-- `HR_CAPTURE_RELAY_PORT` and `HR_CAPTURE_WS_URL` keep its WebSocket address configurable.
-- `OBS_WS_URL` and `OBS_PASSWORD` let the embedded relay follow OBS recording state.
-- `HR_RECORDINGS_DIR` points at heart-rate CSV recordings.
-- `EMG_TEXT_DIR` points at live EMG telemetry text files.
-- `EMG_SESSIONS_DIR` points at EMG CSV session exports.
-- `BACKGROUND_JOB_CONCURRENCY` keeps local background queue throughput explicit.
+- `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` power AI/TTS/STT features.
+- `ANTHROPIC_MODEL` can pin the Claude model family used by local analysis routes.
+- `OPENAI_TTS_MODEL`, `OPENAI_TTS_FORMAT`, `OPENAI_TTS_SPEED`, and related values tune server-side TTS defaults.
+- `BACKGROUND_JOB_CONCURRENCY` controls local queue throughput.
+- `HR_CAPTURE_RELAY_ENABLED`, `HR_CAPTURE_RELAY_PORT`, and `HR_CAPTURE_WS_URL` configure the embedded HR relay.
+- `OBS_WS_URL` and `OBS_PASSWORD` let capture helpers follow OBS recording state.
+- `HR_RECORDINGS_DIR`, `EMG_TEXT_DIR`, and `EMG_SESSIONS_DIR` point at generated telemetry folders.
+- `OPENAI_ADMIN_API_KEY` and `ANTHROPIC_ADMIN_API_KEY` optionally enable provider cost visibility in Settings & Status.
 
-For the repo-local capture helpers, these are the matching output locations:
+Repo-local helper output alternatives:
 
 ```bash
 HR_RECORDINGS_DIR=./tools/capture/heart-rate/recordings
@@ -230,23 +171,89 @@ EMG_TEXT_DIR=./tools/capture/emg
 EMG_SESSIONS_DIR=./tools/capture/emg/emg_sessions
 ```
 
+## Capture Stack
+
+PulsePoint works with manually entered sessions and imported files. The richer live workflow can use HR, HRV/RR, OBS, and EMG.
+
+### Heart Rate and HRV
+
+Supported or evolving sources include:
+
+- Direct Polar H10 via browser Bluetooth where supported
+- Pulsoid live telemetry
+- HeartRateOnStream-compatible local relay
+- imported heart-rate CSV timelines
+
+PulsePoint can ingest HR timelines and RR/HRV evidence for session analysis, profiler synthesis, Live Capture, and longitudinal review.
+
+The embedded relay starts with:
+
+```bash
+npm run server
+```
+
+The standalone relay remains available for troubleshooting:
+
+```bash
+npm run capture:hr:install
+npm run capture:hr
+```
+
+### EMG
+
+EMG is optional. HR can stand alone.
+
+The repo includes Python helpers for MyoWare-style EMG workflows:
+
+```bash
+npm run capture:emg:install
+npm run capture:emg:dual
+npm run capture:emg:single
+```
+
+Common overrides:
+
+```bash
+EMG_SERIAL_PORT=COM5
+EMG_SERIAL_BAUD=115200
+EMG_OBS_ENABLED=true
+OBS_HOST=127.0.0.1
+OBS_PORT=4455
+```
+
+### OBS and Recorded Media
+
+OBS Studio is the current recording and automation center for synchronized capture timing, overlays, and clean video records.
+
+OBS is not required for imported-session review, but it is useful for capture sessions where HR/EMG helper tools should align with the recording window.
+
+## Main App Areas
+
+- `/sessions` - session list and bulk analysis tools
+- `/sessions/:id` - session detail, Q&A, media review, annotations, export, and AI outputs
+- `/exploration` - body exploration records
+- `/capture` - live capture and telemetry dashboard
+- `/profiler` - AI Profiler and anatomical/profile synthesis
+- `/profile-qa` - Profile Q&A and persistent profile findings
+- `/profile` - entered metrics, physiological profile, and anatomical/mechanical profile fields
+- `/video` - Video Sync player
+- `/ai-annotation` - AI-assisted annotation workbench
+- `/motion-lab` - local video-derived movement evidence
+- `/settings` - TTS, notifications, provider visibility, background tasks, and display/readability settings
+
 ## Settings & Status
 
 The Settings & Status page centralizes:
 
 - Nova TTS tuning and presets
-- background task visibility and cancellation
-- stale or hung job review
-- provider cost-report visibility when optional admin reporting keys are configured
+- display/readability themes and font scale
+- local notification permission and test alerts
+- background task visibility, cancellation, stale/hung review, and completion notifications
+- provider API status and optional cost-report visibility
 
-The app uses ordinary OpenAI and Anthropic API keys for TTS and AI work. Optional admin reporting keys can add cost-report visibility:
+Local completion notifications work while PulsePoint is open or available to the PWA/service worker. Fully closed-app remote delivery is intentionally not claimed yet.
 
-```bash
-OPENAI_ADMIN_API_KEY=your_openai_admin_key
-ANTHROPIC_ADMIN_API_KEY=your_anthropic_admin_key
-```
-
-## Remote / Mobile Testing 📱
+## Remote / Mobile Testing
 
 For private mobile testing, Tailscale is the preferred path.
 
@@ -256,41 +263,82 @@ Example Tailscale Serve command:
 tailscale serve --bg --https=443 http://127.0.0.1:5173
 ```
 
-If you are testing multiple local apps, keep each app on a distinct HTTPS origin/port so browser PWA installs and service workers do not get confused.
+If testing multiple local apps, keep each app on a distinct HTTPS origin/port so PWA installs and service workers do not collide.
 
-## Data and Privacy 🔐
+On Android:
 
-PulsePoint is intentionally local-first. Treat the workspace and `data/` directory as sensitive.
+- install from the served HTTPS origin when possible
+- grant notification permission from Settings & Status
+- use the Settings test notification first
+- expect local completion alerts while the PWA is alive/backgrounded, not guaranteed closed-app push
+- if service-worker behavior looks stale after a deploy, close/reopen the installed app or reinstall the PWA
+
+## Data and Privacy
+
+PulsePoint is intentionally local-first. Treat the workspace, `.env`, and `data/` as sensitive.
 
 Important local data areas:
 
 - `data/uploads/` stores generated and uploaded files.
+- `data/pulsepoint.sqlite` stores local app data by default.
 - `ProcessingJob` records track backend AI/TTS job status and results.
-- browser local storage may contain active TTS job IDs and TTS preferences.
+- browser local storage may contain TTS preferences, active jobs, UI preferences, notification preferences, and cached app state.
 - capture helper output folders can contain raw physiology telemetry and session exports.
 
-Raw video is not meant to be committed, uploaded, or persisted by Motion Lab. The app is designed to save reviewed summaries, derived telemetry, and explicitly accepted observations.
+Do not commit:
 
-## For Contributors 🤝
+- `.env`
+- raw recordings or private video
+- generated audio
+- telemetry exports
+- local SQLite databases
+- capture helper live text feeds, calibration files, or session CSVs
+- Codex remote attachment folders
 
-A few norms that make this project easier to work on:
+AI APIs receive whatever text/media frames are sent for a requested analysis. Keep secrets out of client code and avoid logging sensitive session data.
 
-- Prefer small, focused branches and commits.
-- Do not commit private recordings, telemetry exports, `.env`, generated audio, or local database files.
-- Keep AI/motion interpretation cautious: derived signals support review, they do not prove intent, diagnosis, or physiology by themselves.
-- Preserve local-first behavior unless a feature explicitly says otherwise.
-- Run `npm run build` before handing off larger UI or data-flow changes.
+## Development Notes
 
-Useful validation commands:
+- Prefer small branches and focused commits.
+- Preserve local-first behavior unless a feature explicitly requires a remote path.
+- Keep AI interpretation cautious: telemetry, motion, image, and audio evidence support review; they do not prove intent, diagnosis, force, pain, or physiology by themselves.
+- Session and profile evidence is cumulative. When changing AI prompts, check whether Profile Q&A, visual evidence, session event timelines, body exploration, and entered metrics still flow through.
+- TTS/Nova cadence matters. Do not casually change chunking, sentence boundaries, or voice settings.
+- Restart `npm run server` after backend route, config, or job changes.
+
+Useful validation:
 
 ```bash
 npm run lint
 npm run build
 ```
 
-## Notes 📝
+For narrow frontend edits, focused commands are often faster:
 
-- Nova is the primary tuned TTS voice for the app experience. 🎙️
-- Premium TTS quality depends on the selected engine, export format, and server-side renderer.
-- Motion Lab is under active development; verify important movement findings against the source video.
-- Restart `npm run server` after backend route, config, or job changes.
+```bash
+.\node_modules\.bin\eslint.cmd path\to\File.jsx --quiet
+.\node_modules\.bin\vite.cmd build
+```
+
+## Capture Helper Code
+
+Helper source lives in:
+
+- [`tools/capture/heart-rate`](tools/capture/heart-rate)
+- [`tools/capture/emg`](tools/capture/emg)
+- [`tools/capture/README.md`](tools/capture/README.md)
+
+Only source code, helper overlays, and dependency metadata belong there. Recordings, text feeds, EMG session exports, calibration files, and generated telemetry are ignored.
+
+## Status
+
+PulsePoint is active, private, and moving fast. The standalone app is usable locally, with the highest-change areas currently being:
+
+- AI prompt grounding and reviewed-evidence persistence
+- Live Capture hardware/source polish
+- Android PWA behavior
+- body exploration analysis
+- profiler/anatomical synthesis
+- Motion Lab evidence workflows
+
+When in doubt, favor boring data structures, explicit evidence, local storage, and reversible changes.
