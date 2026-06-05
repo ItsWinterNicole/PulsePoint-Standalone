@@ -66,7 +66,7 @@ function InfoRow({ label, value }) {
 }
 
 function MetricBadge({ label, value, max = 10 }) {
-  if (!value) return null;
+  if (value === undefined || value === null || value === "") return null;
   const pct = (value / max) * 100;
   return (
     <div className="space-y-1">
@@ -78,6 +78,14 @@ function MetricBadge({ label, value, max = 10 }) {
         <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
       </div>
     </div>
+  );
+}
+
+function EmptyPanelNote({ children }) {
+  return (
+    <p className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+      {children}
+    </p>
   );
 }
 
@@ -722,6 +730,30 @@ export default function SessionDetail() {
   const s = session;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
+  const recorded = (value) => value !== undefined && value !== null && value !== "";
+  const metricBadges = [
+    { label: s.no_climax ? "Peak Arousal" : "Peak Intensity", value: s.intensity },
+    { label: "Build Quality", value: s.build_quality },
+    { label: "Satisfaction", value: s.satisfaction },
+    !s.no_climax ? { label: "Release Completeness", value: s.release_completeness } : null,
+    { label: "Arousal Depth", value: s.arousal_depth },
+    s.no_climax ? { label: "Arousal Sustainability", value: s.sustainability } : null,
+    { label: "Erection / Response Stability", value: s.erection_stability },
+    { label: "Stimulation Fit", value: s.stimulation_fit },
+    { label: "Edge / Control Quality", value: s.control },
+    { label: "Sensory Immersion", value: s.sensory_immersion },
+    !s.no_climax ? { label: "Recovery / Afterglow Quality", value: s.recovery_quality } : null,
+    { label: "Discomfort / Interruption Impact", value: s.discomfort_interference },
+  ].filter((item) => item && recorded(item.value));
+  const metricInfoRows = [
+    s.build_type ? { label: "Build Type", value: s.build_type === "Other" && s.custom_build_type ? s.custom_build_type : s.build_type } : null,
+    !s.no_climax && s.climax_duration ? { label: "Climax Duration", value: cap(s.climax_duration) } : null,
+    s.primary_limiting_factor ? { label: "Primary Limiting Factor", value: s.primary_limiting_factor } : null,
+    s.no_climax_stop_reason ? { label: "Why It Stopped", value: s.no_climax_stop_reason } : null,
+    s.subjective_notes ? { label: "Subjective Notes", value: s.subjective_notes } : null,
+    s.barrier_to_completion ? { label: "Barrier to Completion", value: s.barrier_to_completion } : null,
+  ].filter(Boolean);
+  const hasMetricContent = metricBadges.length > 0 || metricInfoRows.length > 0;
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
   const linkedLocalVideos = s.linked_local_videos || [];
@@ -924,18 +956,23 @@ export default function SessionDetail() {
         <section id="session-metrics-context" className="scroll-mt-24 space-y-4">
         <div className="bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Metrics</h3>
-          <MetricBadge label={s.no_climax ? "Peak Arousal" : "Intensity"} value={s.intensity} />
-          <MetricBadge label="Build Quality" value={s.build_quality} />
-          <MetricBadge label="Satisfaction" value={s.satisfaction} />
-          {s.build_type && <InfoRow label="Build Type" value={s.build_type === "Other" && s.custom_build_type ? s.custom_build_type : s.build_type} />}
-          {!s.no_climax && s.climax_duration && (
-            <InfoRow label="Climax Duration" value={cap(s.climax_duration)} />
+          {hasMetricContent ? (
+            <>
+              {metricBadges.map((metric) => <MetricBadge key={metric.label} label={metric.label} value={metric.value} />)}
+              {metricInfoRows.map((row) => <InfoRow key={row.label} label={row.label} value={row.value} />)}
+            </>
+          ) : (
+            <EmptyPanelNote>No subjective metrics are saved for this session yet. Edit the session to add intensity, build quality, satisfaction, response quality, limiting factors, or no-climax metrics.</EmptyPanelNote>
           )}
         </div>
 
         <div className="bg-card rounded-xl border border-border p-4 space-y-1">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Context</h3>
-          {contextRows.map((row) => <InfoRow key={row.label} label={row.label} value={row.value} />)}
+          {contextRows.length ? (
+            contextRows.map((row) => <InfoRow key={row.label} label={row.label} value={row.value} />)
+          ) : (
+            <EmptyPanelNote>No structured context is saved for this session yet. Edit the session to add fatigue, hydration, food state, alcohol/cannabis context, mental state, privacy, environment, or preparation.</EmptyPanelNote>
+          )}
         </div>
         </section>
 
