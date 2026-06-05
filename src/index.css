@@ -278,6 +278,7 @@
   .ai-output-copy-surface,
   .ai-output-paragraph-shell,
   .ai-output-paragraph {
+    display: block;
     width: 100%;
   }
 
@@ -288,6 +289,7 @@
   .ai-output-copy-surface li {
     overflow-wrap: normal;
     word-break: normal;
+    line-break: auto;
     white-space: normal;
     text-wrap: pretty;
   }

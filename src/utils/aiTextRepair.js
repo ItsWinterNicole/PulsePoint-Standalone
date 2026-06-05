@@ -16,14 +16,19 @@ export function repairCharacterSplitParagraph(text) {
   const singleCharLines = nonEmpty.filter((line) => line.length === 1).length;
   const shortLines = nonEmpty.filter((line) => line.length <= 2).length;
   const looksCharacterSplit =
-    nonEmpty.length >= 40 &&
+    nonEmpty.length >= 8 &&
     singleCharLines / nonEmpty.length >= 0.65 &&
     shortLines / nonEmpty.length >= 0.85;
 
   if (!looksCharacterSplit) return repairDecimalSpacing(text);
 
-  return nonEmpty
-    .join("")
+  const rebuilt = lines.reduce((acc, line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return acc && !acc.endsWith(" ") ? `${acc} ` : acc;
+    return `${acc}${trimmed}`;
+  }, "");
+
+  return rebuilt
     .replace(/\s+/g, " ")
     .replace(/(\d+)\.\s+(\d+)/g, "$1.$2")
     .replace(/([.!?])([A-Z])/g, "$1 $2")

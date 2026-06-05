@@ -1539,7 +1539,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
                 if (el) paragraphRefs.current.set(paraIdx, el);
                 else paragraphRefs.current.delete(paraIdx);
               }}
-              className="cursor-pointer"
+              className="ai-output-paragraph-shell w-full min-w-0 max-w-full cursor-pointer"
               onClick={() => startFrom(paraIdx)}
             >
               {renderParagraph(displayText, paraIdx, isPlaying, isBuffering, isPlaying ? currentSentenceIdx : -1, (sentenceIdx) => startFrom(paraIdx, sentenceIdx))}

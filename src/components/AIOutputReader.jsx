@@ -45,7 +45,7 @@ function SectionHeader({ section }) {
   if (!section?.label && !section?.title) return null;
   return (
     <p
-      className="mb-1.5 mt-4 flex items-center gap-1.5 border-t border-border pt-3 text-xs font-semibold uppercase tracking-wider"
+      className="mb-1.5 mt-4 flex w-full min-w-0 max-w-full items-center gap-1.5 border-t border-border pt-3 text-xs font-semibold uppercase tracking-wider"
       style={{ color: section.color || "hsl(var(--primary))" }}
     >
       {section.icon}{section.label || section.title}
@@ -88,7 +88,7 @@ export default function AIOutputReader({
         if (isSummary) {
           return (
             <p
-              className="rounded-r-md border-l-2 py-1 pl-3 text-base font-medium leading-relaxed transition-all duration-200"
+              className="ai-output-paragraph w-full min-w-0 max-w-full rounded-r-md border-l-2 py-1 pl-3 text-base font-medium leading-relaxed transition-all duration-200"
               style={{
                 borderColor: isActive ? color : colorWithAlpha(color, 0.5),
                 background: isActive ? colorWithAlpha(color, 0.12) : isBuffering ? colorWithAlpha(color, 0.07) : "transparent",
@@ -104,10 +104,10 @@ export default function AIOutputReader({
         }
 
         return (
-          <div>
+          <div className="ai-output-paragraph-shell w-full min-w-0 max-w-full">
             {isFirstInSection && <SectionHeader section={section} />}
             <li
-              className="list-none rounded-r-md border-l-2 py-1.5 pl-3 text-sm leading-relaxed transition-all duration-200"
+              className="ai-output-paragraph w-full min-w-0 max-w-full list-none rounded-r-md border-l-2 py-1.5 pl-3 text-sm leading-relaxed transition-all duration-200"
               style={{
                 borderColor: isActive ? color : colorWithAlpha(color, 0.45),
                 background: isActive ? colorWithAlpha(color, 0.1) : isBuffering ? colorWithAlpha(color, 0.06) : "transparent",
