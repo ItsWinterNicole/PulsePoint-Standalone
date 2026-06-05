@@ -480,6 +480,18 @@ ${sessionJournal.key_moments?.length ? `Key moments noted: ${sessionJournal.key_
 
 Factor the journal into your analysis — where the person's subjective experience aligns with or diverges from the objective physiological data is especially worth noting.` : "";
 
+    const hrvIntegrationRules = hrvEvidence ? `
+RR-DERIVED HRV INTEGRATION RULE:
+- Use RR-derived HRV as interpreted autonomic evidence throughout the session analysis when quality and coverage support it, not as a detached metric list.
+- Compare HRV by meaningful windows: baseline or entry state, build/exploration, stimulation or body-state transitions, pre-climax, climax-to-recovery, and recovery/end-state when those windows exist.
+- Tie HRV changes to heart rate direction, event notes, movement or EMG, stimulation changes, breathing/settling cues, discomfort, and recovery markers. The useful question is what the HRV pattern adds to the session story.
+- If HR rises while usable HRV falls, describe that as a supported sign of increasing autonomic load only when the timing and quality support it.
+- If recovery shows higher rolling RMSSD or SDNN than the build/climax window, use that to deepen the recovery interpretation instead of only saying HR came down.
+- If HRV is flat, noisy, low-quality-only, or not aligned with a meaningful event window, say the HRV evidence does not add a strong interpretation rather than forcing one.
+- Put HRV where it belongs: overview if it changes the overall read, phase/window paragraphs when it explains a transition, notable findings when it forms a pattern, and recommendations only if it suggests a focused future comparison.
+- Do not write a separate HRV mini-report unless the session's strongest finding is HRV-specific. Do not list RMSSD, SDNN, or pNN50 values without explaining their timing, quality, and relationship to the body-state arc.
+` : "";
+
     const aiPayload = {
       model: "claude_sonnet_4_6",
       ...(isTechnical ? { max_tokens: 12000 } : {}),
@@ -516,7 +528,7 @@ PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:
 ${isTechnical
   ? "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."
   : "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."}
-${hrvEvidence ? "- Use usable RR-derived HRV as an additional within-session signal where it changes or strengthens the interpretation; do not merely list HRV numbers." : ""}
+${hrvEvidence ? "- Use usable RR-derived HRV as an additional within-session signal where it changes or strengthens the interpretation; weave it into the relevant body-state, stimulation, and recovery windows instead of merely listing HRV numbers." : ""}
 ${isTechnical
   ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
@@ -544,6 +556,7 @@ EMG INTERPRETATION RULES — apply carefully:
 - If HR rises without EMG change, note this as a possible autonomic or non-muscular response.
 - Describe the likely target muscle based on placement notes and photo tags when available.` : ""}
 ${hrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
+${hrvIntegrationRules}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -571,6 +584,11 @@ ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
 
 Use this to trace sympathetic activation patterns, body-state transitions, exploratory response, arousal plateaus when relevant, and correlation between HR changes and event timing. For non-climax body exploration sessions, HR still matters: use it to describe autonomic response, settling, activation, comfort/discomfort, or positional/sensory response rather than looking for a climax arc.` : ""}
+
+${hrvEvidence ? `RR-DERIVED HRV EVIDENCE (interpret in context; do not dump numbers):
+${JSON.stringify(hrvEvidence, null, 2)}
+
+Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.` : ""}
 
 Session data:
 ${JSON.stringify({
@@ -646,14 +664,14 @@ Provide ${isTechnical
         type: "object",
         properties: {
           summary: isTechnical
-            ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, and why the session behaved the way it did." }
-            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, without retelling the full chronology." },
+            ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, HR/HRV-supported autonomic interpretation when available, and why the session behaved the way it did." }
+            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including HRV only when it changes or strengthens the interpretation, without retelling the full chronology." },
           arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, exploration or stimulation links, supported anatomy, body-state transitions, pre-climax/climax/recovery shifts when present, and why the session progressed as it did." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful body-state transitions and explain what the body appears to be doing at those moments." },
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR and usable HRV autonomic arc, exploration or stimulation links, supported anatomy, body-state transitions, pre-climax/climax/recovery shifts when present, and why the session progressed as it did." }
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful body-state transitions and explain what the body appears to be doing at those moments, weaving in usable HRV when it clarifies a transition." },
           event_analysis: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
-            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, and evidence discrepancies without replaying the chronology." },
+            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR/HRV-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
+            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, HRV where relevant, and evidence discrepancies without replaying the chronology." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
           notable_findings: isTechnical
             ? { type: "array", items: { type: "string" } }
