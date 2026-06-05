@@ -881,22 +881,25 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   ttsSessionId: "profile-pelvic-genital-image-review",
   icon: <User className="w-4 h-4" />,
   color: "hsl(var(--chart-2))",
-  purpose: "Detailed pelvis, external genital, glans/meatus/foreskin, scrotal/perineal, pelvic positioning, tissue state, and visible instrumentation or device-fit context review.",
-  helper: "Review saved pelvic/genital evidence from Q&A, sessions, body exploration, entered measurements, and prior Sarah media reviews. Fresh focused images are optional when you want to add new visible evidence to the existing profile.",
-  emptyText: "Click Review Existing Evidence to synthesize saved pelvic/genital findings, or add focused images if you want fresh review of external anatomy, tissue context, meatus/glans/foreskin, scrotum/perineum, and fit/instrumentation context.",
+  purpose: "Detailed pelvis, external genital, anal/perianal, glans/meatus/foreskin, scrotal/perineal, tissue-state, physiology, and visible device-fit context review grounded in supplied photos and video clips.",
+  helper: "Review saved pelvic/genital visual evidence from Q&A, sessions, body exploration, entered measurements, and prior Sarah media reviews. Fresh focused images are optional when you want to add new visible evidence to the existing profile.",
+  emptyText: "Click Review Existing Evidence to synthesize saved pelvic/genital visual findings, or add focused images if you want fresh review of external anatomy, tissue context, meatus/glans/foreskin, scrotum/perineum, anus/perianal anatomy, and fit/instrumentation context.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
-- Focus on visible pelvic positioning, external genital anatomy, shaft, glans, foreskin or circumcision context, meatus, scrotum, perineum, lower abdomen/groin, tissue state, surface findings, and image-limited pelvic-floor context.
-- If catheters, urethral sounds, devices, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position and fit cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
-- Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity, mismatch, or what cannot be assessed.
-- Organize the review as a pelvic/genital reference artifact: evidence scope, anatomy by region, state-dependent changes, device or stimulation mechanics, tissue state and safety observations, measurement reconciliation, and limitations or optional evidence gaps.
+- Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and evidence limitations.
+- Focus the anatomy-by-region section on shaft, glans, foreskin/retraction state, meatus, frenulum/frenular remnant, scrotum/testes, perineum/pelvic floor, anus/perianal region/anal verge when visible, and lower abdomen/groin only when it helps interpret the pelvic/genital evidence.
+- Include anal/perianal anatomy when it is visible or previously reviewed, especially where it matters for rectal stimulation context, perineal mechanics, tissue state, safety, or device/contact fit. If anal/perianal evidence is absent or limited, say that plainly rather than skipping the region.
+- Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
+- If catheters, urethral sounds, anal devices, rectal stimulation equipment, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position, contact zone, fit, and tissue interaction cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
+- Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity, mismatch, or what cannot be assessed, while keeping the output centered on visual anatomy and physiology.
+- Organize the review as a pelvic/genital reference artifact: evidence scope, anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and limitations or optional evidence gaps.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
 `,
   sections: [
     { key: "evidence_scope_and_cutoff", label: "Evidence Scope & Cutoff", color: "hsl(var(--chart-2))" },
     { key: "anatomy_by_region", label: "Anatomy by Region", color: "hsl(var(--primary))" },
     { key: "state_dependent_changes", label: "State-Dependent Changes", color: "hsl(var(--chart-4))" },
-    { key: "device_and_stimulation_mechanics", label: "Device & Stimulation Mechanics", color: "hsl(var(--chart-1))" },
+    { key: "device_and_stimulation_mechanics", label: "Device & Contact Mechanics", color: "hsl(var(--chart-1))" },
     { key: "tissue_state_and_safety_observations", label: "Tissue State & Safety Observations", color: "hsl(var(--chart-3))" },
     { key: "measurement_reconciliation", label: "Measurement Reconciliation", color: "hsl(var(--chart-5))" },
     { key: "limitations_and_optional_evidence_gaps", label: "Limitations & Optional Evidence Gaps", color: "hsl(var(--muted-foreground))", required: false },
