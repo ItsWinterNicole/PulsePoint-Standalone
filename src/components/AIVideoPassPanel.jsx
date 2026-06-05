@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
+import { ANATOMICAL_REFERENCE_FOCUS_RULE } from "@/lib/aiGrounding";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
 import { EXPLORATION_EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 import {
@@ -948,6 +949,10 @@ Use exploration event categories only: instrumentation, instrumentation_change, 
 Draft event examples for this mode: "Swab circles around the meatus and glans", "White applicator contacts the glans", "Meatal prep continues with visible glans contact", "Foley catheter remains visible at the meatus" only when the catheter is clearly visible, "Glans appears fuller with visible lubricant sheen", "Comfort note aligns with visible repositioning".` : ""}
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+
+${ANATOMICAL_REFERENCE_FOCUS_RULE}
+
+Video-pass focus rule: this is a visual evidence pass, not a broad profile synthesis. Prioritize visible anatomy, tissue state, state-dependent changes, contact mechanics, stimulation or procedure mechanics, device/material interaction, positioning, safety/risk-control observations, and evidence limitations. Use psychological or historical context only when it directly explains the visible mechanics, device interaction, safety, or session-specific physiology in this window.
 
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "Context can support identification only when the frames show a matching visible object or action. If the record says Foley/sounding is part of the exploration but the current frames show a swab, wipe, applicator, hand, or indistinct tool around the meatus/glans, describe that visible prep/contact action instead of converting it into catheter or sound movement." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 

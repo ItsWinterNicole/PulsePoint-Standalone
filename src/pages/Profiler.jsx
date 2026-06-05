@@ -6,7 +6,7 @@ import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
@@ -889,17 +889,17 @@ PELVIC / GENITAL REVIEW SCOPE:
 - Focus on visible pelvic positioning, external genital anatomy, shaft, glans, foreskin or circumcision context, meatus, scrotum, perineum, lower abdomen/groin, tissue state, surface findings, and image-limited pelvic-floor context.
 - If catheters, urethral sounds, devices, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position and fit cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
 - Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity, mismatch, or what cannot be assessed.
+- Organize the review as a pelvic/genital reference artifact: evidence scope, anatomy by region, state-dependent changes, device or stimulation mechanics, tissue state and safety observations, measurement reconciliation, and limitations or optional evidence gaps.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
 `,
   sections: [
-    { key: "pelvic_positioning_context", label: "Pelvic Positioning Context", color: "hsl(var(--chart-2))" },
-    { key: "external_genital_overview", label: "External Genital Overview", color: "hsl(var(--primary))" },
-    { key: "shaft_glans_foreskin_meatus", label: "Shaft, Glans, Foreskin & Meatus", color: "hsl(var(--chart-4))" },
-    { key: "scrotal_perineal_and_pelvic_floor_context", label: "Scrotal, Perineal & Pelvic-Floor Context", color: "hsl(var(--chart-5))" },
-    { key: "tissue_state_surface_findings", label: "Tissue State & Surface Findings", color: "hsl(var(--chart-3))" },
-    { key: "instrumentation_fit_and_device_context", label: "Instrumentation, Fit & Device Context", color: "hsl(var(--chart-1))" },
-    { key: "profile_context_reconciliation", label: "Profile Context Reconciliation", color: "hsl(var(--chart-2))" },
-    { key: "limitations_and_next_images", label: "Limitations & Next Images", color: "hsl(var(--muted-foreground))", required: false },
+    { key: "evidence_scope_and_cutoff", label: "Evidence Scope & Cutoff", color: "hsl(var(--chart-2))" },
+    { key: "anatomy_by_region", label: "Anatomy by Region", color: "hsl(var(--primary))" },
+    { key: "state_dependent_changes", label: "State-Dependent Changes", color: "hsl(var(--chart-4))" },
+    { key: "device_and_stimulation_mechanics", label: "Device & Stimulation Mechanics", color: "hsl(var(--chart-1))" },
+    { key: "tissue_state_and_safety_observations", label: "Tissue State & Safety Observations", color: "hsl(var(--chart-3))" },
+    { key: "measurement_reconciliation", label: "Measurement Reconciliation", color: "hsl(var(--chart-5))" },
+    { key: "limitations_and_optional_evidence_gaps", label: "Limitations & Optional Evidence Gaps", color: "hsl(var(--muted-foreground))", required: false },
   ],
 };
 
@@ -965,6 +965,7 @@ Review purpose: ${config.purpose}
 
 ${groundingContext}
 ${imageReviewContext}
+${ANATOMICAL_REFERENCE_FOCUS_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${SESSION_CONTEXT_GROUNDING_RULE}
@@ -974,6 +975,7 @@ IMAGE REVIEW RULES:
 - If fresh images are attached to this request, analyze what is visible in those images and reconcile it with saved profile context.
 - If no fresh images are attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying you are directly seeing the original media again.
 - Use existing Q&A findings, entered profile metrics, and session/video/body-exploration evidence as context, not as permission to invent visible findings.
+- Keep this artifact focused on anatomical/media-reference evidence. Do not expand into broad personal history, psychological backstory, reclaiming/history framing, whole-life meaning, or session optimization unless it directly explains a visible anatomical, mechanical, device-fit, safety, or session-specific physiological finding.
 - Do not eroticize the image or write arousal-focused prose.
 - Do not infer identity, diagnosis, pathology, intent, pain, force, or sexual activity.
 - If image quality, angle, lighting, posture, tissue state, cropping, or camera distortion limits confidence, say so clearly.
@@ -1710,6 +1712,7 @@ ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
+${ANATOMICAL_REFERENCE_FOCUS_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${longitudinalHrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
@@ -1719,6 +1722,7 @@ SYNTHESIS REQUIREMENTS:
 - Write every part of the response directly to the person in second person, including the opening overview. Do not open with "Ben is," "the person is," "the user is," or any other third-person framing.
 - Separate directly entered anatomical observations from repeated session-linked findings and from cautious interpretations.
 - Consider constitutional/body habitus, cardiovascular/autonomic, respiratory, neurological/sensory, musculoskeletal/biomechanical, and endocrine/metabolic context only when those data were provided.
+- Use psychological, personal-history, or broad longitudinal context only where it directly explains anatomy, visible mechanics, device interaction, safety/risk-control observations, or session-specific physiology. Do not turn this A&P artifact into a broad arousal biography or life-history synthesis.
 - When usable RR-derived HRV exists, use repeated within-session build, climax, or recovery changes to deepen the cardiovascular and autonomic context without treating session HRV as a resting baseline or diagnostic measure.
 - When populated, integrate static resting or flaccid anatomy, static erect anatomy, dynamic transition findings, glans or foreskin context, meatal structure, urethral accommodation, fit or tolerance, pressure distribution, device interaction, instrumentation compatibility or limitations, and repeated functional response observations.
 - Use anatomical dimensions analytically, such as when dynamic expansion, fit variability, accommodation, pressure distribution, stimulation mechanics, or session findings make them relevant. Do not recite measurements without purpose.

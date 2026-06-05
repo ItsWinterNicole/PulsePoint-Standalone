@@ -4,7 +4,7 @@ import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw,
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/aiGrounding";
 import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
 
 const PROFILE_CATEGORIES = [
@@ -1275,10 +1275,12 @@ No affirmations or pleasantries. 2–3 sentences.`;
 
     const imageReviewPrompt = imagePayload.aiImages.length ? `SARAH IMAGE REVIEW MODE:
 You are Sarah inside PulsePoint. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
+${ANATOMICAL_REFERENCE_FOCUS_RULE}
 - Do not shame, moralize, flirt, rate attractiveness, or write erotic commentary.
 - Separate what is directly visible in the image from what is inferred from profile/session history.
 - Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.
 - Focus on anatomy, physiology, device fit, marker/sticker placement, catheter/sleeve/e-stim/suction interaction, posture/positioning, and evidence-aware profile/session updates.
+- Do not turn image/media review into broad personal history, psychological backstory, reclaiming/history framing, whole-life meaning, or a session optimization essay unless that context directly explains a visible/mechanical finding, device interaction, safety consideration, or session-specific physiological interpretation.
 - Circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session/profile context, clip caption, or nearby events. Never write "foot electrode markers" from appearance alone.
 - Use direct second-person language and be respectful, warm, and precise.
 - ${TIME_FORMAT_RULE}

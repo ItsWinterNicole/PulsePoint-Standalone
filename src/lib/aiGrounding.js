@@ -26,6 +26,20 @@ REVIEWED VISUAL EVIDENCE PRIORITY RULE - HIGH PRIORITY:
 - Keep the rule domain-specific: current-session telemetry/events still control timing and numeric claims; reviewed visual evidence controls visible anatomy, stimulation mechanics, movement, contact, device fit, marker placement, and visible arousal/body-state claims.
 `;
 
+export const ANATOMICAL_REFERENCE_FOCUS_RULE = `
+ANATOMICAL REFERENCE FOCUS RULE - HIGH PRIORITY:
+- When the requested output is a pelvic/genital image review, visual anatomy reference, device-fit review, body exploration review, or anatomical/mechanical reference, prioritize anatomy and evidence over personal history.
+- Focus on visible morphology, measured dimensions, tissue state, state-dependent changes, device interaction, contact mechanics, stimulation mechanics, positioning, safety observations, and limitations.
+- Use psychological, historical, emotional, or broad life-context material only when it directly explains a visible/mechanical finding, device interaction, safety consideration, or session-specific physiological interpretation.
+- Do not turn an anatomical reference into a broad arousal biography, psychological architecture discussion, reclaiming/history frame, or session optimization essay unless the user explicitly asks for a whole-profile synthesis.
+- Do not repeat sensitive personal history in anatomical reference outputs unless it is directly relevant to the requested anatomical, physiological, mechanical, or device-fit question.
+- Keep the tone direct, warm, clinical, and personal. Use "you" and "your" for person-specific findings.
+- Avoid detached phrasing such as "the user" and awkward euphemisms. Use clear anatomical terms when the evidence supports them.
+- Do not overgeneralize from one image or clip. Label reviewed visual evidence, entered measurements, Q&A confirmation, telemetry, and cautious inference separately when relevant.
+- If no fresh media is attached, explicitly state that the review is based on previously reviewed visual evidence and saved findings rather than direct re-examination.
+- "Next images", "future views", or "evidence gaps" should be framed as optional documentation opportunities, not instructions or pressure to capture intimate media.
+`;
+
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
   return value !== null && value !== undefined && String(value).trim() !== "";
