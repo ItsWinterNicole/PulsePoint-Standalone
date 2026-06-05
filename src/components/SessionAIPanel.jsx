@@ -155,6 +155,38 @@ function isNewerCompletedJob(job, savedResult) {
   return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
 }
 
+function toAnalysisTextArray(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => repairCharacterSplitParagraph(String(item || "").trim()))
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    const repaired = repairCharacterSplitParagraph(value.trim());
+    return repaired ? [repaired] : [];
+  }
+  return [];
+}
+
+function normalizeAnalysisShape(value) {
+  if (!value || typeof value !== "object") return value;
+  return {
+    ...value,
+    summary: typeof value.summary === "string" ? repairCharacterSplitParagraph(value.summary) : value.summary,
+    arousal_arc: toAnalysisTextArray(value.arousal_arc),
+    phase_analysis: toAnalysisTextArray(value.phase_analysis),
+    event_analysis: toAnalysisTextArray(value.event_analysis),
+    hr_analysis: toAnalysisTextArray(value.hr_analysis),
+    emg_analysis: toAnalysisTextArray(value.emg_analysis),
+    notable_findings: toAnalysisTextArray(value.notable_findings),
+    recommendations: toAnalysisTextArray(value.recommendations),
+  };
+}
+
+function repairSessionAnalysisResult(value) {
+  return normalizeAnalysisShape(repairAITextBlocks(value));
+}
+
 function normalizeSessionAnalysis(res) {
   const raw = typeof res === "string" ? JSON.parse(res) : res;
   const parsed = raw?.response ?? raw;
@@ -169,7 +201,7 @@ function normalizeSessionAnalysis(res) {
     throw new Error("AI returned text, but not the structured session analysis the app needs. Please try again.");
   }
 
-  return repairAITextBlocks(parsed);
+  return repairSessionAnalysisResult(parsed);
 }
 
 function Section({ icon, title, color, children }) {
@@ -230,12 +262,12 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
-  const [result, setResult] = useState(repairAITextBlocks(session[analysisField] ?? null));
+  const [result, setResult] = useState(repairSessionAnalysisResult(session[analysisField] ?? null));
   const [error, setError] = useState("");
   const resultStale = isSessionAIContentStale(result, session);
 
   useEffect(() => {
-    setResult(repairAITextBlocks(session[analysisField] ?? null));
+    setResult(repairSessionAnalysisResult(session[analysisField] ?? null));
   }, [analysisField, session]);
 
   useEffect(() => {
@@ -765,17 +797,19 @@ Provide ${isTechnical
 
       {!collapsed && result && (() => {
         // Support both old schema (hr_analysis/phase_analysis) and new schema (arousal_arc/event_analysis)
-        const arousalItems = result.arousal_arc || result.phase_analysis || [];
-        const eventItems = result.event_analysis || result.hr_analysis || [];
-        const emgItems = result.emg_analysis || [];
+        const arousalItems = toAnalysisTextArray(result.arousal_arc?.length ? result.arousal_arc : result.phase_analysis);
+        const eventItems = toAnalysisTextArray(result.event_analysis?.length ? result.event_analysis : result.hr_analysis);
+        const emgItems = toAnalysisTextArray(result.emg_analysis);
+        const notableItems = toAnalysisTextArray(result.notable_findings);
+        const recommendationItems = toAnalysisTextArray(result.recommendations);
 
         const paras = [
           result.summary,
           ...arousalItems,
           ...eventItems,
           ...emgItems,
-          ...(result.notable_findings || []),
-          ...(result.recommendations || []),
+          ...notableItems,
+          ...recommendationItems,
         ]
           .filter(Boolean)
           .map(repairCharacterSplitParagraph);
@@ -787,8 +821,8 @@ Provide ${isTechnical
         if (arousalItems.length) { sections.push({ label: isTechnical ? "Arousal Arc" : "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
         if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
         if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
-        if (result.notable_findings?.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: result.notable_findings, start: idx }); idx += result.notable_findings.length; }
-        if (result.recommendations?.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: result.recommendations, start: idx }); }
+        if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
+        if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
 
         return (
           <div className="space-y-3">
