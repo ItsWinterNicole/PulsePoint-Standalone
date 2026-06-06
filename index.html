@@ -20,6 +20,33 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (function clearPulsePointDevShell() {
+        if (window.location.port !== "5174") return;
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.getRegistrations()
+            .then(function (registrations) {
+              return Promise.all(registrations.map(function (registration) {
+                return registration.unregister();
+              }));
+            })
+            .catch(function (error) {
+              console.warn("PulsePoint dev SW cleanup failed:", error);
+            });
+        }
+        if ("caches" in window) {
+          caches.keys()
+            .then(function (keys) {
+              return Promise.all(keys
+                .filter(function (key) { return key.indexOf("pulsepoint-shell-") === 0; })
+                .map(function (key) { return caches.delete(key); }));
+            })
+            .catch(function (error) {
+              console.warn("PulsePoint dev shell cache cleanup failed:", error);
+            });
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

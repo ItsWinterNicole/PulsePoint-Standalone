@@ -3,7 +3,8 @@
 // PWA_RESUME_NO_NAVIGATE_V1
 // PWA_FOREGROUND_STABILITY_V1
 // PWA_ACTIVATE_WITHOUT_CLAIM_V1
-const CACHE_NAME = "pulsepoint-shell-v9";
+// PWA_NAVIGATE_NETWORK_FIRST_V1
+const CACHE_NAME = "pulsepoint-shell-v10";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -83,10 +84,7 @@ self.addEventListener("fetch", (event) => {
 
     event.waitUntil(networkRefresh);
     event.respondWith(
-      caches.match("/").then((cached) => {
-        if (cached) return cached;
-        return networkRefresh.then((response) => response || Response.error());
-      })
+      networkRefresh.then((response) => response || caches.match("/") || Response.error())
     );
     return;
   }
