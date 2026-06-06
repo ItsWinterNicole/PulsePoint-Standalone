@@ -62,12 +62,14 @@ async function localVideoMetadata(filePath) {
     error.status = 400;
     throw error;
   }
+  const durationSeconds = await getMediaDurationSeconds(resolved).catch(() => 0);
   return {
     path: resolved,
     filename: path.basename(resolved),
     extension: ext,
     mimeType: LOCAL_VIDEO_MIME[ext] || 'application/octet-stream',
     sizeBytes: stat.size,
+    durationSeconds,
     modifiedAt: stat.mtime.toISOString(),
     fingerprint: `${stat.size}-${Math.round(stat.mtimeMs)}`,
     exists: true,

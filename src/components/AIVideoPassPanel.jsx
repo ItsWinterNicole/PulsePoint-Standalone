@@ -181,8 +181,10 @@ function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRo
   ].filter(Boolean).join("\n");
 }
 
-function candidateWindows(session, timelineRows, count = 6, clipSeconds = 24) {
-  const end = estimateSessionEnd(session, timelineRows);
+function candidateWindows(session, timelineRows, count = 6, clipSeconds = 24, forcedEnd = null) {
+  const end = Number.isFinite(Number(forcedEnd)) && Number(forcedEnd) > 0
+    ? Number(forcedEnd)
+    : estimateSessionEnd(session, timelineRows);
   const anchors = [];
   [
     session?.pre_climax_offset_s,
@@ -223,8 +225,10 @@ function candidateWindows(session, timelineRows, count = 6, clipSeconds = 24) {
     .slice(0, count);
 }
 
-function sequentialWindows(startSeconds, session, timelineRows, count = 6, clipSeconds = 24) {
-  const sessionEnd = estimateSessionEnd(session, timelineRows);
+function sequentialWindows(startSeconds, session, timelineRows, count = 6, clipSeconds = 24, forcedEnd = null) {
+  const sessionEnd = Number.isFinite(Number(forcedEnd)) && Number(forcedEnd) > 0
+    ? Number(forcedEnd)
+    : estimateSessionEnd(session, timelineRows);
   const windows = [];
   let cursor = clamp(Number(startSeconds) || 0, 0, Math.max(0, sessionEnd - 0.25));
   for (let i = 0; i < count && cursor < sessionEnd; i += 1) {
@@ -233,6 +237,18 @@ function sequentialWindows(startSeconds, session, timelineRows, count = 6, clipS
     cursor = end;
   }
   return windows;
+}
+
+function selectedVideoSessionEnd(video, fallbackEnd, metadataDuration = 0) {
+  const durations = [
+    video?.durationSeconds,
+    video?.duration_seconds,
+    video?.duration_s,
+    metadataDuration,
+  ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
+  if (!durations.length) return fallbackEnd;
+  const videoEnd = sessionTimeForSource(Math.max(...durations), video);
+  return Math.max(0, Math.min(fallbackEnd, videoEnd));
 }
 
 function nearestTelemetrySummary(timelineRows, start, end) {
@@ -898,6 +914,7 @@ export default function AIVideoPassPanel({
   const [audioMaxSnippets, setAudioMaxSnippets] = useState(10);
   const [audioResult, setAudioResult] = useState(null);
   const [audioAccepted, setAudioAccepted] = useState(false);
+  const [metadataDurationSeconds, setMetadataDurationSeconds] = useState(0);
   const freshRunStartedAtRef = useRef(ignoreCompletedJobsBefore || 0);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
@@ -905,14 +922,18 @@ export default function AIVideoPassPanel({
   const selectedVideoStreamUrl = selectedVideo?.path ? base44.integrations.Core.localVideoStreamUrl(selectedVideo.path) : "";
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
   const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration);
-  const sessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
+  const estimatedSessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
+  const sessionEnd = useMemo(
+    () => selectedVideoSessionEnd(selectedVideo, estimatedSessionEnd, metadataDurationSeconds),
+    [estimatedSessionEnd, metadataDurationSeconds, selectedVideo],
+  );
   const plannedWindows = useMemo(
     () => isExploration && scanMode === "smart"
-      ? sequentialWindows(0, session, timelineRows, windowCount, clipSeconds)
+      ? sequentialWindows(0, session, timelineRows, windowCount, clipSeconds, sessionEnd)
       : scanMode === "continue"
-      ? sequentialWindows(scanCursor, session, timelineRows, windowCount, clipSeconds)
-      : candidateWindows(session, timelineRows, windowCount, clipSeconds),
-    [isExploration, scanMode, scanCursor, session, timelineRows, windowCount, clipSeconds],
+      ? sequentialWindows(scanCursor, session, timelineRows, windowCount, clipSeconds, sessionEnd)
+      : candidateWindows(session, timelineRows, windowCount, clipSeconds, sessionEnd),
+    [isExploration, scanMode, scanCursor, session, timelineRows, windowCount, clipSeconds, sessionEnd],
   );
   const storedAIPassEventCount = useMemo(
     () => (session?.event_timeline || []).filter(isAIGeneratedPassEvent).length,
@@ -1041,6 +1062,7 @@ export default function AIVideoPassPanel({
   useEffect(() => {
     setScanCursor(0);
     onCursorChange?.(0);
+    setMetadataDurationSeconds(0);
     seekPreviewVideo(0);
   }, [selectedVideo?.path]);
 
@@ -1053,6 +1075,14 @@ export default function AIVideoPassPanel({
   useEffect(() => {
     setSelectedVideoRole(inferVideoRole(selectedVideo));
   }, [selectedVideo?.path]);
+
+  useEffect(() => {
+    const maxCursor = Math.max(0, sessionEnd - 0.25);
+    if (scanCursor <= maxCursor) return;
+    setScanCursor(maxCursor);
+    onCursorChange?.(maxCursor);
+    seekPreviewVideo(maxCursor);
+  }, [onCursorChange, scanCursor, sessionEnd]);
 
   const runPass = async () => {
     if (!selectedVideo?.path || running) return;
@@ -1075,6 +1105,7 @@ export default function AIVideoPassPanel({
         batchNumber += 1;
         for (let i = 0; i < windowsToRun.length; i += 1) {
           const window = windowsToRun[i];
+          if (window.start >= sessionEnd - 0.25) break;
           const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
           const sourceStart = sourceTimeForSession(window.start, selectedVideo);
           const sourceEnd = Math.max(sourceStart + 0.25, Number(window.end || 0) - selectedVideoOffset);
@@ -1300,7 +1331,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
         setScanCursor(cursor);
         onCursorChange?.(cursor);
         if (cursor >= sessionEnd - 0.5) break;
-        windowsToRun = sequentialWindows(cursor, session, timelineRows, windowCount, clipSeconds);
+        windowsToRun = sequentialWindows(cursor, session, timelineRows, windowCount, clipSeconds, sessionEnd);
       }
       if (scanMode === "continue" && nextCards.length) {
         setScanCursor(nextCards[nextCards.length - 1].window.end);
@@ -1674,7 +1705,11 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             controls
             preload="metadata"
             className="max-h-[34rem] w-full rounded-lg bg-black object-contain"
-            onLoadedMetadata={() => seekPreviewVideo(scanCursor)}
+            onLoadedMetadata={(event) => {
+              const duration = Number(event.currentTarget.duration);
+              setMetadataDurationSeconds(Number.isFinite(duration) && duration > 0 ? duration : 0);
+              seekPreviewVideo(scanCursor);
+            }}
             onSeeked={(event) => {
               const nextCursor = clamp(
                 sessionTimeForSource(event.currentTarget.currentTime, selectedVideo),
