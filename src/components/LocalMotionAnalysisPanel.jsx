@@ -2601,8 +2601,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const analysisRange = useMemo(() => {
     const duration = Number(videoDuration) || 0;
     if (!duration) return { start: 0, end: 0 };
-    if (windowMode === "full") return { start: 0, end: duration };
     const center = clamp(Number(videoTime) || 0, 0, duration);
+    if (windowMode === "full") return { start: center, end: duration };
     return {
       start: Math.max(0, center - 60),
       end: Math.min(duration, center + 60),
@@ -3020,7 +3020,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
 
       const probeDuration = Number(probe.duration) || 0;
       const center = clamp(Number(videoTime) || 0, 0, probeDuration);
-      const start = windowMode === "full" ? 0 : Math.max(0, center - 60);
+      const start = windowMode === "full" ? center : Math.max(0, center - 60);
       const end = windowMode === "full" ? probeDuration : Math.min(probeDuration, center + 60);
       const step = 1 / selectedMode.fps;
       const expectedSamples = Math.max(1, Math.floor((end - start) / step) + 1);
@@ -3420,7 +3420,7 @@ return (
             {selectedMode.label}
           </span>
           <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
-            {windowMode === "full" ? "Entire recording" : "Current position +/- 1 min"}
+            {windowMode === "full" ? "Current timestamp to end" : "Current position +/- 1 min"}
           </span>
           {mode !== "hands" && (
             <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
@@ -3519,7 +3519,7 @@ return (
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="segment">Current position +/- 1 minute</SelectItem>
-              <SelectItem value="full">Entire local recording</SelectItem>
+              <SelectItem value="full">Current timestamp to end</SelectItem>
             </SelectContent>
           </Select>
           <p className="text-[11px] text-muted-foreground">
