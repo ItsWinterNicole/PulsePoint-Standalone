@@ -403,7 +403,7 @@ function videoFocusInstruction(video = {}, selectedRole = "", isExploration = fa
       : "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
   }
   if (isExploration) {
-    return "This is the main body exploration/procedure view. Follow the session flow naturally using visible action plus exploration context: baseline/positioning, drape/setup, swab or antiseptic prep, lubrication, meatal engagement, instrument advancement, resistance/rotation, urine return, balloon/securement, dwell comfort, removal, or post-procedure tissue state. Describe what is happening in the current window without hyper-focusing on proving or denying one object. Do not treat procedure handling as active stimulation unless active stimulation is visibly present or logged.";
+    return "This is the main body exploration/procedure view. Follow the visible procedure sequence naturally using current-frame action plus exploration context: positioning on the table, draping, swabbing/antiseptic prep, lubrication or urethral dilation, initial Foley handling, penis/glans stabilization, visible meatal engagement, visible advancement through urethral landmarks, bladder entry or urine confirmation, balloon inflation, drape removal, and urine collection in the bag. Describe only the stage/action actually visible in the current window. Foley or tubing presence is state, not action; do not convert visible tubing/field handling into insertion, placement, advancement, balloon inflation, securement, or finalization unless that exact action is visible or logged nearby. Do not treat procedure handling as active stimulation unless active stimulation is visibly present or logged.";
   }
   return "This is a main/genital-composite session view. Actively track visible stimulation mechanics first: hand-to-genital contact, stroking/shaft or glans motion, sleeve/device movement, perineal or scrotal-base contact, lubricant application, grip/contact changes, pauses/resumes, and device-plus-stimulation combinations such as Foley in place while stimulation continues. A Foley catheter, sleeve, lubricant, or other device being present does not make the window a resting state. Only call the window resting/no stimulation when sampled frames show no hand/device/body contact or stimulation motion across the window.";
 }
@@ -780,6 +780,30 @@ function compactSavedContinuity(entry) {
   ].filter(Boolean).join("\n");
 }
 
+function compactExplorationSequenceLedger(cards = []) {
+  const recentCards = (cards || []).slice(-5);
+  if (!recentCards.length) return "";
+  const lines = recentCards.map((card) => {
+    const eventText = (card.events || [])
+      .map((event) => event.note)
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(" | ");
+    const findingText = (card.findings || [])
+      .map((finding) => finding.title || finding.text)
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(" | ");
+    return `[${fmtMmSs(card.window?.start)}-${fmtMmSs(card.window?.end)}] ${compactText(card.summary || eventText || findingText, 280)}`;
+  }).filter(Boolean);
+  if (!lines.length) return "";
+  return [
+    "Prior body-exploration windows reviewed in this run:",
+    ...lines,
+    "Use this as a stage ledger, not a script. If a prior window already showed a Foley stage, do not claim that same stage is newly happening again unless the current sampled frames independently show a new repeat of that action. If the current frames only show a catheter or tubing already present, describe the current handling/state rather than re-labeling it as placement.",
+  ].join("\n");
+}
+
 function findSavedPriorContinuity(session, selectedVideo, window, isExploration = false) {
   if (isExploration) return "";
   const currentStart = Number(window?.start);
@@ -1126,8 +1150,11 @@ export default function AIVideoPassPanel({
             .map((frame, index) => `frame ${index + 1} = ${recordLabel} ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
             .join(", ");
           setStatus(`Sarah reviewing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
-          const continuityContext = compactCardContinuity(nextCards[nextCards.length - 1], isExploration)
-            || findSavedPriorContinuity(workingSession, selectedVideo, window, isExploration)
+          const continuityContext = [
+            isExploration ? compactExplorationSequenceLedger(nextCards) : "",
+            compactCardContinuity(nextCards[nextCards.length - 1], isExploration)
+              || findSavedPriorContinuity(workingSession, selectedVideo, window, isExploration),
+          ].filter(Boolean).join("\n\n")
             || "No prior reviewed window is available. Treat this as the first observed window, then establish baseline context for the next window.";
           const images = (preview.frames || []).map((frame) => ({
             filename: frame.filename,
@@ -1182,8 +1209,14 @@ export default function AIVideoPassPanel({
             prompt: `${isExploration ? `HIGH-PRIORITY BODY EXPLORATION MODE:
 This is a Body Exploration / instrumentation review, not an active-stimulation session analysis. Watch for procedure, setup, device position, genital/body state, tissue appearance, Foley catheter or urethral sound/dilator presence, insertion/withdrawal/adjustment, meatal/urethral context when visible or logged, comfort/tolerance cues, breathing/legs/body response, and telemetry-supported autonomic response.
 Do not force a stimulation lifecycle. Do not create stimulation start/pause/resume/stop events. If masturbation or active stimulation is not visibly present and not logged, treat hands/devices as procedure/instrumentation context, not stimulation. Interpret Foley/sound/catheter evidence through the exploration notes and mechanical profile context when provided, while staying strict about what is visible.
+
+Foley placement sequence to track when visible: positioning on the table; draping and field setup; swabbing/antiseptic prep; lubrication or possible urethral dilation with a syringe; initial Foley handling; left-hand penis/glans stabilization; right-hand catheter advancement past the meatus; continued advancement through visible urethral landmarks or resistance/rotation cues; bladder entry or urine confirmation; balloon inflation; drape removal; urine collected in the bag. Treat these as possible stages, not a script.
+
+Foley state-versus-action rule: Foley catheter/tubing already being visible means "Foley/tubing remains present", not "inserted", "placed", "advanced", or "secured". Yellow tubing being moved, lifted, routed, or resting across the field is tubing handling unless the catheter shaft is visibly advancing at the meatus or balloon/securement hardware is visible. Do not mention StatLock, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact item/action is visible in the sampled frames or explicitly logged in nearby notes.
+
+Foley action evidence gates: use "swabbing/prep" only for visible wipe/swab/applicator contact; use "lubrication/dilation" only when a syringe, gel, lubricant, instillation, or urethral prep action is visible/supported; use "meatal engagement" only when the catheter/tool tip is visibly at the meatus; use "advancement/insertion" only when the catheter/tool is visibly moving through the meatus in this current window; use "already in place" when the Foley appears present but not actively advancing; use "positioning/tubing handling" when gloved hands are arranging tubing, drape, gauze, or field materials. If unsure between insertion and already-in-place handling, choose the more conservative "already in place/tubing handling" wording with low or moderate confidence.
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
-Draft event examples for this mode: "Foley catheter remains visible at the meatus", "Urethral sound advances with brief leg tension", "Catheter position adjusted while breathing stays steady", "Glans appears fuller with visible lubricant sheen", "Body relaxes after withdrawal", "Comfort note aligns with visible repositioning".` : ""}
+Draft event examples for this mode: "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "Left hand stabilizes the penis while the right hand positions the Foley", "Foley advancement is visible at the meatus", "Foley appears already in place while tubing is repositioned", "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
@@ -1191,7 +1224,7 @@ ${isExploration ? "Exploration/procedure context grounding" : "Session context g
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
-Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. For body exploration reviews, if any sampled frame shows swab/wipe/applicator/tool/catheter/tubing contact or setup movement, describe that procedural action rather than saying nothing is happening.
+Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. For body exploration reviews, if any sampled frame shows swab/wipe/applicator/tool/catheter/tubing contact or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter positioning, visible advancement, already-in-place catheter state, tubing handling, balloon inflation, drape removal, or urine collection.
 
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
@@ -1212,7 +1245,7 @@ Feet-lane sensitivity rule: for feet/lower-body videos, look carefully for subtl
 
 Observation priorities, in order:
 1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal/perineal state, visible skin color or surface sheen, cautious visible fluid/moisture labeling, pelvic lift/drop, and whether these change from the prior window.
-2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests setup, insertion, adjustment, withdrawal, securement, or post-procedure checking." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
+2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position shows setup, prep/swabbing, lubrication/dilation, visible meatal engagement, visible advancement, already-in-place catheter state, tubing/field handling, balloon inflation, drape removal, urine collection, or post-procedure checking. Do not claim insertion/advancement/securement from Foley or tubing presence alone." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
 3. Whole-body and lower-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, tremor, shudder, and relaxation/tension cues.
 4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
 5. Telemetry only as supporting context from stored session data. Do not visually analyze or report the HR overlay, phase label, trend chart, AVG, MAX, or timer as a finding/event unless it directly supports a visible physiological or ${isExploration ? "procedure" : "stimulation"} transition.
@@ -1221,9 +1254,9 @@ Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object
 
 Output style: write the summary as a flowing chronological observation with the most useful visible physiology and ${isExploration ? "procedure/device landmark" : "stimulation"} changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only when there are useful non-repetitive observations; return fewer or none when the window adds nothing. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only when there is a meaningful change or useful timestampable observation. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, no-change filler, or the mere presence of a control object.
 
-Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Meatal engagement begins\", \"Advancement continues\", \"Securement/alignment is adjusted\", or \"Dwell comfort appears stable\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
+Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Meatal engagement begins\", \"Visible Foley advancement continues\", \"Foley appears already in place while tubing is handled\", or \"Dwell comfort appears stable\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
-Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or securement. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
+Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
 Foot and body tracking dots rule: circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session context, nearby events, or the user's caption. Never write "foot electrode markers" from appearance alone.
 
