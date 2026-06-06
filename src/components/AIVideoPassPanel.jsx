@@ -262,6 +262,9 @@ function isTelemetryOnlyFinding(finding) {
   if (!/(hr|heart rate|bpm|telemetry|overlay|phase label|trend chart|avg|max|sustained build|elevated|recovery label)/.test(text)) {
     return false;
   }
+  if (/(without visible cause|no visible (?:cause|stimulation|movement|body movement|change)|despite no visible|no .*visible .*to account)/.test(text)) {
+    return true;
+  }
   return !/(stimulation|contact|stroke|hand|shaft|glans|genital|penis|scrot|foreskin|meatus|erection|engorg|flaccid|ejaculate|pre-ejac|lubric|device|sleeve|foley|perine|pelvic|abdomen|chest|breath|respir|foot|feet|toe|heel|leg|tens|relax|tens)/.test(text);
 }
 
@@ -386,7 +389,7 @@ function videoFocusInstruction(video = {}, selectedRole = "", isExploration = fa
   if (isExploration) {
     return "This is the main body exploration/procedure view. Follow the session flow naturally using visible action plus exploration context: baseline/positioning, drape/setup, swab or antiseptic prep, lubrication, meatal engagement, instrument advancement, resistance/rotation, urine return, balloon/securement, dwell comfort, removal, or post-procedure tissue state. Describe what is happening in the current window without hyper-focusing on proving or denying one object. Do not treat procedure handling as active stimulation unless active stimulation is visibly present or logged.";
   }
-  return "This is a main/genital-composite session view. Prioritize stimulation mechanics, visible genital state, device/lubrication use, hand contact transitions, cautious visible fluid/moisture labeling, and only then supporting body movement.";
+  return "This is a main/genital-composite session view. Actively track visible stimulation mechanics first: hand-to-genital contact, stroking/shaft or glans motion, sleeve/device movement, perineal or scrotal-base contact, lubricant application, grip/contact changes, pauses/resumes, and device-plus-stimulation combinations such as Foley in place while stimulation continues. A Foley catheter, sleeve, lubricant, or other device being present does not make the window a resting state. Only call the window resting/no stimulation when sampled frames show no hand/device/body contact or stimulation motion across the window.";
 }
 
 function videoRoleHelper(role, isExploration = false) {
@@ -740,6 +743,7 @@ function compactCardContinuity(card, isExploration = false) {
     card.summary ? `Prior summary: ${card.summary}` : "",
     findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
     events.length ? `Prior draft events: ${events.join(" | ")}` : "",
+    "Use this only as continuity. Current sampled frames override the prior interpretation, especially if the prior window said no stimulation/no visible cause but this window shows hand/device contact, motion, or technique change.",
     card.telemetry ? `Prior telemetry: ${card.telemetry}` : "",
   ].filter(Boolean).join("\n");
 }
@@ -755,6 +759,7 @@ function compactSavedContinuity(entry) {
     entry.summary ? `Prior summary: ${entry.summary}` : "",
     findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
     events.length ? `Prior draft events: ${events.join(" | ")}` : "",
+    "Use this only as continuity. Current sampled frames override the accepted prior interpretation, especially if this window now shows visible contact, motion, or stimulation/procedure change.",
     entry.telemetry ? `Prior telemetry: ${entry.telemetry}` : "",
   ].filter(Boolean).join("\n");
 }
@@ -1143,6 +1148,10 @@ You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video
 
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 
+Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
+
+Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. For body exploration reviews, if any sampled frame shows swab/wipe/applicator/tool/catheter/tubing contact or setup movement, describe that procedural action rather than saying nothing is happening.
+
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
 Ejaculation and fluid evidence rule: do not infer orgasm, climax, ejaculation, or cum from shiny/clear wetness, glans sheen, lubrication sheen, hand movement, erection state, or a stimulation pause alone. Clear or glossy moisture on the glans/shaft is more likely lubricant, pre-ejaculate, or unspecified moisture unless there is strong supporting context. Only call ejaculate when the visible fluid is clearly whitish/opaque, there is a visible emission/spurt, or there is a nearby confirmed climax/ejaculation event in the session notes/timeline. When that threshold is met, say "ejaculate" or "visible ejaculate" directly; do not use vague residue/euphemism wording. Treat HR/telemetry as consistency context: if the window does not align with the session climax marker, recovery transition, or a plausible autonomic peak, label fluid as "visible moisture/sheen" or "possible lubricant/pre-ejaculate" rather than ejaculate. Never create multiple orgasms/climax events from repeated wetness or sheen across adjacent windows; carry forward that it is likely the same lubricant/moisture unless there is a clear new emission or confirmed event.
@@ -1180,6 +1189,7 @@ Foot and body tracking dots rule: circular dots or bright reflective spots on th
 Do not create a standalone finding or timeline event just because static tracking markers are visible. Treat unchanged marker dots as scene context. Mention them only if they materially support a movement observation, marker loss/reacquisition, toe/heel/planting state, foot asymmetry, bracing, or a clear change in marker position/visibility.
 
 Continuity rule: each window is part of a sequential review. Use the previous reviewed window below as context. In this current window, prioritize what continues, what changed, what started, what stopped, and what became more or less visible. Do not repeat stable background details from the prior window unless they changed or are needed to explain a new observation.
+No-change claims require a fresh current-frame check. Avoid repeating "resting pre-stimulation state continues", "no manual stimulation visible", "no visible cause", or similar no-action language across adjacent windows unless the current sampled frames independently support it.
 ${continuityContext}
 
 Limited ${recordLabel} context for this visual pass:
