@@ -604,6 +604,7 @@ function persistedCardFrom(card) {
       end_s: card.window.end,
       duration_s: Number((card.window.end - card.window.start).toFixed(2)),
     },
+    sampled_frames: card.sampledFrames || [],
     summary: card.summary,
     source_video_role: card.sourceVideoRole || inferVideoRole(card.sourceVideo),
     findings: card.findings,
@@ -628,6 +629,7 @@ function cardFromAIVideoJob(job, isExploration = false) {
     sourceVideoRole: cardMeta.sourceVideoRole || "main",
     clipUrl: cardMeta.clipUrl || "",
     thumbnailUrl: cardMeta.thumbnailUrl || "",
+    sampledFrames: cardMeta.sampledFrames || [],
     motionSummary: cardMeta.motionSummary || null,
     telemetry: cardMeta.telemetry || "",
     ...normalized,
@@ -1045,7 +1047,7 @@ export default function AIVideoPassPanel({
             startSeconds: sourceStart,
             endSeconds: sourceEnd,
             label,
-            frameCount: 10,
+            frameCount: isExploration ? 18 : 10,
           });
           const reviewWindow = {
             start: sessionTimeForSource(preview.startSeconds ?? sourceStart, selectedVideo),
@@ -1118,9 +1120,18 @@ Stage discipline rule: do not jump ahead of the procedural flow. If the reviewed
 
 Observation style: Sarah should narrate the procedural flow the way she did in the May 28 Foley review: concrete, chronological, visually grounded, and clinically useful. Do not hyper-focus on whether a Foley is visible in every frame. If a tool/material is unclear, describe the action and location first, then give the likely stage with calibrated confidence.
 
+Prep visibility rule: early procedure work counts as activity. If the sampled frames show a sterile/draped field, gloved hand positioning, gauze/wipe/swab/applicator-like material, or contact near the glans/meatus, do not summarize the window as "nothing happening", "baseline unchanged", or "no contact visible." Name the likely procedural stage from the flow, such as draping/setup, antiseptic prep, swabbing, lubrication/tool handling, stabilization, or meatal engagement, with confidence calibrated to the image quality.
+
+Visual checklist before writing the summary:
+1. Is a drape/sterile field visible?
+2. Are gloved hands or hands positioned over the genital field?
+3. Is gauze, wipe, swab, applicator, lubricant, tubing, catheter, or another procedure-relevant material visible or plausibly in use?
+4. Is there contact or near-contact at the glans, foreskin, meatus, shaft, scrotum, or perineum?
+5. Has the sequence actually reached insertion/advancement/securement yet, or is this still prep?
+
 Output focus for exploration windows: answer what stage this appears to be, what visible action/material supports it, what changed from the previous window, what the body/tissue/telemetry did, and what remains uncertain. Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.` : ""}
 
-You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, device fit, sensation, electrodes, or cause beyond visible evidence. ${isExploration ? "For Body Exploration/procedure windows, use the session context and procedural sequence to identify visible or likely procedure materials such as drape, gauze, swab, applicator, lubricant, catheter/sound, tubing, or securement when the sampled frames support that role. If partially occluded or low-detail, say \"possible\" and mark confidence low/moderate rather than erasing the activity." : "If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials."}
 
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
 
@@ -1227,6 +1238,12 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             sourceVideoRole: selectedVideoRole,
             clipUrl: preview.clip_url || preview.url || "",
             thumbnailUrl: preview.frames?.[0]?.url || "",
+            sampledFrames: (preview.frames || []).map((frame) => ({
+              url: frame.url || frame.file_url || "",
+              frameTimeSeconds: frame.frameTimeSeconds,
+              recordTimeSeconds: sessionTimeForSource(frame.frameTimeSeconds, selectedVideo),
+              frameIndex: frame.frameIndex,
+            })),
             motionSummary: preview.motion_summary || null,
             telemetry,
           };
@@ -1253,6 +1270,12 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             sourceVideoRole: selectedVideoRole,
             clipUrl: preview.clip_url || preview.url,
             thumbnailUrl: preview.frames?.[0]?.url || "",
+            sampledFrames: (preview.frames || []).map((frame) => ({
+              url: frame.url || frame.file_url || "",
+              frameTimeSeconds: frame.frameTimeSeconds,
+              recordTimeSeconds: sessionTimeForSource(frame.frameTimeSeconds, selectedVideo),
+              frameIndex: frame.frameIndex,
+            })),
             motionSummary: preview.motion_summary,
             telemetry,
             ...normalized,
@@ -1856,6 +1879,35 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
                         {isExpanded ? "Collapse" : "Expand clip"}
                       </button>
                     </div>
+                    {Array.isArray(card.sampledFrames) && card.sampledFrames.length > 0 && (
+                      <details className="rounded-lg border border-border bg-muted/15">
+                        <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Sampled Frames Sarah Saw ({card.sampledFrames.length})
+                        </summary>
+                        <div className="grid grid-cols-3 gap-2 p-2 sm:grid-cols-4 lg:grid-cols-6">
+                          {card.sampledFrames.map((frame, index) => (
+                            <a
+                              key={`${frame.url || "frame"}-${index}`}
+                              href={frame.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="group overflow-hidden rounded-md border border-border bg-background"
+                              title={`${recordLabel} ${fmtMmSs(frame.recordTimeSeconds)} · source ${fmtMmSs(frame.frameTimeSeconds)}`}
+                            >
+                              <img
+                                src={frame.url}
+                                alt={`Sampled frame ${index + 1}`}
+                                loading="lazy"
+                                className="aspect-video w-full object-cover transition-transform group-hover:scale-[1.03]"
+                              />
+                              <span className="block truncate px-1.5 py-1 text-[10px] text-muted-foreground">
+                                {fmtMmSs(frame.recordTimeSeconds)}
+                              </span>
+                            </a>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                     <p className="text-sm leading-relaxed text-foreground/90">{card.summary}</p>
                     <p className="rounded-md border border-primary/15 bg-primary/5 px-2 py-1 text-[10px] text-muted-foreground">
                       Accepting this card saves the summary, finding cards, clip range, and draft events into the {recordLabel} AI details.
