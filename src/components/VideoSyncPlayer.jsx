@@ -458,6 +458,9 @@ export default function VideoSyncPlayer({
   const layoutRef = useRef(null);
   const fullscreenSurfaceRef = useRef(null);
   const [fullscreenActive, setFullscreenActive] = useState(false);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
+  const fullscreenControlsTimerRef = useRef(null);
+  const suppressNextFullscreenVideoToggleRef = useRef(false);
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
@@ -969,10 +972,39 @@ export default function VideoSyncPlayer({
   useEffect(() => {
     const handleFullscreenChange = () => {
       setFullscreenActive(document.fullscreenElement === fullscreenSurfaceRef.current);
+      setFullscreenControlsVisible(true);
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
+
+  const clearFullscreenControlsTimer = useCallback(() => {
+    if (fullscreenControlsTimerRef.current) {
+      window.clearTimeout(fullscreenControlsTimerRef.current);
+      fullscreenControlsTimerRef.current = null;
+    }
+  }, []);
+
+  const showFullscreenControls = useCallback((hideDelay = 1800) => {
+    setFullscreenControlsVisible(true);
+    clearFullscreenControlsTimer();
+    if (fullscreenActive && isPlaying) {
+      fullscreenControlsTimerRef.current = window.setTimeout(() => {
+        setFullscreenControlsVisible(false);
+        fullscreenControlsTimerRef.current = null;
+      }, hideDelay);
+    }
+  }, [clearFullscreenControlsTimer, fullscreenActive, isPlaying]);
+
+  useEffect(() => {
+    if (!fullscreenActive || !isPlaying) {
+      clearFullscreenControlsTimer();
+      setFullscreenControlsVisible(true);
+      return undefined;
+    }
+    showFullscreenControls(1800);
+    return clearFullscreenControlsTimer;
+  }, [clearFullscreenControlsTimer, fullscreenActive, isPlaying, showFullscreenControls]);
 
   const toggleFullscreenOverlay = useCallback(async () => {
     const surface = fullscreenSurfaceRef.current;
@@ -1139,11 +1171,16 @@ export default function VideoSyncPlayer({
         : closest
     ), visibleEventEntries[0]);
   }, [playheadS, visibleEventEntries]);
+  const closestVisibleEventHR = useMemo(
+    () => closestVisibleEvent ? nearestHR(chartData, Number(closestVisibleEvent.ev.time_s)) : null,
+    [chartData, closestVisibleEvent],
+  );
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
   const showSidebar = hasSidebarContent && telemetryDisplayMode === "sidebar";
   const displayedFeeds = videoLayout === "multi"
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
+  const fullscreenControlsShown = !fullscreenActive || !isPlaying || fullscreenControlsVisible;
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -1486,6 +1523,18 @@ export default function VideoSyncPlayer({
               ref={fullscreenSurfaceRef}
               className={`relative w-full bg-black overflow-hidden ${fullscreenActive ? "h-screen rounded-none" : "rounded-lg"} ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
               style={fullscreenActive ? undefined : { height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
+              onPointerMove={() => {
+                if (fullscreenActive) showFullscreenControls();
+              }}
+              onPointerDown={() => {
+                if (fullscreenActive && isPlaying && !fullscreenControlsVisible) {
+                  suppressNextFullscreenVideoToggleRef.current = true;
+                  showFullscreenControls();
+                }
+              }}
+              onTouchStart={() => {
+                if (fullscreenActive) showFullscreenControls();
+              }}
             >
               {displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
@@ -1500,7 +1549,17 @@ export default function VideoSyncPlayer({
                       className="h-full w-full object-contain cursor-pointer"
                       playsInline
                       onClick={() => {
-                        if (isMaster) togglePlay();
+                        if (isMaster) {
+                          if (suppressNextFullscreenVideoToggleRef.current) {
+                            suppressNextFullscreenVideoToggleRef.current = false;
+                            return;
+                          }
+                          if (fullscreenActive && isPlaying && !fullscreenControlsVisible) {
+                            showFullscreenControls();
+                            return;
+                          }
+                          togglePlay();
+                        }
                         else selectMasterFeed(feed.key);
                       }}
                     />
@@ -1521,20 +1580,20 @@ export default function VideoSyncPlayer({
                 );
               })}
               {telemetryDisplayMode === "overlay" && closestVisibleEvent && (
-                <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(27rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/60 p-3 text-white shadow-xl backdrop-blur-sm">
+                <div className="pointer-events-none absolute right-3 top-3 z-20 max-h-[42vh] w-[min(27rem,calc(100%-1.5rem))] overflow-hidden rounded-lg border border-white/15 bg-black/60 p-3 text-white shadow-xl backdrop-blur-sm max-[950px]:left-14 max-[950px]:right-2 max-[950px]:top-2 max-[950px]:max-h-[30vh] max-[950px]:w-auto max-[950px]:rounded-xl max-[950px]:p-2">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Closest Event Marker</p>
-                    <span className="font-mono text-xs font-semibold text-primary">
+                    <p className="min-w-0 truncate text-[9px] font-semibold uppercase tracking-wider text-white/65 max-[950px]:tracking-wide">Closest Event Marker</p>
+                    <span className="shrink-0 font-mono text-xs font-semibold text-primary max-[950px]:text-[11px]">
                       {fmtMmSs(closestVisibleEvent.ev.time_s)}
                     </span>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                  <div className="mt-2 flex flex-wrap items-center gap-1 max-[950px]:mt-1">
                     {normalizeCategoryArray(closestVisibleEvent.ev.category).map((category) => {
                       const meta = getCategoryMeta(category);
                       return (
                         <span
                           key={category}
-                          className="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold"
+                          className="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold max-[950px]:px-1.5 max-[950px]:py-0.5 max-[950px]:text-[8px]"
                           style={{ color: meta.color, borderColor: `${meta.color}66`, background: `${meta.color}25` }}
                         >
                           {meta.label}
@@ -1544,10 +1603,24 @@ export default function VideoSyncPlayer({
                     {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge event={closestVisibleEvent.ev} />}
                     {isAIGeneratedAnnotation(closestVisibleEvent.ev) && <AIGeneratedBadge />}
                   </div>
-                  <p className="mt-2 text-xs leading-relaxed text-white/90">
+                  {(closestVisibleEventHR != null || currentHR != null) && (
+                    <div className="mt-2 flex flex-wrap gap-1.5 max-[950px]:mt-1">
+                      {closestVisibleEventHR != null && (
+                        <span className="rounded-full border border-rose-300/30 bg-rose-400/15 px-2 py-0.5 font-mono text-[10px] font-bold text-rose-200 max-[950px]:px-1.5 max-[950px]:text-[8px]">
+                          marker HR {closestVisibleEventHR} bpm
+                        </span>
+                      )}
+                      {currentHR != null && Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS) >= 1 && (
+                        <span className="rounded-full border border-white/15 bg-white/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-white/75 max-[950px]:px-1.5 max-[950px]:text-[8px]">
+                          now {currentHR} bpm
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <p className="mt-2 text-xs leading-relaxed text-white/90 line-clamp-3 max-[950px]:mt-1 max-[950px]:text-[10px] max-[950px]:leading-snug max-[950px]:line-clamp-2">
                     {closestVisibleEvent.ev.note || "Event note"}
                   </p>
-                  <p className="mt-1 text-[10px] text-white/60">
+                  <p className="mt-1 text-[10px] text-white/60 max-[950px]:text-[8px]">
                     {Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS) < 1
                       ? "At current playback position"
                       : `${Math.round(Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS))}s ${Number(closestVisibleEvent.ev.time_s) < playheadS ? "ago" : "ahead"}`}
@@ -1555,7 +1628,7 @@ export default function VideoSyncPlayer({
                 </div>
               )}
               {telemetryDisplayMode === "overlay" && savedMotionSummary && (
-                <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}>
+                <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none max-[950px]:hidden ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}>
                   <div className="pointer-events-auto">
                     <MotionPlaybackReadout
                       summary={savedMotionSummary}
@@ -1566,33 +1639,33 @@ export default function VideoSyncPlayer({
                   </div>
                 </div>
               )}
-              {telemetryDisplayMode === "overlay" && !savedMotionSummary && currentHR != null && (
-                <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/15 bg-black/65 px-3 py-2 backdrop-blur-sm">
+              {telemetryDisplayMode === "overlay" && currentHR != null && (!savedMotionSummary || fullscreenActive) && (
+                <div className={`pointer-events-none absolute rounded-lg border border-white/15 bg-black/65 px-3 py-2 backdrop-blur-sm max-[950px]:left-2 max-[950px]:right-auto max-[950px]:top-12 max-[950px]:px-2 max-[950px]:py-1.5 ${closestVisibleEvent && fullscreenActive ? "left-3 top-14 max-[950px]:top-12" : "right-3 top-3"}`}>
                   <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Heart Rate</p>
-                  <p className="mt-1 font-mono text-lg font-bold text-rose-400">{currentHR} bpm</p>
+                  <p className="mt-1 font-mono text-lg font-bold text-rose-400 max-[950px]:text-sm">{currentHR} bpm</p>
                 </div>
               )}
               {fullscreenActive && (
-                <div className="absolute left-3 top-3 z-30 flex items-center gap-2">
+                <div className="absolute left-3 top-3 z-30 flex items-center gap-2 max-[950px]:left-2 max-[950px]:top-2">
                   <button
                     type="button"
                     onClick={toggleFullscreenOverlay}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-black/65 px-2.5 py-2 text-[10px] font-semibold text-white backdrop-blur-sm hover:bg-black/80"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-black/65 px-2.5 py-2 text-[10px] font-semibold text-white backdrop-blur-sm hover:bg-black/80 max-[950px]:px-2 max-[950px]:py-1.5"
                   >
                     <Minimize2 className="h-3.5 w-3.5" />
-                    Exit Fullscreen
+                    <span className="max-[950px]:sr-only">Exit Fullscreen</span>
                   </button>
-                  <span className="hidden rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-[10px] text-white/70 backdrop-blur-sm sm:inline">
+                  <span className="hidden rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-[10px] text-white/70 backdrop-blur-sm lg:inline">
                     Space play/pause | arrows seek | S add event
                   </span>
                 </div>
               )}
               {fullscreenActive && (
-                <div className="absolute inset-x-3 bottom-3 z-30 rounded-xl border border-white/15 bg-black/70 p-3 text-white shadow-xl backdrop-blur-sm">
+                <div className={`absolute inset-x-3 bottom-3 z-30 rounded-xl border border-white/15 bg-black/70 p-3 text-white shadow-xl backdrop-blur-sm transition-all duration-300 max-[950px]:inset-x-2 max-[950px]:bottom-2 max-[950px]:p-2 ${fullscreenControlsShown ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-4 opacity-0"}`}>
                   {videoDuration > 0 && (
-                    <div className="mb-2 space-y-1">
+                    <div className="mb-2 space-y-1 max-[950px]:mb-1.5">
                       <div
-                        className="relative h-3 cursor-pointer rounded-full bg-white/15"
+                        className="relative h-3 cursor-pointer rounded-full bg-white/15 max-[950px]:h-2.5"
                         onClick={handleTimelineScrub}
                         title="Click to seek video"
                       >
@@ -1611,24 +1684,24 @@ export default function VideoSyncPlayer({
                       </div>
                     </div>
                   )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => stepFrames(-5)} className="rounded-lg bg-white/10 p-2 hover:bg-white/20" title="Back 5 seconds">
+                  <div className="flex flex-wrap items-center gap-2 max-[950px]:gap-1.5">
+                    <button type="button" onClick={() => stepFrames(-5)} className="rounded-lg bg-white/10 p-2 hover:bg-white/20 max-[950px]:p-1.5" title="Back 5 seconds">
                       <ChevronLeft className="h-4 w-4" />
                     </button>
-                    <button type="button" onClick={togglePlay} className="inline-flex min-w-28 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90">
+                    <button type="button" onClick={togglePlay} className="inline-flex min-w-28 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 max-[950px]:min-w-20 max-[950px]:px-3 max-[950px]:py-1.5">
                       {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                      {isPlaying ? "Pause" : "Play"}
+                      <span>{isPlaying ? "Pause" : "Play"}</span>
                     </button>
-                    <button type="button" onClick={() => stepFrames(5)} className="rounded-lg bg-white/10 p-2 hover:bg-white/20" title="Forward 5 seconds">
+                    <button type="button" onClick={() => stepFrames(5)} className="rounded-lg bg-white/10 p-2 hover:bg-white/20 max-[950px]:p-1.5" title="Forward 5 seconds">
                       <ChevronRight className="h-4 w-4" />
                     </button>
-                    <div className="ml-1 flex items-center gap-1">
+                    <div className="ml-1 flex items-center gap-1 max-[950px]:ml-0">
                       {[0.5, 1, 1.5, 2].map((speed) => (
                         <button
                           key={speed}
                           type="button"
                           onClick={() => setSpeed(speed)}
-                          className={`rounded px-2 py-1 text-[10px] font-semibold ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-white/10 text-white/75 hover:bg-white/20"}`}
+                          className={`rounded px-2 py-1 text-[10px] font-semibold max-[950px]:px-1.5 max-[950px]:py-1 ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-white/10 text-white/75 hover:bg-white/20"}`}
                         >
                           {speed}x
                         </button>
@@ -1637,10 +1710,10 @@ export default function VideoSyncPlayer({
                     <button
                       type="button"
                       onClick={startAddAtPlayhead}
-                      className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/25"
+                      className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/25 max-[950px]:px-2 max-[950px]:py-1.5"
                     >
                       <Plus className="h-3.5 w-3.5" />
-                      Add Event at {fmtMmSs(playheadS)}
+                      <span className="max-[950px]:hidden">Add Event at </span>{fmtMmSs(playheadS)}
                     </button>
                   </div>
                 </div>

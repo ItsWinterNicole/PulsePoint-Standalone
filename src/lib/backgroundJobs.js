@@ -1,7 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+import { apiUrl } from "@/lib/mobileApiBase";
 
 async function jobRequest(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const response = await fetch(apiUrl(path), options);
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json")
     ? await response.json()

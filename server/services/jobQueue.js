@@ -4,7 +4,37 @@ const handlers = new Map();
 const jobs = new Map();
 const queue = [];
 const running = new Set();
-const concurrency = Math.max(1, Number(process.env.BACKGROUND_JOB_CONCURRENCY || 1));
+const concurrency = Math.max(1, Number(process.env.BACKGROUND_JOB_CONCURRENCY || 3));
+
+function jobLane(type) {
+  const name = String(type || '');
+  if (name.startsWith('local_vision_')) return 'local_vision';
+  if (name === 'ai_invoke') return 'ai';
+  if (name === 'tts_export') return 'tts';
+  return 'general';
+}
+
+function laneConcurrency(lane) {
+  if (lane === 'local_vision') return Math.max(1, Number(process.env.BACKGROUND_JOB_LOCAL_VISION_CONCURRENCY || 1));
+  if (lane === 'ai') return Math.max(1, Number(process.env.BACKGROUND_JOB_AI_CONCURRENCY || 2));
+  if (lane === 'tts') return Math.max(1, Number(process.env.BACKGROUND_JOB_TTS_CONCURRENCY || 1));
+  return Math.max(1, Number(process.env.BACKGROUND_JOB_GENERAL_CONCURRENCY || concurrency));
+}
+
+function runningLaneCount(lane) {
+  let count = 0;
+  for (const id of running) {
+    const job = jobs.get(id);
+    if (jobLane(job?.type) === lane) count += 1;
+  }
+  return count;
+}
+
+function canStartJob(job) {
+  if (!job || job.status !== 'queued') return false;
+  const lane = job.lane || jobLane(job.type);
+  return runningLaneCount(lane) < laneConcurrency(lane);
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -50,7 +80,9 @@ function patchProgress(job, progress = {}) {
 
 function runNext() {
   while (running.size < concurrency && queue.length > 0) {
-    const job = queue.shift();
+    const queueIndex = queue.findIndex((candidate) => canStartJob(candidate));
+    if (queueIndex < 0) return;
+    const [job] = queue.splice(queueIndex, 1);
     if (!job || job.status !== 'queued') continue;
     const handler = handlers.get(job.type);
     if (!handler) {
@@ -66,6 +98,7 @@ function runNext() {
     running.add(job.id);
     patchJob(job, {
       status: 'running',
+      lane: job.lane || jobLane(job.type),
       startedAt: nowIso(),
     });
     patchProgress(job, {
@@ -141,6 +174,7 @@ export function createJob(type, payload = {}, meta = {}) {
     result: null,
     error: null,
     meta,
+    lane: jobLane(type),
     payload,
     createdAt: now,
     updatedAt: now,
@@ -159,6 +193,7 @@ function hydratePersistedJob(record) {
   if (!record?.id) return null;
   return {
     ...record,
+    lane: record.lane || jobLane(record.type),
     payload: record.payload || null,
     abortController: new AbortController(),
   };

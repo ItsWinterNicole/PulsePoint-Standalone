@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Activity, CheckSquare, Square, Info } from "lucide-react";
 import moment from "moment";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
+import { apiUrl } from "@/lib/mobileApiBase";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -18,7 +19,6 @@ const COLORS = [
 
 const PHASE_COLORS = { pre_climax: "#a855f7", climax: "#ef4444", recovery: "#3b82f6" };
 const BUCKET_S = 5; // 5-second buckets
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -208,7 +208,7 @@ export default function HROverlay() {
     setHrSourceError("");
     writeHrSourceSettings(hrSourceSettings);
     try {
-      const response = await fetch(`${API_BASE}/live-capture/hr-source`, {
+      const response = await fetch(apiUrl("/live-capture/hr-source"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

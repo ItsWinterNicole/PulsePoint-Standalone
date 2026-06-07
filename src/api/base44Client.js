@@ -1,7 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE || '/api';
+import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const response = await fetch(apiUrl(path), options);
   const contentType = response.headers.get('content-type') || '';
   if (!response.ok) {
     const data = contentType.includes('application/json')
@@ -23,7 +23,7 @@ async function request(path, options = {}) {
 }
 
 async function invokeFunction(name, payload, options = {}) {
-  const response = await fetch(`${API_BASE}/functions/${name}`, {
+  const response = await fetch(apiUrl(`/functions/${name}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
@@ -136,6 +136,34 @@ export const base44 = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, startSeconds, windowSeconds, maxSnippets, transcribe }),
       }),
+      AnalyzeLocalVisionWindow: async (payload) => request('/local-vision/analyze-window', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      }),
+      AnalyzeLocalVisionContinuous: async (payload) => request('/local-vision/analyze-continuous', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      }),
+      AskLocalVisionVideo: async (payload) => request('/local-vision/ask-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      }),
+      GetLocalVisionHealth: async () => request('/local-vision/health'),
+      ListLocalVisionResults: async ({ sessionId, recordType = '', limit = 10 } = {}) => {
+        const query = new URLSearchParams();
+        if (sessionId) query.set('sessionId', sessionId);
+        if (recordType) query.set('recordType', recordType);
+        if (limit) query.set('limit', String(limit));
+        return request(`/local-vision/results?${query.toString()}`);
+      },
+      AnalyzeLocalVisionAdaptive: async (payload) => request('/local-vision/analyze-adaptive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      }),
       ConvertVideoForPlayback: async ({ file, label = '' }) => {
         const form = new FormData();
         form.append('file', file);
@@ -148,7 +176,8 @@ export const base44 = {
         body: JSON.stringify({ path }),
       }),
       BrowseLocalVideo: async () => request('/files/local-video/browse', { method: 'POST' }),
-      localVideoStreamUrl: (path) => `/api/files/local-video/stream?path=${encodeURIComponent(path)}`,
+      localVideoStreamUrl: (path) => serverUrl(`/api/files/local-video/stream?path=${encodeURIComponent(path)}`),
+      localVisionAssetUrl: (path) => serverUrl(path),
     },
   },
   functions: {

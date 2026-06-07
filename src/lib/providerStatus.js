@@ -1,7 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+import { apiUrl } from "@/lib/mobileApiBase";
 
 export async function getProviderStatus() {
-  const response = await fetch(`${API_BASE}/status/providers`);
+  const response = await fetch(apiUrl("/status/providers"));
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json")
     ? await response.json()

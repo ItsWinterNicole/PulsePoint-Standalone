@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { serverUrl } from "@/lib/mobileApiBase";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard, Sparkles } from "lucide-react";
@@ -585,7 +586,7 @@ export default function SessionDetail() {
       // Load EMG data from the stored CSV file (client-side parse — no DB rows needed)
       if (s?.emg_data_file) {
         try {
-          const csvResp = await fetch(s.emg_data_file);
+          const csvResp = await fetch(serverUrl(s.emg_data_file));
           const text = await csvResp.text();
           const { parseEmgCsv } = await import("../utils/parseEmgCsv");
           const result = parseEmgCsv(text);

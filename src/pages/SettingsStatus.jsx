@@ -46,8 +46,28 @@ function elapsedLabel(value) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m ago`;
 }
 
+function fmtDuration(ms) {
+  const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  if (!seconds) return "";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
 function jobLabel(job) {
-  return job?.meta?.title || job?.meta?.label || (job?.type === "tts_export" ? "Audio render" : job?.type === "ai_invoke" ? "AI analysis" : job?.type || "Background task");
+  if (job?.meta?.title) return job.meta.title;
+  if (job?.meta?.label) return job.meta.label;
+  if (job?.type === "local_vision_analyze_continuous") return "Local vision annotation";
+  if (job?.type === "local_vision_analyze_window") return "Diagnostic local vision";
+  if (job?.type === "local_vision_ask_video") return "Local video question";
+  if (job?.type === "ai_invoke" && job?.meta?.source === "ai_video_pass") return "Cloud Sarah annotation";
+  if (job?.type === "tts_export") return "Audio render";
+  if (job?.type === "ai_invoke") return "AI analysis";
+  return job?.type || "Background task";
 }
 
 function jobRoute(job) {
@@ -61,6 +81,67 @@ function progressPercent(job) {
   const current = Number(progress.current || 0);
   if (!active) return 100;
   return total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : 18;
+}
+
+function progressCounts(job) {
+  const progress = job?.progress || {};
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return "";
+  return `${Math.max(0, Math.round(current))}/${Math.max(0, Math.round(total))}`;
+}
+
+function adaptiveProgressChips(progress = {}) {
+  return [
+    { label: "scanned", value: progress.framesScanned ?? progress.frames_scanned ?? progress.scanned_frames },
+    { label: "candidates", value: progress.candidatesFound ?? progress.candidates_found ?? progress.candidate_events },
+    { label: "Qwen selected", value: progress.candidatesSelectedForQwen ?? progress.candidates_selected_for_qwen },
+    { label: "Qwen", value: progress.qwenCallsTotal != null ? `${progress.qwenCallsCompleted || 0}/${progress.qwenCallsTotal}` : null },
+    { label: "confirmed", value: progress.confirmedFindingsCount ?? progress.confirmed_findings_count },
+    { label: "strong", value: progress.strongCandidatesCount ?? progress.strong_candidates_count },
+    { label: "not confirmed", value: progress.notConfirmedCount ?? progress.not_confirmed_count },
+    { label: "blocked", value: progress.blocked_claims },
+  ].filter((item) => item.value != null);
+}
+
+function currentCandidateText(progress = {}) {
+  const candidate = progress.latest_candidate_window;
+  const type = candidate?.type || progress.latest_candidate_type;
+  if (!type) return "";
+  const score = candidate?.score ?? progress.latest_candidate_score;
+  const scoreText = score != null ? ` · score ${Math.round(Number(score || 0) * 100)}%` : "";
+  const reasons = Array.isArray(candidate?.reasons || progress.latest_candidate_reasons)
+    ? (candidate?.reasons || progress.latest_candidate_reasons).slice(0, 2).join("; ")
+    : "";
+  return `${String(type).replace(/_/g, " ")}${scoreText}${reasons ? ` · ${reasons}` : ""}`;
+}
+
+function estimateJobEta(job) {
+  if (!["queued", "running"].includes(job?.status)) return null;
+  const progress = job?.progress || {};
+  const current = Number(progress.eta_current ?? progress.current ?? 0);
+  const total = Number(progress.eta_total ?? progress.total ?? 0);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || current <= 0 || total <= current) return null;
+  const startedAt = new Date(job.startedAt || job.createdAt || 0).getTime();
+  if (!Number.isFinite(startedAt) || startedAt <= 0) return null;
+  const elapsedMs = Date.now() - startedAt;
+  if (elapsedMs < 15000) return null;
+  const etaMs = (total - current) * (elapsedMs / current);
+  if (!Number.isFinite(etaMs) || etaMs < 1000) return null;
+  return {
+    label: `ETA ~ ${fmtDuration(etaMs)} left`,
+    elapsedLabel: `elapsed ${fmtDuration(elapsedMs)}`,
+  };
+}
+
+function activePhaseFallback(job) {
+  if (!["queued", "running"].includes(job?.status)) return "";
+  const progress = job?.progress || {};
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0 || current < total) return "";
+  const phase = String(progress.phase || "current phase").replace(/_/g, " ");
+  return `Finishing ${phase}`;
 }
 
 function isPossiblyStale(job) {
@@ -342,6 +423,9 @@ export default function SettingsStatus() {
     const route = jobRoute(job);
     const active = ["queued", "running"].includes(job.status);
     const stale = isPossiblyStale(job);
+    const eta = estimateJobEta(job);
+    const phaseFallback = activePhaseFallback(job);
+    const counts = progressCounts(job);
     return (
       <article key={job.id} className="rounded-xl border border-border bg-card p-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
@@ -359,10 +443,39 @@ export default function SettingsStatus() {
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
           <div className={`h-full rounded-full ${stale ? "bg-amber-300" : "bg-primary"}`} style={{ width: `${progressPercent(job)}%` }} />
         </div>
+        {job?.progress?.latest_summary && (
+          <p className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-primary">Latest evidence:</span> {job.progress.latest_summary}
+          </p>
+        )}
+        {currentCandidateText(job.progress) && (
+          <p className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-primary">Current checkpoint:</span> {currentCandidateText(job.progress)}
+          </p>
+        )}
+        {adaptiveProgressChips(job.progress).length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+            {adaptiveProgressChips(job.progress).map((chip) => (
+              <span key={chip.label} className="rounded-full border border-border bg-muted/20 px-2 py-0.5">
+                {chip.value} {chip.label}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
-          <span>{job?.progress?.phase || job.type}{job?.progress?.model ? ` / ${job.progress.model}` : ""}</span>
+          <span>
+            {job?.progress?.phase || job.type}
+            {counts ? ` · ${counts}` : ""}
+            {job?.progress?.model ? ` / ${job.progress.model}` : ""}
+          </span>
           <span>Updated {elapsedLabel(job?.progress?.updatedAt || job.updatedAt)}{job.updatedAt ? ` / ${fmtDateTime(job.updatedAt)}` : ""}</span>
         </div>
+        {active && (eta || phaseFallback) && (
+          <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-primary">
+            <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-1">{eta?.label || phaseFallback}</span>
+            {eta?.elapsedLabel && <span className="rounded-full border border-border bg-muted/20 px-2 py-1 text-muted-foreground">{eta.elapsedLabel}</span>}
+          </div>
+        )}
         <div className="mt-3 flex flex-wrap gap-2">
           {route && (
             <button type="button" onClick={() => navigate(route)} className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted/80">

@@ -32,9 +32,25 @@ function fmtTime(value) {
   }
 }
 
+function fmtDuration(ms) {
+  const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  if (!seconds) return "";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
 function jobLabel(job) {
   if (job?.meta?.title) return job.meta.title;
   if (job?.meta?.label) return job.meta.label;
+  if (job?.type === "local_vision_analyze_continuous") return "Local vision annotation";
+  if (job?.type === "local_vision_analyze_window") return "Diagnostic local vision";
+  if (job?.type === "local_vision_ask_video") return "Local video question";
+  if (job?.type === "ai_invoke" && job?.meta?.source === "ai_video_pass") return "Cloud Sarah annotation";
   if (job?.type === "tts_export") return "Audio render";
   if (job?.type === "ai_invoke") return "AI analysis";
   return job?.type || "Background job";
@@ -56,6 +72,81 @@ function progressMessage(job) {
     return "Complete";
   }
   return message;
+}
+
+function progressCounts(job) {
+  const progress = job?.progress || {};
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return "";
+  return `${Math.max(0, Math.round(current))}/${Math.max(0, Math.round(total))}`;
+}
+
+function adaptiveProgressChips(progress = {}) {
+  return [
+    progress.framesScanned ?? progress.frames_scanned ?? progress.scanned_frames,
+    progress.candidatesFound ?? progress.candidates_found ?? progress.candidate_events,
+    progress.candidatesSelectedForQwen ?? progress.candidates_selected_for_qwen,
+    progress.qwenCallsTotal != null ? `${progress.qwenCallsCompleted || 0}/${progress.qwenCallsTotal}` : null,
+    progress.confirmedFindingsCount ?? progress.confirmed_findings_count,
+    progress.strongCandidatesCount ?? progress.strong_candidates_count,
+    progress.notConfirmedCount ?? progress.not_confirmed_count,
+    progress.blocked_claims,
+  ].some((value) => value != null)
+    ? [
+      { label: "scanned", value: progress.framesScanned ?? progress.frames_scanned ?? progress.scanned_frames },
+      { label: "candidates", value: progress.candidatesFound ?? progress.candidates_found ?? progress.candidate_events },
+      { label: "Qwen selected", value: progress.candidatesSelectedForQwen ?? progress.candidates_selected_for_qwen },
+      { label: "Qwen", value: progress.qwenCallsTotal != null ? `${progress.qwenCallsCompleted || 0}/${progress.qwenCallsTotal}` : null },
+      { label: "confirmed", value: progress.confirmedFindingsCount ?? progress.confirmed_findings_count },
+      { label: "strong", value: progress.strongCandidatesCount ?? progress.strong_candidates_count },
+      { label: "not confirmed", value: progress.notConfirmedCount ?? progress.not_confirmed_count },
+      { label: "blocked", value: progress.blocked_claims },
+    ].filter((item) => item.value != null)
+    : [];
+}
+
+function currentCandidateText(progress = {}) {
+  const candidate = progress.latest_candidate_window;
+  const type = candidate?.type || progress.latest_candidate_type;
+  if (!type) return "";
+  const score = candidate?.score ?? progress.latest_candidate_score;
+  const scoreText = score != null ? ` · score ${Math.round(Number(score || 0) * 100)}%` : "";
+  const reasons = Array.isArray(candidate?.reasons || progress.latest_candidate_reasons)
+    ? (candidate?.reasons || progress.latest_candidate_reasons).slice(0, 2).join("; ")
+    : "";
+  return `${String(type).replace(/_/g, " ")}${scoreText}${reasons ? ` · ${reasons}` : ""}`;
+}
+
+function estimateJobEta(job) {
+  if (!["queued", "running"].includes(job?.status)) return null;
+  const progress = job?.progress || {};
+  const current = Number(progress.eta_current ?? progress.current ?? 0);
+  const total = Number(progress.eta_total ?? progress.total ?? 0);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || current <= 0 || total <= current) return null;
+  const startedAt = new Date(job.startedAt || job.createdAt || 0).getTime();
+  if (!Number.isFinite(startedAt) || startedAt <= 0) return null;
+  const elapsedMs = Date.now() - startedAt;
+  if (elapsedMs < 15000) return null;
+  const msPerUnit = elapsedMs / current;
+  const etaMs = (total - current) * msPerUnit;
+  if (!Number.isFinite(etaMs) || etaMs < 1000) return null;
+  return {
+    etaMs,
+    elapsedMs,
+    label: `ETA ~ ${fmtDuration(etaMs)} left`,
+    elapsedLabel: `elapsed ${fmtDuration(elapsedMs)}`,
+  };
+}
+
+function activePhaseFallback(job) {
+  if (!["queued", "running"].includes(job?.status)) return "";
+  const progress = job?.progress || {};
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0 || current < total) return "";
+  const phase = String(progress.phase || "current phase").replace(/_/g, " ");
+  return `Finishing ${phase}`;
 }
 
 function jobTarget(job) {
@@ -232,6 +323,9 @@ export default function BackgroundJobStatusTray() {
 
   const activeCount = visibleJobs.filter((job) => ["queued", "running"].includes(job.status)).length;
   const completedJobs = visibleJobs.filter((job) => job.status === "complete");
+  const primaryActiveJob = visibleJobs.find((job) => ["queued", "running"].includes(job.status));
+  const primaryEta = estimateJobEta(primaryActiveJob);
+  const primaryPhaseFallback = activePhaseFallback(primaryActiveJob);
 
   const dismissFinished = (jobIds) => {
     setDismissedTerminalIds((previous) => new Set([...previous, ...jobIds]));
@@ -254,7 +348,10 @@ export default function BackgroundJobStatusTray() {
                 {activeCount > 0 ? `${activeCount} background task${activeCount === 1 ? "" : "s"} running` : offline ? "Background status unavailable" : "Background tasks updated"}
               </p>
               <p className="truncate text-xs text-muted-foreground">
-                {progressMessage(visibleJobs[0]) || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
+                {primaryActiveJob
+                  ? [progressMessage(primaryActiveJob), primaryEta?.label].filter(Boolean).join(" · ")
+                  || [progressMessage(primaryActiveJob), primaryPhaseFallback].filter(Boolean).join(" · ")
+                  : progressMessage(visibleJobs[0]) || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
               </p>
             </div>
             {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
@@ -326,6 +423,9 @@ export default function BackgroundJobStatusTray() {
               const pct = !active ? 100 : total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : 20;
               const target = jobTarget(job);
               const cancelling = cancellingIds.has(job.id);
+              const eta = estimateJobEta(job);
+              const phaseFallback = activePhaseFallback(job);
+              const counts = progressCounts(job);
               return (
                 <div
                   key={job.id}
@@ -352,10 +452,36 @@ export default function BackgroundJobStatusTray() {
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/20">
                     <div className="h-full rounded-full bg-current transition-all" style={{ width: `${pct}%` }} />
                   </div>
+                  {job.progress?.latest_summary && (
+                    <p className="mt-2 rounded-md border border-current/20 bg-black/10 px-2 py-1.5 text-[10px] leading-relaxed opacity-90">
+                      <span className="font-semibold">Latest evidence:</span> {job.progress.latest_summary}
+                    </p>
+                  )}
+                  {currentCandidateText(job.progress) && (
+                    <p className="mt-2 rounded-md border border-current/20 bg-black/10 px-2 py-1.5 text-[10px] leading-relaxed opacity-90">
+                      <span className="font-semibold">Current checkpoint:</span> {currentCandidateText(job.progress)}
+                    </p>
+                  )}
+                  {adaptiveProgressChips(job.progress).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] opacity-80">
+                      {adaptiveProgressChips(job.progress).map((chip) => (
+                        <span key={chip.label} className="rounded-full border border-current/20 px-2 py-0.5">
+                          {chip.value} {chip.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] opacity-75">
-                    <span>{progress.phase || job.type}</span>
+                    <span className="min-w-0 truncate">{progress.phase || job.type}</span>
+                    {counts && <span className="shrink-0 font-mono">{counts}</span>}
                     <span>{fmtTime(job.updatedAt || job.finishedAt || job.createdAt)}</span>
                   </div>
+                  {active && (eta || phaseFallback) && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] font-semibold opacity-85">
+                      <span className="rounded-full border border-current/20 px-2 py-0.5">{eta?.label || phaseFallback}</span>
+                      {eta?.elapsedLabel && <span className="rounded-full border border-current/20 px-2 py-0.5">{eta.elapsedLabel}</span>}
+                    </div>
+                  )}
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {target && (
                       <button

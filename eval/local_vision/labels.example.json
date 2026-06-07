@@ -1,0 +1,18 @@
+{
+  "foley_tubing_visible": "visible",
+  "statlock_visible": "not_visible",
+  "visible_advancement_motion": "uncertain",
+  "erection_state_visible": "partial_erection",
+  "stroking_motion_visible": "visible",
+  "ejaculation_or_fluid_release_visible": "not_visible",
+  "visible_fluid_release_onset": "not_visible",
+  "fluid_release_pulse_count": "uncertain",
+  "fluid_stream_or_droplet_visible": "not_visible",
+  "fluid_projection_distance_estimate": "uncertain",
+  "fluid_trajectory_angle_estimate": "uncertain",
+  "fluid_velocity_proxy_estimate": "uncertain",
+  "fluid_volume_proxy_estimate": "none",
+  "post_event_fluid_presence": "not_visible",
+  "cleanup_or_wipe_visible": "not_visible",
+  "toe_curling_or_foot_flexion_visible": "visible"
+}

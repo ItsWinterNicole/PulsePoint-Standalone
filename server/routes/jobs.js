@@ -3,6 +3,10 @@ import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler }
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { aiInvokeInternal } from './internalAi.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
+import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
+import { analyzeLocalVisionContinuous } from '../services/localVision/continuousAnalyzer.js';
+import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnalyzer.js';
+import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 
 export const jobsRouter = express.Router();
 
@@ -103,6 +107,62 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     message: `${label}: validating structured output…`,
   });
   return result;
+});
+
+registerJobHandler('local_vision_analyze_window', async (payload, context) => {
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 4,
+    message: 'Preparing local-only visual analysis...',
+    privacy: { localOnly: true, cloudUpload: false },
+  });
+  return analyzeLocalVisionWindow(payload, {
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('local_vision_analyze_continuous', async (payload, context) => {
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 6,
+    message: 'Preparing continuous local Qwen visual analysis...',
+    privacy: { localOnly: true, cloudUpload: false },
+  });
+  return analyzeLocalVisionContinuous(payload, {
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('local_vision_analyze_adaptive', async (payload, context) => {
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 6,
+    message: 'Preparing adaptive local vision analysis...',
+    privacy: { localOnly: true, cloudUpload: false },
+  });
+  return analyzeLocalVisionAdaptive(payload, {
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('local_vision_ask_video', async (payload, context) => {
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 4,
+    message: 'Preparing local Qwen video Q&A...',
+    privacy: { localOnly: true, cloudUpload: false },
+  });
+  return askLocalVisionVideo(payload, {
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
 });
 
 jobsRouter.post('/start', (req, res) => {

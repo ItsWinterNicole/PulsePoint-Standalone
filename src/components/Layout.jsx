@@ -24,30 +24,58 @@ function uiPreferenceClasses(prefs) {
   ].join(" ");
 }
 
-const navItems = [
-{ path: "/", icon: LayoutDashboard, label: "Dashboard" },
-{ path: "/sessions", icon: List, label: "Sessions" },
-{ path: "/new", icon: PlusCircle, label: "New Session" },
-{ path: "/exploration", icon: ScanSearch, label: "Body Exploration" },
-{ path: "/journal", icon: BookOpen, label: "Journal" },
-{ path: "/capture", icon: Radio, label: "Live Capture" },
-{ path: "/compare", icon: GitCompare, label: "Compare" },
-{ path: "/insights", icon: TrendingUp, label: "Insights" },
-{ path: "/cascade", icon: Waves, label: "Cascade" },
-{ path: "/profiler", icon: ScanSearch, label: "AI Profiler" },
-{ path: "/overlay", icon: GitMerge, label: "HR Overlay" },
-{ path: "/trends", icon: LineChart, label: "Trends" },
-{ path: "/correlations", icon: Grid3x3, label: "Correlations" },
-{ path: "/video", icon: Clapperboard, label: "Video Sync" },
-{ path: "/ai-annotation", icon: Sparkles, label: "AI Annotation" },
-{ path: "/review-player", icon: Clapperboard, label: "Review Player" },
-{ path: "/motion-lab", icon: Activity, label: "Motion Lab" },
-{ path: "/library", icon: Music, label: "Audio Library" },
-{ path: "/analytics", icon: BarChart2, label: "Analytics" },
-{ path: "/modeler", icon: FlaskConical, label: "Predictive Modeler" },
-{ path: "/settings", icon: Settings2, label: "Settings & Status" },
-{ path: "/profile-qa", icon: MessageCircle, label: "Profile Q&A" },
-{ path: "/profile", icon: UserCircle, label: "My Profile" }];
+const navGroups = [
+  {
+    label: "Today",
+    items: [
+      { path: "/", icon: LayoutDashboard, label: "Dashboard" },
+      { path: "/sessions", icon: List, label: "Sessions" },
+      { path: "/new", icon: PlusCircle, label: "New Session" },
+      { path: "/journal", icon: BookOpen, label: "Journal" },
+    ],
+  },
+  {
+    label: "Capture",
+    items: [
+      { path: "/capture", icon: Radio, label: "Live Capture" },
+      { path: "/exploration", icon: ScanSearch, label: "Body Exploration" },
+      { path: "/motion-lab", icon: Activity, label: "Motion Lab" },
+    ],
+  },
+  {
+    label: "Review & AI",
+    items: [
+      { path: "/ai-annotation", icon: Sparkles, label: "AI Annotation" },
+      { path: "/review-player", icon: Clapperboard, label: "Review Player" },
+      { path: "/video", icon: Clapperboard, label: "Video Sync" },
+      { path: "/profiler", icon: ScanSearch, label: "AI Profiler" },
+      { path: "/profile-qa", icon: MessageCircle, label: "Profile Q&A" },
+    ],
+  },
+  {
+    label: "Patterns",
+    items: [
+      { path: "/insights", icon: TrendingUp, label: "Insights" },
+      { path: "/compare", icon: GitCompare, label: "Compare" },
+      { path: "/cascade", icon: Waves, label: "Cascade" },
+      { path: "/overlay", icon: GitMerge, label: "HR Overlay" },
+      { path: "/trends", icon: LineChart, label: "Trends" },
+      { path: "/correlations", icon: Grid3x3, label: "Correlations" },
+      { path: "/analytics", icon: BarChart2, label: "Analytics" },
+      { path: "/modeler", icon: FlaskConical, label: "Predictive Modeler" },
+    ],
+  },
+  {
+    label: "Library & System",
+    items: [
+      { path: "/library", icon: Music, label: "Audio Library" },
+      { path: "/profile", icon: UserCircle, label: "My Profile" },
+      { path: "/settings", icon: Settings2, label: "Settings & Status" },
+    ],
+  },
+];
+
+const navItems = navGroups.flatMap((group) => group.items);
 
 function isPathActive(path, pathname) {
   return path === "/" ? pathname === "/" : pathname === path || pathname.startsWith(`${path}/`);
@@ -97,7 +125,7 @@ export default function Layout() {
 
       {/* Side panel */}
       {!isDisplayView && <aside
-        className={`fixed top-0 left-0 h-full z-50 w-64 bg-card border-r border-border flex flex-col transition-transform duration-200 ease-in-out ${
+        className={`fixed top-0 left-0 h-full z-50 w-[18rem] max-w-[86vw] bg-card border-r border-border flex flex-col transition-transform duration-200 ease-in-out ${
         open ? "translate-x-0" : "-translate-x-full"}`
         }>
         
@@ -107,26 +135,28 @@ export default function Layout() {
             <X className="w-4 h-4" />
           </button>
         </div>
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-          {navItems.map(({ path, icon: Icon, label }) => {
-            const isActive = isPathActive(path, location.pathname);
-            return (
-              <Link
-                key={path}
-                to={path}
-                onClick={() => setOpen(false)}
-                className={`text-[#ffffff] px-3 py-2.5 text-sm font-medium rounded-lg flex items-center gap-3 transition-colors hover:bg-muted hover:text-foreground ${isActive ? "bg-muted text-foreground" : ""}`}>
-
-
-
-
-
-                
-                <Icon className="w-4 h-4 shrink-0" />
-                {label}
-              </Link>);
-
-            })}
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
+          {navGroups.map((group) => (
+            <section key={group.label} className="mb-3 last:mb-1">
+              <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {group.label}
+              </p>
+              <div className="space-y-0.5">
+                {group.items.map(({ path, icon: Icon, label }) => {
+                  const isActive = isPathActive(path, location.pathname);
+                  return (
+                    <Link
+                      key={path}
+                      to={path}
+                      onClick={() => setOpen(false)}
+                      className={`flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-foreground/90 transition-colors hover:bg-muted hover:text-foreground ${isActive ? "bg-muted text-foreground shadow-sm" : ""}`}>
+                      <Icon className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{label}</span>
+                    </Link>);
+                })}
+              </div>
+            </section>
+          ))}
         </nav>
         <InstallAppButton />
       </aside>}

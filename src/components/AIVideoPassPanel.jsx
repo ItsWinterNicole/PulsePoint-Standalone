@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clapperboard, Copy, Eye, Loader2, Mic, Play, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -28,6 +28,15 @@ function fmtMmSs(totalSeconds) {
   const m = Math.floor(v / 60);
   const s = v % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function fmtClockTime(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return "";
+  }
 }
 
 function fmtSignedMmSs(totalSeconds) {
@@ -69,6 +78,105 @@ function compactText(value, max = 1400) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text;
+}
+
+function humanStatus(value = "") {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\bnot confirmed\b/gi, "not confirmed")
+    .replace(/\bunknown\b/gi, "unknown")
+    .trim();
+}
+
+function formatLocalVisionRollingState(state) {
+  if (!state) return "";
+  if (typeof state === "string") return state.replace(/\s+/g, " ").trim();
+  if (typeof state !== "object") return "";
+  const parts = [
+    state.latest_candidate ? `latest checkpoint: ${humanStatus(state.latest_candidate)}` : null,
+    state.scan_position_ms != null ? `through ${fmtMmSs(Number(state.scan_position_ms) / 1000)}` : null,
+    state.manual_stimulation ? `manual stimulation ${humanStatus(state.manual_stimulation)}` : null,
+    state.fluid_event ? `fluid event ${humanStatus(state.fluid_event)}` : null,
+    state.anatomy_visibility && state.anatomy_visibility !== "unknown" ? `visibility ${humanStatus(state.anatomy_visibility)}` : null,
+    state.confirmed_findings_count != null ? `${state.confirmed_findings_count} confirmed` : null,
+    state.strong_candidates_count != null ? `${state.strong_candidates_count} candidate${state.strong_candidates_count === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function formatLocalVisionProgressMessage(progress = {}) {
+  const phase = String(progress.phase || "running").replace(/_/g, " ");
+  const message = String(progress.message || "").replace(/\s+/g, " ").trim();
+  const candidate = progress.latest_candidate_window;
+  const rollingState = formatLocalVisionRollingState(progress.latest_rolling_state || progress.rolling_state);
+  const latestSummary = String(progress.latest_summary || "").replace(/\s+/g, " ").trim();
+  const candidateText = candidate?.type
+    ? `${humanStatus(candidate.type)} near ${fmtMmSs((candidate.start_ms || 0) / 1000)}-${fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)}`
+    : "";
+
+  if (phase.includes("qwen review") && candidateText) {
+    const qwen = progress.qwenCallsTotal != null
+      ? `Qwen check ${Number(progress.qwenCallsCompleted || 0) + 1 > Number(progress.qwenCallsTotal) ? progress.qwenCallsCompleted : `${Number(progress.qwenCallsCompleted || 0) + 1}/${progress.qwenCallsTotal}`}`
+      : "Qwen check";
+    return `${qwen}: reviewing ${candidateText}.`;
+  }
+  if (phase.includes("qwen window sampling") && candidateText) {
+    return `Sampling evidence frames for ${candidateText}.`;
+  }
+  if (latestSummary) return latestSummary;
+  if (rollingState) return `Rolling read: ${rollingState}.`;
+  if (message) return message;
+  return "";
+}
+
+function localVisionProgressLogEntry(progress = {}) {
+  const phase = String(progress.phase || "running").replace(/_/g, " ");
+  const message = String(progress.message || "").replace(/\s+/g, " ").trim();
+  const latestSummary = String(progress.latest_summary || "").replace(/\s+/g, " ").trim();
+  const rollingSummary = formatLocalVisionRollingState(progress.latest_rolling_state || progress.rolling_state);
+  const latestFrame = progress.latest_frame;
+  const candidate = progress.latest_candidate_window;
+  const details = [
+    progress.framesScanned != null ? `${progress.framesScanned} frames scanned` : null,
+    progress.scanned_frames != null ? `${progress.scanned_frames} frames scanned` : null,
+    progress.candidatesFound != null ? `${progress.candidatesFound} candidates found` : null,
+    progress.candidate_events != null ? `${progress.candidate_events} candidates` : null,
+    progress.qwenCallsCompleted != null && progress.qwenCallsTotal != null ? `${progress.qwenCallsCompleted}/${progress.qwenCallsTotal} Qwen checks` : null,
+    progress.confirmedFindingsCount != null ? `${progress.confirmedFindingsCount} confirmed` : null,
+    progress.strongCandidatesCount != null ? `${progress.strongCandidatesCount} strong candidates` : null,
+    progress.blocked_claims != null ? `${progress.blocked_claims} blocked claims` : null,
+    candidate?.type ? `${humanStatus(candidate.type)} ${fmtMmSs((candidate.start_ms || 0) / 1000)}-${fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)}` : null,
+    candidate?.score != null ? `score ${Math.round(Number(candidate.score || 0) * 100)}%` : null,
+    latestFrame?.frame_id ? `${latestFrame.frame_id} @ ${fmtMmSs((latestFrame.time_ms || 0) / 1000)}` : null,
+  ].filter(Boolean);
+  const text = formatLocalVisionProgressMessage(progress) || rollingSummary || latestSummary || message || details.join(" · ");
+  if (!text) return null;
+  return {
+    key: [
+      progress.phase,
+      message,
+      latestSummary,
+      rollingSummary,
+      latestFrame?.frame_id,
+      latestFrame?.time_ms,
+      progress.framesScanned,
+      progress.scanned_frames,
+      progress.candidatesFound,
+      progress.candidate_events,
+      progress.qwenCallsCompleted,
+      progress.confirmedFindingsCount,
+      progress.strongCandidatesCount,
+      progress.blocked_claims,
+      candidate?.candidate_id,
+      candidate?.type,
+      candidate?.start_ms,
+      candidate?.score,
+    ].filter((value) => value != null).join("|"),
+    phase,
+    text,
+    details: details.join(" · "),
+    at: Date.now(),
+  };
 }
 
 function listText(values) {
@@ -148,7 +256,7 @@ function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRo
     exploration?.findings ? `Logged findings: ${compactText(exploration.findings, 900)}` : null,
   ].filter(Boolean);
   const timelineEvents = (exploration?.event_timeline || [])
-    .filter((event) => String(event?.note || "").trim())
+    .filter((event) => String(event?.note || "").trim() && !isAIGeneratedPassEvent(event))
     .slice()
     .sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0))
     .slice(0, 80)
@@ -282,6 +390,59 @@ function isTelemetryOnlyFinding(finding) {
     return true;
   }
   return !/(stimulation|contact|stroke|hand|shaft|glans|genital|penis|scrot|foreskin|meatus|erection|engorg|flaccid|ejaculate|pre-ejac|lubric|device|sleeve|foley|perine|pelvic|abdomen|chest|breath|respir|foot|feet|toe|heel|leg|tens|relax|tens)/.test(text);
+}
+
+function hasUnsupportedFoleySecurementClaim(item) {
+  const text = `${item?.title || ""} ${item?.text || item?.findingText || ""} ${item?.note || ""}`.toLowerCase();
+  return /(statlock|securement|securement device|securement work|securement finalization|anchor|anchoring|anchored)/.test(text)
+    && /(foley|catheter|tubing|yellow|shaft|glans|penis|drape|field|gloved hand|hand)/.test(text);
+}
+
+function hasUnsupportedFoleyStageForecast(item) {
+  const text = `${item?.title || ""} ${item?.text || item?.findingText || ""} ${item?.note || ""}`.toLowerCase();
+  return /(meatal engagement|catheter engagement|foley engagement|insertion|advancement|advanced|entering|passes? (?:the )?meatus|catheter positioning|foley positioning)/.test(text)
+    && /(imminent|about to|appears to|appears imminent|suggesting|consistent with|prepar(?:e|ing)|nearby|toward|lowering toward|positioning)/.test(text)
+    && !/(visible advancement|visibly advancing|visible tip|tip visibly|tip at|entering the meatus is visible|through the meatus)/.test(text);
+}
+
+function sanitizeExplorationFoleyText(text) {
+  const value = neutralizeIntentLanguage(text);
+  let next = value;
+  if (hasUnsupportedFoleySecurementClaim({ text: next })) {
+    next = next
+    .replace(/\bStatLock\b/gi, "Foley/tubing")
+    .replace(/\b(?:adhesive\s+)?securement\s+(?:device\s+)?(?:application|finalization|work|step|process|anchor|anchoring)?\b/gi, "tubing/field handling")
+    .replace(/\bsecurement\b/gi, "tubing/field handling")
+    .replace(/\banchoring\b/gi, "routing")
+    .replace(/\banchored\b/gi, "routed")
+    .replace(/\banchor\b/gi, "route")
+    .replace(/\bfinal\s+routing\b/gi, "routing")
+    .replace(/\bfinalized\b/gi, "handled")
+    .replace(/\bfinalization\b/gi, "handling")
+    .replace(/\bFoley\/tubing\s+tubing\b/gi, "Foley tubing")
+    .replace(/\btubing\/field handling\s+tubing\/field handling\b/gi, "tubing/field handling")
+  }
+  if (hasUnsupportedFoleyStageForecast({ text: next })) {
+    next = next
+      .replace(/\b(?:meatal|catheter|foley)\s+engagement\s+(?:appears\s+)?imminent\b/gi, "field preparation continues")
+      .replace(/\b(?:meatal|catheter|foley)\s+engagement\b/gi, "field preparation")
+      .replace(/\bcatheter\s+positioning\b/gi, "field/tool positioning")
+      .replace(/\bfoley\s+positioning\b/gi, "field/tool positioning")
+      .replace(/\bvisible\s+advancement\s+appears\s+imminent\b/gi, "field preparation continues")
+      .replace(/\b(?:insertion|advancement)\s+(?:appears\s+)?imminent\b/gi, "field preparation continues")
+      .replace(/\b(?:insertion|advancement)\b/gi, "field preparation")
+      .replace(/\bpasses?\s+(?:the\s+)?meatus\b/gi, "near the field")
+      .replace(/\bentering\b/gi, "near")
+      .replace(/\bappears\s+imminent\b/gi, "is not yet visible")
+      .replace(/\bimminent\b/gi, "not yet visible");
+  }
+  return next
+    .replace(/\bleft\s+(blue-gloved\s+)?hand\b/gi, "one $1hand")
+    .replace(/\bright\s+(blue-gloved\s+)?hand\b/gi, "the other $1hand")
+    .replace(/\bleft\s+hand\b/gi, "one hand")
+    .replace(/\bright\s+hand\b/gi, "the other hand")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isGenericControlObjectMention(item) {
@@ -534,16 +695,24 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       category: "other",
     }];
   const events = Array.isArray(value?.events) ? value.events : [];
+  const cleanTextForMode = (text) => (
+    isExploration ? sanitizeExplorationFoleyText(text) : neutralizeIntentLanguage(text)
+  );
   return {
-    summary: neutralizeIntentLanguage(value?.summary || findings[0]?.text || "Review complete."),
+    summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete."),
     findings: findings.map((finding) => ({
-      title: neutralizeIntentLanguage(finding.title || "Finding"),
-      text: neutralizeIntentLanguage(finding.text || finding.findingText || ""),
-      confidence: finding.confidence || "moderate",
+      title: hasUnsupportedFoleySecurementClaim(finding)
+        ? "Tubing/field handling"
+        : hasUnsupportedFoleyStageForecast(finding)
+        ? "Field preparation"
+        : cleanTextForMode(finding.title || "Finding"),
+      text: cleanTextForMode(finding.text || finding.findingText || ""),
+      confidence: (hasUnsupportedFoleySecurementClaim(finding) || hasUnsupportedFoleyStageForecast(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
       category: finding.category || "other",
     })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
     events: events.map((event) => {
-      const note = cleanDraftEventNote(event.note || event.text || "");
+      const unsupportedFoleyForecast = isExploration && hasUnsupportedFoleyStageForecast(event);
+      const note = cleanTextForMode(cleanDraftEventNote(event.note || event.text || ""));
       return {
         time_s: clamp(
           Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
@@ -551,9 +720,9 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
           fallbackWindow.end,
         ),
         note,
-        category: normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
+        category: unsupportedFoleyForecast ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
-        confidence: event.confidence || "moderate",
+        confidence: unsupportedFoleyForecast && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
       };
     }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
   };
@@ -581,6 +750,7 @@ function normalizeEventCategories(categories = [], isExploration = false) {
 }
 
 function eventFromCard(card, event, index, isExploration = false) {
+  const sourceName = card.localVision ? "local_qwen25vl_video_pass" : "sarah_video_pass";
   return {
     time_s: Number(event.time_s || card.window.start),
     note: event.note,
@@ -590,7 +760,7 @@ function eventFromCard(card, event, index, isExploration = false) {
     annotation_origin: "ai",
     annotation_tags: event.annotation_tags?.length ? event.annotation_tags : ["other_context"],
     ai_annotation: {
-      source: "sarah_video_pass",
+      source: sourceName,
       confidence: event.confidence || card.confidence || "moderate",
       clip_url: card.clipUrl,
       clip_start_s: card.window.start,
@@ -630,7 +800,7 @@ function persistedCardFrom(card) {
     id: card.id,
     saved_at: new Date().toISOString(),
     label: card.label,
-    source: "ai_video_pass",
+    source: card.localVision ? "local_qwen25vl_video_pass" : "ai_video_pass",
     source_video: {
       id: card.sourceVideo?.id || null,
       label: card.sourceVideo?.label || "",
@@ -652,6 +822,477 @@ function persistedCardFrom(card) {
     draft_events: card.events,
     telemetry: card.telemetry,
     motion_summary: card.motionSummary || null,
+    local_vision_result_id: card.localVisionResultId || null,
+  };
+}
+
+function confidenceWord(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "moderate";
+  if (numeric >= 0.75) return "high";
+  if (numeric >= 0.45) return "moderate";
+  return "low";
+}
+
+function arrayFromMaybe(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (value == null) return [];
+  return String(value).split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+const LOCAL_VISION_LABELS = {
+  foley_catheter: "Foley catheter",
+  foley_tubing: "Foley tubing",
+  statlock_or_securement_device: "StatLock/securement",
+  adhesive_securement_device: "Adhesive securement",
+  gloved_hands_visible: "Gloved hands",
+  prep_materials: "Prep materials",
+  hands_touching_glans_or_meatus: "Hand/meatus contact",
+  catheter_tip_at_or_entering_meatus: "Tip at meatus",
+  visible_advancement_motion: "Advancement motion",
+  tubing_routing_or_field_handling: "Tubing/field handling",
+  urine_visible: "Urine return",
+  balloon_inflation_visible: "Balloon inflation",
+  drape_applied_adjusted_or_removed: "Drape movement",
+  genital_state_visible: "Genital state",
+  erection_state_visible: "Erection state",
+  genital_visibility_obscured: "Genital visibility",
+  hand_contact_with_genitals_visible: "Hand/genital contact",
+  stroking_motion_visible: "Stroking motion",
+  pelvic_motion_visible: "Pelvic motion",
+  body_tension_or_relaxation_visible: "Body tension/relaxation",
+  leg_or_foot_position_visible: "Leg/foot position",
+  toe_curling_or_foot_flexion_visible: "Toe/foot flexion",
+  ejaculation_or_fluid_release_visible: "Visible fluid release",
+  visible_fluid_present: "Visible fluid",
+  fluid_stream_or_droplet_visible: "Stream/droplet",
+};
+
+const LOCAL_ANALYSIS_TYPES = [
+  { value: "general_session", label: "General Session" },
+  { value: "body_exploration", label: "Body Exploration" },
+  { value: "masturbation", label: "Masturbation Session" },
+  { value: "foley_procedure", label: "Foley / Procedure Review" },
+];
+
+const LOCAL_ANALYSIS_MODES = [
+  { value: "fast_preview", label: "Fast Preview", helper: "Cheap CV scan with only a few targeted Qwen checks." },
+  { value: "balanced", label: "Balanced Review", helper: "Recommended. CV pre-pass plus targeted Qwen candidate review." },
+  { value: "deep_forensic", label: "Deep Forensic Review", helper: "Slow/GPU-intensive. More candidate windows and Qwen calls." },
+];
+
+function inferLocalAnalysisType(recordType, session) {
+  const explicit = String(session?.local_vision_analysis_type || session?.analysis_type || session?.session_type || "").toLowerCase();
+  if (["general_session", "body_exploration", "masturbation", "foley_procedure"].includes(explicit)) return explicit;
+  if (["masturbation", "masturbation_session"].includes(explicit)) return "masturbation";
+  if (["foley", "foley_procedure", "procedure"].includes(explicit)) return "foley_procedure";
+  if (recordType === "body_exploration" || session?.standalone_body_exploration) return "body_exploration";
+  return "general_session";
+}
+
+function localAnalysisTypeLabel(value) {
+  return LOCAL_ANALYSIS_TYPES.find((item) => item.value === value)?.label || "General Session";
+}
+
+function localAnalysisModeLabel(value) {
+  return LOCAL_ANALYSIS_MODES.find((item) => item.value === value)?.label || "Balanced Review";
+}
+
+function localAnalysisModeHelper(value) {
+  return LOCAL_ANALYSIS_MODES.find((item) => item.value === value)?.helper || LOCAL_ANALYSIS_MODES[1].helper;
+}
+
+function adaptivePolicyForMode(mode) {
+  if (mode === "fast_preview") {
+    return {
+      candidatePolicy: {
+        baselineFps: 0.35,
+        motionPeakFps: 2,
+        maxCandidateWindows: 8,
+        candidateWindowPreMs: 3000,
+        candidateWindowPostMs: 3000,
+        dedupe: true,
+        thumbnailWidth: 512,
+      },
+      qwenPolicy: {
+        enabled: true,
+        maxQwenWindows: 3,
+        maxFramesPerWindow: 6,
+        splitByDomain: true,
+      },
+    };
+  }
+  if (mode === "deep_forensic") {
+    return {
+      candidatePolicy: {
+        baselineFps: 1,
+        motionPeakFps: 4,
+        maxCandidateWindows: 40,
+        candidateWindowPreMs: 5000,
+        candidateWindowPostMs: 5000,
+        dedupe: true,
+        thumbnailWidth: 512,
+      },
+      qwenPolicy: {
+        enabled: true,
+        maxQwenWindows: 30,
+        maxFramesPerWindow: 8,
+        splitByDomain: true,
+      },
+    };
+  }
+  return {
+    candidatePolicy: {
+      baselineFps: 0.5,
+      motionPeakFps: 2,
+      maxCandidateWindows: 18,
+      candidateWindowPreMs: 3000,
+      candidateWindowPostMs: 3000,
+      dedupe: true,
+      thumbnailWidth: 512,
+    },
+    qwenPolicy: {
+      enabled: true,
+      maxQwenWindows: 12,
+      maxFramesPerWindow: 8,
+      splitByDomain: true,
+    },
+  };
+}
+
+function prettyLocalVisionLabel(label = "") {
+  const key = String(label || "").trim();
+  return LOCAL_VISION_LABELS[key] || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function localVisionEvidenceText(frameRefs = []) {
+  const refs = arrayFromMaybe(frameRefs);
+  if (!refs.length) return "";
+  if (refs.length <= 3) return `Evidence frames: ${refs.join(", ")}.`;
+  return `Evidence spans ${refs[0]}-${refs[refs.length - 1]} (${refs.length} frames).`;
+}
+
+function localVisionStatusCounts(items = []) {
+  return arrayFromMaybe(items).reduce((counts, item) => {
+    const status = item?.status || "unknown";
+    counts[status] = (counts[status] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function localVisionStatusSummary(items = []) {
+  const counts = localVisionStatusCounts(items);
+  return [
+    counts.visible ? `${counts.visible} visible` : null,
+    counts.uncertain ? `${counts.uncertain} uncertain` : null,
+    counts.not_visible ? `${counts.not_visible} not visible` : null,
+  ].filter(Boolean).join(" · ") || "No returned rows";
+}
+
+function localVisionEvidenceRows(items = [], limit = 18) {
+  return arrayFromMaybe(items)
+    .slice()
+    .sort((a, b) => {
+      const order = { visible: 0, uncertain: 1, not_visible: 2 };
+      const statusDelta = (order[a?.status] ?? 3) - (order[b?.status] ?? 3);
+      if (statusDelta) return statusDelta;
+      return Number(b?.confidence || 0) - Number(a?.confidence || 0);
+    })
+    .slice(0, limit);
+}
+
+function localVisionTierRows(items = [], limit = 12) {
+  return arrayFromMaybe(items)
+    .slice()
+    .sort((a, b) => Number(a?.start_ms ?? a?.startMs ?? 0) - Number(b?.start_ms ?? b?.startMs ?? 0))
+    .slice(0, limit);
+}
+
+function localVisionMsRange(item = {}) {
+  const start = Number(item.start_ms ?? item.startMs ?? item.time_ms ?? 0);
+  const end = Number(item.end_ms ?? item.endMs ?? item.start_ms ?? item.startMs ?? item.time_ms ?? start);
+  return { start, end: Math.max(start, end) };
+}
+
+function formatLocalVisionMs(ms) {
+  return fmtMmSs((Number(ms) || 0) / 1000);
+}
+
+function localVisionCoverageSummary(result = {}) {
+  const range = result.range || result.window || {};
+  const startMs = Number(range.startMs ?? range.start_ms ?? 0);
+  const endMs = Number(range.endMs ?? range.end_ms ?? startMs);
+  const debug = result.debug || {};
+  const rawCounts = debug.rawEvidenceCounts || {};
+  const candidateCount = arrayFromMaybe(result.candidate_windows).length;
+  const coverageCount = arrayFromMaybe(result.coverage_segments).length;
+  const qwenCalls = Number(debug.qwenCalls ?? rawCounts.qwen_results ?? 0);
+  const frames = Number(arrayFromMaybe(result.evidence_frames).length || arrayFromMaybe(result.frame_evidence).length || debug.cvPrepassStats?.framesScanned || 0);
+  const actionable = arrayFromMaybe(result.actionable_findings);
+  const candidates = arrayFromMaybe(result.strong_candidates);
+  const confirmedRange = actionable.length
+    ? actionable.reduce((acc, item) => {
+      const rangeInfo = localVisionMsRange(item);
+      return {
+        start: Math.min(acc.start, rangeInfo.start),
+        end: Math.max(acc.end, rangeInfo.end),
+      };
+    }, { start: Infinity, end: 0 })
+    : null;
+  return {
+    rangeText: `${formatLocalVisionMs(startMs)}-${formatLocalVisionMs(endMs)}`,
+    scannedText: `${frames || "?"} evidence/CV frames`,
+    candidateText: `${candidateCount} candidate window${candidateCount === 1 ? "" : "s"}`,
+    coverageText: coverageCount ? `${coverageCount} coverage segment${coverageCount === 1 ? "" : "s"}` : "coverage segments unavailable",
+    qwenText: qwenCalls ? `${qwenCalls} targeted Qwen review${qwenCalls === 1 ? "" : "s"}` : "no targeted Qwen reviews recorded",
+    confirmedText: actionable.length
+      ? `${actionable.length} confirmed finding${actionable.length === 1 ? "" : "s"} promoted${Number.isFinite(confirmedRange?.start) ? ` around ${formatLocalVisionMs(confirmedRange.start)}-${formatLocalVisionMs(confirmedRange.end)}` : ""}`
+      : "no confirmed findings promoted",
+    candidateReviewText: `${candidates.length} strong candidate${candidates.length === 1 ? "" : "s"} kept for manual review`,
+  };
+}
+
+function localVisionSessionStory(result = {}) {
+  const actionable = localVisionTierRows(result.actionable_findings, 20);
+  const candidates = localVisionTierRows(result.strong_candidates, 20);
+  const coverage = localVisionTierRows(result.coverage_segments, 30);
+  const notConfirmed = arrayFromMaybe(result.not_confirmed);
+  const lines = [];
+
+  if (result.whole_video_story) {
+    lines.push(result.whole_video_story);
+  }
+
+  if (actionable.length) {
+    lines.push(`Confirmed: ${actionable.map((item) => {
+      const range = localVisionMsRange(item);
+      const label = String(item.label || item.event_type || "visual finding").replace(/_/g, " ");
+      return `${formatLocalVisionMs(range.start)}-${formatLocalVisionMs(range.end)} ${label}`;
+    }).join("; ")}.`);
+  } else {
+    lines.push("Confirmed: no gated visual event was promoted.");
+  }
+
+  if (candidates.length) {
+    lines.push(`Review candidates: ${candidates.map((item) => {
+      const range = localVisionMsRange(item);
+      return `${formatLocalVisionMs(range.start)}-${formatLocalVisionMs(range.end)} ${candidateLabel(item).toLowerCase()}`;
+    }).join("; ")}.`);
+  }
+
+  if (coverage.length) {
+    const segments = coverage.slice(0, 10).map((segment) => {
+      const range = localVisionMsRange(segment);
+      const reviewed = segment.reviewed_by_qwen ? "Qwen-reviewed" : "CV-only";
+      return `${formatLocalVisionMs(range.start)}-${formatLocalVisionMs(range.end)} ${String(segment.label || segment.type || "coverage").replace(/_/g, " ")} (${segment.status || "unknown"}, ${reviewed})`;
+    });
+    lines.push(`Whole-range coverage: ${segments.join("; ")}${coverage.length > segments.length ? `; plus ${coverage.length - segments.length} more segment${coverage.length - segments.length === 1 ? "" : "s"}` : ""}.`);
+  }
+
+  if (notConfirmed.length) {
+    const labels = notConfirmed
+      .map((item) => (typeof item === "string" ? item : item.label || item.claim || item.type || "not confirmed"))
+      .map((label) => String(label).replace(/_/g, " "))
+      .slice(0, 5);
+    lines.push(`Not confirmed: ${labels.join("; ")}${notConfirmed.length > labels.length ? `; plus ${notConfirmed.length - labels.length} more` : ""}.`);
+  }
+
+  return lines;
+}
+
+function candidateLabel(candidate = {}) {
+  return String(candidate.label || candidate.type || candidate.candidate_type || "candidate")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function progressCandidate(progress = {}) {
+  return progress.latest_candidate_window || (
+    progress.latest_candidate_type
+      ? {
+        candidate_id: progress.latest_candidate_id,
+        type: progress.latest_candidate_type,
+        score: progress.latest_candidate_score,
+        reasons: progress.latest_candidate_reasons || [],
+        frame_refs: progress.latest_candidate_frame_refs || [],
+      }
+      : null
+  );
+}
+
+function sarahLocalVisionSummary(result) {
+  const confirmed = arrayFromMaybe(result?.actionable_findings);
+  const candidates = arrayFromMaybe(result?.strong_candidates);
+  const notConfirmed = arrayFromMaybe(result?.not_confirmed);
+  if (result?.mode || confirmed.length || candidates.length || notConfirmed.length) {
+    if (confirmed.length) {
+      return `Local analysis confirmed ${confirmed.length} finding${confirmed.length === 1 ? "" : "s"} with frame evidence. ${candidates.length ? `${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} still need review.` : "No extra candidate windows were promoted beyond the visibility gates."}`;
+    }
+    if (candidates.length) {
+      return `No confirmed timeline event was promoted. I found ${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} worth review and kept unsupported items in not-confirmed instead of turning them into facts.`;
+    }
+    if (notConfirmed.length) {
+      return `The local pass completed without enough visual evidence for confirmed events. Checked items are listed as not-confirmed so Session Analysis does not treat them as facts.`;
+    }
+  }
+  const visibleItems = [
+    ...(result?.visible_objects || []),
+    ...(result?.visible_actions || []),
+  ].filter((item) => item?.status === "visible");
+  const visibleLabels = visibleItems.map((item) => prettyLocalVisionLabel(item.label).toLowerCase());
+  const stages = (result?.stage_candidates || []).filter((stage) => stage.stage && stage.stage !== "unknown");
+  const blocked = (result?.forbidden_or_not_visible || []).map((item) => item.claim).filter(Boolean);
+  if (visibleLabels.includes("foley tubing") || visibleLabels.includes("gloved hands")) {
+    const firstLine = [
+      visibleLabels.includes("foley tubing") ? "Foley tubing" : null,
+      visibleLabels.includes("gloved hands") ? "gloved hands" : null,
+    ].filter(Boolean).join(" and ");
+    const stageText = stages.length
+      ? `The safest timestampable read is ${stages[0].stage.replace(/_/g, " ")}.`
+      : "I do not have enough visual support for a more specific Foley stage.";
+    const blockedText = blocked.length
+      ? `I’m not calling ${blocked.slice(0, 4).join(", ")} from this window.`
+      : "";
+    return `${firstLine || "Procedure hardware"} is visible in this window. ${stageText} ${blockedText}`.trim();
+  }
+  if (visibleLabels.length) {
+    return `I’m seeing ${visibleLabels.slice(0, 3).join(", ")} in this window. The local read stays limited to what the sampled frames actually show.`;
+  }
+  return result?.summary || "The local pass finished, but there is not enough visible evidence for a stronger claim.";
+}
+
+function localVisionCategory(type = "", isExploration = false) {
+  const normalized = String(type || "").toLowerCase();
+  if (isExploration) {
+    if (normalized.includes("stage") || normalized.includes("catheter") || normalized.includes("tubing")) return ["instrumentation"];
+    if (normalized.includes("fluid")) return ["physical"];
+    if (normalized.includes("state")) return ["physical"];
+    return ["setup"];
+  }
+  if (normalized.includes("motion") || normalized.includes("action")) return ["movement_observed"];
+  if (normalized.includes("state") || normalized.includes("fluid")) return ["physical"];
+  return ["other"];
+}
+
+function localVisionFindingFromItem(item, prefix = "") {
+  if (!item || !["visible", "not_visible"].includes(item.status)) return null;
+  const rawLabel = String(item.label || item.claim || "Finding");
+  const title = `${prefix}${prettyLocalVisionLabel(rawLabel)}`.trim();
+  const evidenceRefs = arrayFromMaybe(item.frame_refs);
+  const status = item.status;
+  const lowerLabel = rawLabel.toLowerCase();
+  let text = item.reason || item.basis || "";
+  if (status === "visible") {
+    if (lowerLabel === "foley_tubing") text = "Foley tubing is visible across the sampled window.";
+    else if (lowerLabel === "gloved_hands_visible") text = "Gloved hands are visible in the working field.";
+    else if (lowerLabel === "tubing_routing_or_field_handling") text = "The visible action is tubing or field handling, not confirmed advancement or securement.";
+    else text = `${title} is visible in the sampled frames.`;
+  } else if (status === "not_visible") {
+    if (lowerLabel === "foley_catheter") text = "I can’t clearly confirm the catheter shaft or tip here. Tubing can be visible without proving the catheter itself is visible.";
+    else if (lowerLabel.includes("statlock") || lowerLabel.includes("securement")) text = "I do not see a distinct StatLock or adhesive securement anchor in this window.";
+    else if (lowerLabel === "visible_advancement_motion") text = "I do not see clear frame-to-frame advancement through the meatus.";
+    else if (lowerLabel === "urine_visible") text = "I do not see urine return in tubing, a bag, or a container.";
+    else if (lowerLabel === "balloon_inflation_visible") text = "I do not see balloon-port or syringe inflation activity.";
+    else text = `${title} is not clearly visible in this window.`;
+  }
+  return {
+    title: title.length > 54 ? `${title.slice(0, 51)}...` : title,
+    text,
+    evidenceRefs,
+    category: "instrumentation",
+    confidence: confidenceWord(item.confidence),
+  };
+}
+
+function cardFromLocalVisionResult(result, selectedVideo, isExploration = false) {
+  if (!result?.ok) return null;
+  const windowInfo = result.window || result.range || {};
+  const startSource = Number(windowInfo.startMs ?? windowInfo.start_ms ?? windowInfo.start_ms ?? 0) / 1000;
+  const endSource = Number(windowInfo.endMs ?? windowInfo.end_ms ?? windowInfo.end_ms ?? startSource * 1000 + 1000) / 1000;
+  const start = sessionTimeForSource(startSource, selectedVideo);
+  const end = sessionTimeForSource(Math.max(startSource + 0.25, endSource), selectedVideo);
+  const actionableFindings = arrayFromMaybe(result.actionable_findings).map((finding) => ({
+    title: finding.label || finding.event_type || "Confirmed visual finding",
+    text: finding.basis || finding.summary || finding.label || "Confirmed by local visual evidence.",
+    evidenceRefs: arrayFromMaybe(finding.frame_refs),
+    category: "local_vision",
+    confidence: confidenceWord(finding.confidence),
+  }));
+  const strongCandidateFindings = arrayFromMaybe(result.strong_candidates).slice(0, 3).map((candidate) => ({
+    title: candidateLabel(candidate),
+    text: `${candidate.basis || candidate.reasons?.join("; ") || "Candidate window found by local CV/Qwen review."} This stays unconfirmed until the visual gate is met.`,
+    evidenceRefs: arrayFromMaybe(candidate.frame_refs),
+    category: "local_vision_candidate",
+    confidence: confidenceWord(candidate.confidence ?? candidate.score),
+  }));
+  const visibleFindings = [
+    ...actionableFindings,
+    ...strongCandidateFindings,
+    ...(result.visible_objects || []).map((item) => localVisionFindingFromItem(item)),
+    ...(result.visible_actions || []).map((item) => localVisionFindingFromItem(item)),
+    ...(result.stage_candidates || [])
+      .filter((stage) => stage.stage && stage.stage !== "unknown")
+      .map((stage) => ({
+        title: String(stage.stage || "stage candidate").replace(/_/g, " "),
+        text: stage.basis || "Local visual stage candidate.",
+        evidenceRefs: arrayFromMaybe(stage.frame_refs),
+        category: "instrumentation",
+        confidence: confidenceWord(stage.confidence),
+      })),
+  ].filter(Boolean).slice(0, 5);
+  const fallbackFinding = {
+    title: "Local visual summary",
+    text: sarahLocalVisionSummary(result),
+    category: "other",
+    confidence: confidenceWord(result.confidence?.overall),
+  };
+  const events = (result.timeline_events || [])
+    .map((event, index) => {
+      const eventMs = Number(event.start_ms ?? event.time_ms ?? event.end_ms ?? windowInfo.startMs ?? 0);
+      const time_s = sessionTimeForSource(eventMs / 1000, selectedVideo);
+      const label = event.label || event.event_type || "Local visual event";
+      const basis = event.basis || "";
+      const refs = arrayFromMaybe(event.frame_refs || event.frame_ref);
+      let note = `${label}${basis ? ` - ${basis}` : ""}`.trim();
+      if (String(label).toLowerCase().includes("tubing/field handling")) {
+        note = "Tubing/field handling is visible; advancement, urine return, balloon inflation, and securement are not confirmed in this window.";
+      }
+      return {
+        time_s,
+        note,
+        evidenceRefs: refs,
+        category: localVisionCategory(event.event_type || label, isExploration),
+        annotation_tags: ["local_vision", "visual_evidence"],
+        confidence: confidenceWord(event.confidence),
+        index,
+      };
+    })
+    .filter((event) => event.note)
+    .slice(0, 6);
+  const sampledFrames = (result.frame_evidence || result.evidence_frames || []).map((frame) => ({
+    url: frame.image_path ? base44.integrations.Core.localVisionAssetUrl(frame.image_path) : "",
+    frameTimeSeconds: Number(frame.time_ms || 0) / 1000,
+    recordTimeSeconds: sessionTimeForSource(Number(frame.time_ms || 0) / 1000, selectedVideo),
+    frameIndex: Number(String(frame.frame_id || "").replace(/\D/g, "")) || 0,
+  })).filter((frame) => frame.url);
+  return {
+    id: `local-vision-${result.id || Date.now()}`,
+    localVision: true,
+    localVisionResultId: result.id || null,
+    label: `Sarah local read ${fmtMmSs(start)}-${fmtMmSs(end)}`,
+    window: { start, end },
+    sourceWindow: { start: startSource, end: endSource },
+    sourceVideo: selectedVideo,
+    sourceVideoRole: inferVideoRole(selectedVideo),
+    clipUrl: "",
+    thumbnailUrl: sampledFrames[0]?.url || "",
+    sampledFrames,
+    motionSummary: null,
+    telemetry: "Local-only visual evidence. Frames stayed on this machine; no cloud frame upload.",
+    summary: result.summary || sarahLocalVisionSummary(result),
+    findings: visibleFindings.length ? visibleFindings : [fallbackFinding],
+    events,
+    confidence: confidenceWord(result.confidence?.overall),
   };
 }
 
@@ -971,7 +1612,24 @@ export default function AIVideoPassPanel({
   const [audioResult, setAudioResult] = useState(null);
   const [audioAccepted, setAudioAccepted] = useState(false);
   const [metadataDurationSeconds, setMetadataDurationSeconds] = useState(0);
+  const [visionEngine, setVisionEngine] = useState("local_qwen25vl");
+  const [localAnalysisType, setLocalAnalysisType] = useState(() => inferLocalAnalysisType(recordType, session));
+  const [localAnalysisMode, setLocalAnalysisMode] = useState("balanced");
+  const [localVisionFocus, setLocalVisionFocus] = useState(isExploration ? "foley" : "body");
+  const [localVisionHealth, setLocalVisionHealth] = useState(null);
+  const [localVisionRunning, setLocalVisionRunning] = useState(false);
+  const [localVisionStatus, setLocalVisionStatus] = useState("");
+  const [localVisionError, setLocalVisionError] = useState("");
+  const [localVisionProgress, setLocalVisionProgress] = useState(null);
+  const [localVisionLiveLog, setLocalVisionLiveLog] = useState([]);
+  const [localVisionResult, setLocalVisionResult] = useState(null);
+  const [localVisionQuestion, setLocalVisionQuestion] = useState("");
+  const [localVisionQaResult, setLocalVisionQaResult] = useState(null);
   const freshRunStartedAtRef = useRef(ignoreCompletedJobsBefore || 0);
+
+  useEffect(() => {
+    setLocalAnalysisType(inferLocalAnalysisType(recordType, session));
+  }, [recordType, session?.id]);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
   const selectedVideoOffset = timelineOffsetSeconds(selectedVideo);
@@ -995,6 +1653,17 @@ export default function AIVideoPassPanel({
     () => (session?.event_timeline || []).filter(isAIGeneratedPassEvent).length,
     [session?.event_timeline],
   );
+
+  const updateLocalVisionProgress = useCallback((progress) => {
+    setLocalVisionProgress(progress);
+    const entry = localVisionProgressLogEntry(progress);
+    if (!entry) return;
+    setLocalVisionLiveLog((current) => {
+      if (current[0]?.key === entry.key) return current;
+      return [entry, ...current.filter((item) => item.key !== entry.key)].slice(0, 10);
+    });
+  }, []);
+
   useEffect(() => {
     if (!ignoreCompletedJobsBefore) return;
     freshRunStartedAtRef.current = ignoreCompletedJobsBefore;
@@ -1024,6 +1693,12 @@ export default function AIVideoPassPanel({
     setAcceptedIds(new Set());
     setAudioResult(null);
     setAudioAccepted(false);
+    setLocalVisionResult(null);
+    setLocalVisionQaResult(null);
+    setLocalVisionError("");
+    setLocalVisionStatus("");
+    setLocalVisionProgress(null);
+    setLocalVisionLiveLog([]);
     if (message) setStatus(message);
     return { ...session, ...updated };
   };
@@ -1082,6 +1757,47 @@ export default function AIVideoPassPanel({
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [refreshCompletedVideoPassJobs]);
+
+  useEffect(() => {
+    if (!session?.id || visionEngine === "cloud") return undefined;
+    let cancelled = false;
+    const syncRunningLocalJob = async () => {
+      try {
+        const response = await listBackgroundJobs({
+          status: "queued,running",
+          limit: 8,
+          metaSessionId: session.id,
+          metaSource: "AIVideoPassPanel",
+        });
+        if (cancelled) return;
+        const job = (response.jobs || []).find((item) => (
+          item?.type === "local_vision_analyze_adaptive"
+            || item?.type === "local_vision_analyze_continuous"
+            || item?.type === "local_vision_analyze_window"
+            || item?.type === "local_vision_ask_video"
+        ));
+        if (!job) {
+          setLocalVisionRunning(false);
+          setLocalVisionProgress(null);
+          return;
+        }
+        const progress = job.progress || {};
+        const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+        setLocalVisionRunning(true);
+        updateLocalVisionProgress(progress);
+        setLocalVisionError("");
+        setLocalVisionStatus(`${progress.message || "Local Qwen job running..."}${count}`);
+      } catch {
+        // The tray handles global job errors; keep this local attachment best-effort.
+      }
+    };
+    syncRunningLocalJob();
+    const interval = window.setInterval(syncRunningLocalJob, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [session?.id, updateLocalVisionProgress, visionEngine]);
 
   const clearStoredAIPassEvents = async () => {
     await resetStoredAIPassState({
@@ -1244,11 +1960,17 @@ Do not force a stimulation lifecycle. Do not create stimulation start/pause/resu
 
 Foley placement sequence to track when visible: positioning on the table; draping and field setup; swabbing/antiseptic prep; lubrication or possible urethral dilation with a syringe; initial Foley handling; left-hand penis/glans stabilization; right-hand catheter advancement past the meatus; continued advancement through visible urethral landmarks or resistance/rotation cues; bladder entry or urine confirmation; balloon inflation; drape removal; urine collected in the bag. Treat these as possible stages, not a script.
 
-Foley state-versus-action rule: Foley catheter/tubing already being visible means "Foley/tubing remains present", not "inserted", "placed", "advanced", or "secured". Yellow tubing being moved, lifted, routed, or resting across the field is tubing handling unless the catheter shaft is visibly advancing at the meatus or balloon/securement hardware is visible. Do not mention StatLock, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact item/action is visible in the sampled frames or explicitly logged in nearby notes.
+Foley state-versus-action rule: Foley catheter/tubing already being visible means "Foley/tubing remains present", not "inserted", "placed", "advanced", or "secured". Yellow tubing being moved, lifted, routed, or resting across the field is tubing handling unless the catheter shaft is visibly advancing at the meatus or balloon hardware is visible. Do not mention StatLock, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact item/action is visible in the sampled frames or explicitly logged in nearby manual notes. Prior AI-generated events/findings do not count as manual evidence.
 
-Foley action evidence gates: use "swabbing/prep" only for visible wipe/swab/applicator contact; use "lubrication/dilation" only when a syringe, gel, lubricant, instillation, or urethral prep action is visible/supported; use "meatal engagement" only when the catheter/tool tip is visibly at the meatus; use "advancement/insertion" only when the catheter/tool is visibly moving through the meatus in this current window; use "already in place" when the Foley appears present but not actively advancing; use "positioning/tubing handling" when gloved hands are arranging tubing, drape, gauze, or field materials. If unsure between insertion and already-in-place handling, choose the more conservative "already in place/tubing handling" wording with low or moderate confidence.
+Foley action evidence gates: use "glove change/prep" when hands are changing gloves or fresh gloves appear without a Foley/catheter in hand; use "swabbing/prep" only for visible wipe/swab/applicator contact; use "lubrication/dilation" only when a syringe, gel, lubricant, instillation, or urethral prep action is visible/supported; use "meatal contact/engagement" when the catheter/Foley/tool tip is visibly touching, aligned at, or entering the meatus; use "advancement/insertion" only when the catheter/tool is visibly moving through the meatus in this current window; use "already in place" when the Foley appears present but not actively advancing; use "positioning/tubing handling" when gloved hands are arranging tubing, drape, gauze, or field materials away from the meatus. If unsure between prep/glove change and Foley handling, choose prep/glove change. If unsure between meatal contact and advancement, choose "meatal contact/engagement" rather than generic tubing handling or advancement. If unsure between insertion and already-in-place handling, choose the more conservative "already in place/tubing handling" wording with low or moderate confidence.
+
+No forecasted Foley stages: do not write "meatal engagement appears imminent", "catheter positioning", "advancement is about to begin", "preparing for insertion", or similar future-stage language. If the catheter/tool tip is not visibly at the meatus and advancement is not visible, describe the current visible action only: glove change, field prep, hand position, drape/gauze handling, packaging/tool handling, or tubing handling.
+
+Meatal contact is its own stage: if the sampled frames show a catheter/Foley/tool tip touching or aligned at the meatus but do not prove motion through the meatus, say "visible meatal contact/engagement" or "catheter tip positioned at the meatus." Do not downgrade that to generic tubing/field handling. Do not upgrade it to advancement unless frame-to-frame motion through the meatus is visible.
+
+Handedness/camera rule: do not label hands as left or right unless the camera orientation makes anatomical handedness unambiguous. Prefer "one hand", "the other hand", "upper hand", "lower hand", "near hand", or "far hand" for visual tracking.
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
-Draft event examples for this mode: "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "Left hand stabilizes the penis while the right hand positions the Foley", "Foley advancement is visible at the meatus", "Foley appears already in place while tubing is repositioned", "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
+Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other positions the Foley" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley advancement is visible at the meatus" only if frame-to-frame advancement is visible, "Foley appears already in place while tubing is repositioned", "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
@@ -1256,7 +1978,7 @@ ${isExploration ? "Exploration/procedure context grounding" : "Session context g
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
-Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. For body exploration reviews, if any sampled frame shows swab/wipe/applicator/tool/catheter/tubing contact or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter positioning, visible advancement, already-in-place catheter state, tubing handling, balloon inflation, drape removal, or urine collection.
+Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, visible catheter/tool positioning only when the tool is visible, visible catheter/Foley/tool tip contact at the meatus, visible advancement, already-in-place catheter state, tubing handling, balloon inflation, drape removal, or urine collection.
 
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
@@ -1277,18 +1999,18 @@ Feet-lane sensitivity rule: for feet/lower-body videos, look carefully for subtl
 
 Observation priorities, in order:
 1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal/perineal state, visible skin color or surface sheen, cautious visible fluid/moisture labeling, pelvic lift/drop, and whether these change from the prior window.
-2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position shows setup, prep/swabbing, lubrication/dilation, visible meatal engagement, visible advancement, already-in-place catheter state, tubing/field handling, balloon inflation, drape removal, urine collection, or post-procedure checking. Do not claim insertion/advancement/securement from Foley or tubing presence alone." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
+2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position shows glove change/prep, setup, prep/swabbing, lubrication/dilation, visible meatal contact/engagement, visible advancement, already-in-place catheter state, tubing/field handling, balloon inflation, drape removal, urine collection, or post-procedure checking. Do not claim insertion/advancement/securement from Foley or tubing presence alone. Do not claim meatal engagement is imminent; either the tip/contact at the meatus is visible now or it is not. If tip-at-meatus contact is visible but advancement is not, preserve that as meatal contact rather than downgrading to tubing handling." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
 3. Whole-body and lower-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, tremor, shudder, and relaxation/tension cues.
 4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
 5. Telemetry only as supporting context from stored session data. Do not visually analyze or report the HR overlay, phase label, trend chart, AVG, MAX, or timer as a finding/event unless it directly supports a visible physiological or ${isExploration ? "procedure" : "stimulation"} transition.
 
-Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object, side-table object, or generic "control object" details. Do not write "reaches for control object", "returns to control object", "handheld controller", or similar language in findings or draft events. If the hand leaves or returns to the body, describe only the relevant body/${isExploration ? "procedure" : "session"} change, such as ${isExploration ? "\"prep contact pauses\", \"tool handling resumes\", \"hand stabilizes the glans\", or \"securement is adjusted\"" : "\"genital contact pauses\", \"stimulation resumes\", \"hand leaves genital contact\", or \"hand returns to genital contact\""}. Only identify an object when it is a known or clearly visible session-relevant item such as a silicone sleeve, vibrator, lubricant bottle, Foley catheter, TENS/e-stim component, pump, towel, or explicitly user-labeled device.
+Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object, side-table object, or generic "control object" details. Do not write "reaches for control object", "returns to control object", "handheld controller", or similar language in findings or draft events. If the hand leaves or returns to the body, describe only the relevant body/${isExploration ? "procedure" : "session"} change, such as ${isExploration ? "\"prep contact pauses\", \"tool handling resumes\", \"hand stabilizes the glans\", or \"tubing is repositioned\"" : "\"genital contact pauses\", \"stimulation resumes\", \"hand leaves genital contact\", or \"hand returns to genital contact\""}. Only identify an object when it is a known or clearly visible session-relevant item such as a silicone sleeve, vibrator, lubricant bottle, Foley catheter, TENS/e-stim component, pump, towel, or explicitly user-labeled device.
 
 Output style: write the summary as a flowing chronological observation with the most useful visible physiology and ${isExploration ? "procedure/device landmark" : "stimulation"} changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only when there are useful non-repetitive observations; return fewer or none when the window adds nothing. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only when there is a meaningful change or useful timestampable observation. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, no-change filler, or the mere presence of a control object.
 
-Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Meatal engagement begins\", \"Visible Foley advancement continues\", \"Foley appears already in place while tubing is handled\", or \"Dwell comfort appears stable\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
+Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Catheter tip is visible at the meatus\", \"Visible Foley advancement continues\", \"Foley appears already in place while tubing is handled\", or \"Dwell comfort appears stable\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
-Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
+Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible in current sampled frames or explicitly stated in nearby manual notes." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
 Foot and body tracking dots rule: circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session context, nearby events, or the user's caption. Never write "foot electrode markers" from appearance alone.
 
@@ -1322,6 +2044,7 @@ ${isExploration ? "Exploration procedure/devices/context" : "Session methods/dev
 ].filter(Boolean).join(" | ") || "No specific device context listed."}
 Nearby ${recordLabel} events: ${(workingSession?.event_timeline || [])
   .filter((event) => {
+    if (isExploration && isAIGeneratedPassEvent(event)) return false;
     const t = Number(event.time_s || 0);
     if (!Number.isFinite(t)) return false;
     if (isExploration) return t >= window.start - 8 && t <= window.end + 8;
@@ -1330,7 +2053,7 @@ Nearby ${recordLabel} events: ${(workingSession?.event_timeline || [])
   .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
   .join(" | ") || "None nearby."}
 
-Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are ${isExploration ? "procedural stage changes, draping/setup, meatal or glans prep, swab/applicator action, lubrication or instillation, meatal engagement, instrument advancement/withdrawal/adjustment, resistance/rotation in sequence, urine return/bladder entry, balloon/seating, securement/alignment, dwell comfort, post-procedure tissue state, anatomy/tissue changes, comfort/tolerance cues, breathing/body settling, leg/feet tension or relaxation, and telemetry-supported procedural physiology" : "genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation"}. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
+Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are ${isExploration ? "procedural stage changes, glove change/prep, draping/setup, meatal or glans prep, swab/applicator action, lubrication or instillation, visible catheter/Foley/tool tip contact at the meatus, meatal engagement only when visible, instrument advancement/withdrawal/adjustment only when visible, resistance/rotation in sequence, urine return/bladder entry, balloon/seating when visible, catheter already-in-place state, tubing/field handling away from the meatus, dwell comfort, post-procedure tissue state, anatomy/tissue changes, comfort/tolerance cues, breathing/body settling, leg/feet tension or relaxation, and telemetry-supported procedural physiology" : "genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/body cues, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation"}. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
           };
           const cardMeta = {
             label,
@@ -1417,7 +2140,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     try {
       let revisedCards = [...cards];
       const sequenceText = cards.map((card, index) => (
-        `${index + 1}. ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}: ${compactText(card.summary, 280)}`
+        `${index + 1}. ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}: ${compactText(sanitizeExplorationFoleyText(card.summary), 280)}`
       )).join("\n");
 
       for (let index = 0; index < cards.length; index += 1) {
@@ -1473,16 +2196,16 @@ ${sequenceText}
 
 Current card to reassess:
 Window: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}
-Original summary: ${card.summary}
-Original findings: ${(card.findings || []).map((finding) => `${finding.title}: ${finding.text}`).join(" | ") || "None"}
-Original events: ${(card.events || []).map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`).join(" | ") || "None"}
+Original summary, possibly overclaimed: ${sanitizeExplorationFoleyText(card.summary)}
+Original findings, possibly overclaimed: ${(card.findings || []).map((finding) => `${sanitizeExplorationFoleyText(finding.title)}: ${sanitizeExplorationFoleyText(finding.text)}`).join(" | ") || "None"}
+Original events, possibly overclaimed: ${(card.events || []).map((event) => `[${fmtMmSs(event.time_s)}] ${sanitizeExplorationFoleyText(event.note)}`).join(" | ") || "None"}
 Telemetry: ${card.telemetry || "None"}
 
 Foley correction rules:
 - Foley/tubing visible means present/state, not newly inserted, placed, advanced, secured, or finalized.
 - Use insertion/advancement only if the sampled frames show catheter/tool movement through the meatus in this current window.
 - Use already-in-place/tubing handling when tubing or catheter is visible but the catheter is not visibly advancing.
-- Do not mention StatLock, securement, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact thing is visible in the sampled frames or explicitly stated in the current card's nearby context.
+- Do not mention StatLock, securement, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact thing is visible in the sampled frames or explicitly stated in nearby manual notes. Prior AI-generated events/findings do not count as manual evidence.
 - If a prior card already claimed a Foley stage, do not repeat it as newly happening here unless the current frames independently show a new repeat.
 - Prefer conservative procedure labels: drape/setup, swabbing/prep, lubrication/dilation syringe, penis stabilization, catheter positioning, visible meatal engagement, visible advancement, already-in-place catheter state, tubing/field handling, drape removal, urine collection.
 - If the original card overclaimed, rewrite it more conservatively. If it was already accurate, keep it concise.
@@ -1565,6 +2288,426 @@ Return a corrected compact card for this same window. Keep timeline events only 
     } finally {
       setAudioRunning(false);
     }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (visionEngine === "cloud") return undefined;
+    base44.integrations.Core.GetLocalVisionHealth()
+      .then((health) => {
+        if (!cancelled) setLocalVisionHealth(health);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setLocalVisionHealth({ ok: false, error: err?.message || "Local Qwen service unavailable." });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [visionEngine]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!session?.id || !selectedVideo?.path) return undefined;
+    base44.integrations.Core.ListLocalVisionResults({ sessionId: session.id, limit: 12 })
+      .then((payload) => {
+        if (cancelled) return;
+        const latest = (payload?.results || [])
+          .filter((row) => row?.result?.ok)
+          .filter((row) => !row.video_path || row.video_path === selectedVideo.path)
+          .sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || ""))[0];
+        if (!latest?.result) return;
+        const restored = { ...latest.result, id: latest.id, created_at: latest.created_at, analysis_type: latest.analysis_type };
+        setLocalVisionResult(restored);
+        setLocalVisionStatus(`Loaded saved local vision ${latest.analysis_type || "analysis"} from ${new Date(latest.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
+        const restoredCard = cardFromLocalVisionResult(restored, selectedVideo, isExploration);
+        if (restoredCard) {
+          setCards((current) => {
+            const withoutSame = current.filter((card) => card.id !== restoredCard.id && !card.localVision);
+            return [restoredCard, ...withoutSame];
+          });
+          setExpanded((prev) => ({ ...prev, [restoredCard.id]: true }));
+        }
+      })
+      .catch(() => {
+        // Loading saved local results is best-effort; failed restores should not block fresh analysis.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isExploration, selectedVideo?.path, session?.id]);
+
+  const restoreLatestLocalVisionResult = async () => {
+    if (!session?.id || !selectedVideo?.path) return;
+    setLocalVisionError("");
+    setLocalVisionStatus("Checking saved local vision results...");
+    try {
+      const payload = await base44.integrations.Core.ListLocalVisionResults({ sessionId: session.id, limit: 12 });
+      const latest = (payload?.results || [])
+        .filter((row) => row?.result?.ok)
+        .filter((row) => !row.video_path || row.video_path === selectedVideo.path)
+        .sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || ""))[0];
+      if (!latest?.result) {
+        setLocalVisionStatus("No saved local vision result found for this selected video yet.");
+        return;
+      }
+      const restored = { ...latest.result, id: latest.id, created_at: latest.created_at, analysis_type: latest.analysis_type };
+      setLocalVisionResult(restored);
+      setLocalVisionQaResult(null);
+      setLocalVisionStatus(`Reloaded saved local ${latest.analysis_type || "analysis"} from ${new Date(latest.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
+      const restoredCard = cardFromLocalVisionResult(restored, selectedVideo, isExploration);
+      if (restoredCard) {
+        setCards((current) => {
+          const withoutSame = current.filter((card) => card.id !== restoredCard.id && !card.localVision);
+          return [restoredCard, ...withoutSame];
+        });
+        setExpanded((prev) => ({ ...prev, [restoredCard.id]: true }));
+      }
+    } catch (err) {
+      setLocalVisionError(err?.data?.error || err?.message || "Could not reload saved local vision result.");
+      setLocalVisionStatus("");
+    }
+  };
+
+  const localVisionRange = useCallback(() => {
+    const start = Math.max(0, scanMode === "continue" ? scanCursor : 0);
+    const end = Math.max(start + 1, sessionEnd || metadataDurationSeconds || start + clipSeconds);
+    return {
+      start,
+      end,
+      sourceStart: sourceTimeForSession(start, selectedVideo),
+      sourceEnd: sourceTimeForSession(end, selectedVideo),
+    };
+  }, [clipSeconds, metadataDurationSeconds, scanCursor, scanMode, selectedVideo, sessionEnd]);
+
+  const localVisionRecordType = useCallback(() => {
+    return localAnalysisType || "general_session";
+  }, [localAnalysisType]);
+
+  const analyzeAdaptiveLocally = async () => {
+    if (!selectedVideo?.path || localVisionRunning || visionEngine === "cloud") return;
+    const range = localVisionRange();
+    const mode = localAnalysisMode || "balanced";
+    const modeLabel = localAnalysisModeLabel(mode);
+    const { candidatePolicy, qwenPolicy } = adaptivePolicyForMode(mode);
+    setLocalVisionRunning(true);
+    setLocalVisionError("");
+    setLocalVisionLiveLog([]);
+    updateLocalVisionProgress({
+      phase: "starting",
+      current: 0,
+      total: mode === "fast_preview" ? 4 : 6,
+      message: `Starting ${modeLabel.toLowerCase()} adaptive local analysis...`,
+      recordType: localVisionRecordType(),
+      mode,
+    });
+    setLocalVisionResult(null);
+    setLocalVisionQaResult(null);
+    setLocalVisionStatus(`Starting ${modeLabel}: cheap CV pre-pass first, Qwen only on selected candidate windows.`);
+    try {
+      const payload = {
+        sessionId: session.id,
+        recordType: localVisionRecordType(),
+        videoPath: selectedVideo.path,
+        startMs: Math.round(range.sourceStart * 1000),
+        endMs: Math.round(range.sourceEnd * 1000),
+        mode,
+        engine: "local_qwen25vl",
+        candidatePolicy,
+        qwenPolicy,
+        scaleCalibration: { available: false, pixelsPerCm: null, source: null },
+      };
+      const startedJob = await startBackgroundJob("local_vision_analyze_adaptive", payload, {
+        title: "Local vision annotation",
+        label: "Adaptive local vision",
+        sessionId: session.id,
+        source: "AIVideoPassPanel",
+        route: window.location.pathname,
+        analysisType: localVisionRecordType(),
+        mode,
+      });
+      setLocalVisionStatus(`Queued ${modeLabel.toLowerCase()} local vision job ${startedJob.id.slice(0, 8)}...`);
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1500,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const qwenCount = progress.qwenCallsTotal
+            ? ` · Qwen ${progress.qwenCallsCompleted || 0}/${progress.qwenCallsTotal}`
+            : "";
+          const candidateText = progress.candidatesFound != null
+            ? ` · ${progress.candidatesFound} candidate${progress.candidatesFound === 1 ? "" : "s"}`
+            : "";
+          const positionText = progress.scanPercent != null
+            ? ` · ${Math.round(progress.scanPercent)}% scanned`
+            : "";
+          setLocalVisionStatus(`${progress.message || "Adaptive local analysis running..."}${positionText}${candidateText}${qwenCount}`);
+          updateLocalVisionProgress(progress);
+        },
+      });
+      const result = completedJob.result;
+      setLocalVisionResult(result);
+      const localCard = cardFromLocalVisionResult(result, selectedVideo, isExploration);
+      if (localCard) {
+        setCards([localCard]);
+        setExpanded((prev) => ({ ...prev, [localCard.id]: true }));
+      }
+      setLocalVisionStatus(
+        `${modeLabel} complete: ${result.actionable_findings?.length || 0} confirmed, ${result.strong_candidates?.length || 0} strong candidate${result.strong_candidates?.length === 1 ? "" : "s"}, ${result.not_confirmed?.length || 0} not confirmed.`,
+      );
+    } catch (err) {
+      const message = err?.data?.error || err?.message || "Adaptive local vision analysis failed.";
+      if (/Unknown background job type:\s*local_vision_analyze_adaptive/i.test(message)) {
+        setLocalVisionError("Backend needs a restart: the UI has the adaptive local vision button, but the running Node server has not loaded the adaptive job handler yet.");
+      } else {
+        setLocalVisionError(message);
+      }
+      setLocalVisionStatus("");
+    } finally {
+      setLocalVisionRunning(false);
+    }
+  };
+
+  const analyzeContinuousLocally = async () => {
+    if (!selectedVideo?.path || localVisionRunning || visionEngine === "cloud") return;
+    const range = localVisionRange();
+    setLocalVisionRunning(true);
+    setLocalVisionError("");
+    setLocalVisionLiveLog([]);
+    updateLocalVisionProgress({ phase: "starting", message: "Starting continuous local Qwen job..." });
+    setLocalVisionResult(null);
+    setLocalVisionQaResult(null);
+    setLocalVisionStatus("Sampling continuous local frames for Qwen2.5-VL...");
+    try {
+      const payload = {
+        sessionId: session.id,
+        recordType: localVisionRecordType(),
+        videoPath: selectedVideo.path,
+        startMs: Math.round(range.sourceStart * 1000),
+        endMs: Math.round(range.sourceEnd * 1000),
+        engine: "local_qwen25vl",
+        scanPolicy: {
+          baselineFps: 1,
+          maxScanFrames: 600,
+          includeMotionPeaks: true,
+          includeSceneChanges: true,
+          dedupe: true,
+          batchSize: 8,
+          thumbnailWidth: 512,
+        },
+        refinementPolicy: {
+          enabled: true,
+          preMs: 5000,
+          postMs: 5000,
+          fps: 4,
+          maxRefinementFramesPerEvent: 80,
+        },
+        scaleCalibration: { available: false, pixelsPerCm: null, source: null },
+      };
+      const startedJob = await startBackgroundJob("local_vision_analyze_continuous", payload, {
+        sessionId: session.id,
+        source: "AIVideoPassPanel",
+        route: window.location.pathname,
+      });
+      setLocalVisionStatus(`Queued continuous local vision job ${startedJob.id.slice(0, 8)}...`);
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1500,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+          setLocalVisionStatus(`${progress.message || "Local Qwen analysis running..."}${count}`);
+          updateLocalVisionProgress(progress);
+        },
+      });
+      const result = completedJob.result;
+      setLocalVisionResult(result);
+      const localCard = cardFromLocalVisionResult(result, selectedVideo, isExploration);
+      if (localCard) {
+        setCards([localCard]);
+        setExpanded((prev) => ({ ...prev, [localCard.id]: true }));
+      }
+      setLocalVisionStatus(`Continuous local vision complete: ${result.frame_evidence?.length || 0} frame refs, ${result.timeline_events?.length || 0} timeline events, ${result.forbidden_or_not_visible?.length || 0} unsafe/not-visible claims blocked.`);
+    } catch (err) {
+      setLocalVisionError(err?.data?.error || err?.message || "Continuous local vision analysis failed.");
+      setLocalVisionStatus("");
+    } finally {
+      setLocalVisionRunning(false);
+    }
+  };
+
+  const analyzeWindowLocally = async () => {
+    if (!selectedVideo?.path || localVisionRunning || visionEngine === "cloud") return;
+    const foleyDiagnosticQuestions = [
+        "foley_catheter_visible",
+        "foley_tubing_visible",
+        "statlock_visible",
+        "adhesive_securement_device_visible",
+        "gloved_hands_visible",
+        "hands_touching_glans_or_meatus",
+        "catheter_tip_at_or_entering_meatus",
+        "visible_advancement_motion",
+        "tubing_routing_or_field_handling",
+        "urine_visible",
+        "balloon_inflation_visible",
+        "drape_applied_adjusted_or_removed",
+        "swab_gauze_syringe_lubricant_visible",
+        "anatomy_obscured_or_unclear",
+    ];
+    const bodyDiagnosticQuestions = [
+        "genital_state_visible",
+        "erection_state_visible",
+        "genital_visibility_obscured",
+        "hand_contact_with_genitals_visible",
+        "pelvic_motion_visible",
+        "body_tension_or_relaxation_visible",
+        "leg_or_foot_position_visible",
+        "toe_curling_or_foot_flexion_visible",
+        "stroking_motion_visible",
+        "grip_or_contact_change_visible",
+        "ejaculation_or_fluid_release_visible",
+        "visible_fluid_present",
+        "fluid_stream_or_droplet_visible",
+        "fluid_projection_distance_estimate",
+        "cleanup_or_wipe_visible",
+    ];
+    const diagnosticQuestions = localVisionFocus === "foley"
+      ? foleyDiagnosticQuestions
+      : localVisionFocus === "body"
+      ? bodyDiagnosticQuestions
+      : [...new Set([...foleyDiagnosticQuestions, ...bodyDiagnosticQuestions])];
+    const currentPreviewSource = Number(previewVideoRef.current?.currentTime);
+    const previewSession = Number.isFinite(currentPreviewSource)
+      ? sessionTimeForSource(currentPreviewSource, selectedVideo)
+      : null;
+    const currentPreviewSession = previewSession != null && currentPreviewSource > 0.25
+      ? previewSession
+      : scanCursor;
+    const diagnosticStart = clamp(currentPreviewSession, 0, Math.max(0, sessionEnd - 0.25));
+    const targetWindow = {
+      start: diagnosticStart,
+      end: Math.min(sessionEnd, diagnosticStart + clipSeconds),
+    };
+    const sourceStart = sourceTimeForSession(targetWindow.start, selectedVideo);
+    const sourceEnd = sourceTimeForSession(targetWindow.end, selectedVideo);
+    setLocalVisionRunning(true);
+    setLocalVisionError("");
+    setLocalVisionLiveLog([]);
+    updateLocalVisionProgress({ phase: "starting", message: "Starting diagnostic local Qwen job..." });
+    setLocalVisionResult(null);
+    setLocalVisionQaResult(null);
+    setLocalVisionStatus(`Sampling diagnostic local window ${fmtMmSs(targetWindow.start)}-${fmtMmSs(targetWindow.end)} for Qwen2.5-VL...`);
+    try {
+      const payload = {
+        sessionId: session.id,
+        recordType: localVisionRecordType(),
+        videoPath: selectedVideo.path,
+        startMs: Math.round(sourceStart * 1000),
+        endMs: Math.round(sourceEnd * 1000),
+        samplePolicy: {
+          fps: 1,
+          maxFrames: Math.min(8, Math.max(3, Math.round(clipSeconds / 4))),
+          includeMotionPeaks: true,
+          dedupe: true,
+          thumbnailWidth: 512,
+        },
+        engine: "local_qwen25vl",
+        questions: diagnosticQuestions,
+        previousVisualState: {},
+      };
+      const startedJob = await startBackgroundJob("local_vision_analyze_window", payload, {
+        sessionId: session.id,
+        source: "AIVideoPassPanel",
+        route: window.location.pathname,
+      });
+      setLocalVisionStatus(`Queued diagnostic local vision job ${startedJob.id.slice(0, 8)}...`);
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1500,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+          setLocalVisionStatus(`${progress.message || "Diagnostic local Qwen analysis running..."}${count}`);
+          updateLocalVisionProgress(progress);
+        },
+      });
+      const result = completedJob.result;
+      setLocalVisionResult(result);
+      const localCard = cardFromLocalVisionResult(result, selectedVideo, isExploration);
+      if (localCard) {
+        setCards([localCard]);
+        setExpanded((prev) => ({ ...prev, [localCard.id]: true }));
+      }
+      setLocalVisionProgress(null);
+      setLocalVisionStatus(`Local vision complete: ${result.frame_evidence?.length || 0} frame${result.frame_evidence?.length === 1 ? "" : "s"} checked, ${result.forbidden_or_not_visible?.length || 0} unsafe claim${result.forbidden_or_not_visible?.length === 1 ? "" : "s"} blocked.`);
+    } catch (err) {
+      setLocalVisionError(err?.data?.error || err?.message || "Local vision analysis failed.");
+      setLocalVisionStatus("");
+    } finally {
+      setLocalVisionRunning(false);
+    }
+  };
+
+  const askVideoLocally = async () => {
+    if (!selectedVideo?.path || localVisionRunning || visionEngine === "cloud" || !localVisionQuestion.trim()) return;
+    const range = localVisionRange();
+    setLocalVisionRunning(true);
+    setLocalVisionError("");
+    setLocalVisionLiveLog([]);
+    updateLocalVisionProgress({ phase: "starting", message: "Starting local video Q&A job..." });
+    setLocalVisionStatus("Sampling local evidence and asking Qwen2.5-VL...");
+    try {
+      const payload = {
+        sessionId: session.id,
+        recordType: localVisionRecordType(),
+        videoPath: selectedVideo.path,
+        startMs: Math.round(range.sourceStart * 1000),
+        endMs: Math.round(range.sourceEnd * 1000),
+        question: localVisionQuestion.trim(),
+        engine: "local_qwen25vl",
+        evidencePolicy: {
+          baselineFps: 1,
+          maxScanFrames: 300,
+          includeMotionPeaks: true,
+          includeSceneChanges: true,
+          dedupe: true,
+          batchSize: 8,
+          thumbnailWidth: 512,
+          refineAroundLikelyEvidence: true,
+        },
+        knownTimeline: localVisionResult || null,
+        scaleCalibration: { available: false, pixelsPerCm: null, source: null },
+      };
+      const startedJob = await startBackgroundJob("local_vision_ask_video", payload, {
+        sessionId: session.id,
+        source: "AIVideoPassPanel",
+        route: window.location.pathname,
+      });
+      setLocalVisionStatus(`Queued local video Q&A job ${startedJob.id.slice(0, 8)}...`);
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1500,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+          setLocalVisionStatus(`${progress.message || "Local Qwen video Q&A running..."}${count}`);
+          updateLocalVisionProgress(progress);
+        },
+      });
+      const result = completedJob.result;
+      setLocalVisionQaResult(result);
+      setLocalVisionProgress(null);
+      setLocalVisionStatus(`Local Q&A complete: confidence ${Math.round((result.answer?.confidence || 0) * 100)}%, frames ${result.answer?.frame_refs?.join(", ") || "not cited"}.`);
+    } catch (err) {
+      setLocalVisionError(err?.data?.error || err?.message || "Local video Q&A failed.");
+      setLocalVisionStatus("");
+    } finally {
+      setLocalVisionRunning(false);
+    }
+  };
+
+  const copyLocalVisionJson = async () => {
+    const payload = localVisionQaResult || localVisionResult;
+    if (!payload) return;
+    await navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
+    setLocalVisionStatus("Copied local vision JSON to clipboard.");
   };
 
   const acceptAudioEvents = async () => {
@@ -1730,6 +2873,10 @@ Return a corrected compact card for this same window. Keep timeline events only 
     setExpanded((prev) => cardsToPersist.reduce((next, card) => ({ ...next, [card.id]: false }), { ...prev }));
   };
 
+  const localVisionFluidDynamics = Array.isArray(localVisionResult?.fluid_dynamics)
+    ? localVisionResult.fluid_dynamics[0]
+    : localVisionResult?.fluid_dynamics;
+
   if (!availableVideos.length) {
     return (
       <div className="rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">
@@ -1743,17 +2890,17 @@ Return a corrected compact card for this same window. Keep timeline events only 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
-            <Sparkles className="h-3.5 w-3.5" /> AI Video Pass
+            <ShieldCheck className="h-3.5 w-3.5" /> Local Vision Analysis
           </h4>
           <p className="mt-1 text-xs text-muted-foreground">
-            Sarah scans candidate windows, creates short preview clips, and drafts {recordLabel} timeline findings for review.
+            Primary local Qwen2.5-VL workflow for visible evidence, unified timelines, Foley/body exploration states, and not-visible safety gates.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           {storedAIPassEventCount > 0 && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button type="button" variant="outline" className="h-8 border-destructive/30 text-destructive hover:bg-destructive/10">
+                <Button type="button" variant="outline" className="h-8 w-full border-destructive/30 text-destructive hover:bg-destructive/10 sm:w-auto">
                   <Trash2 className="mr-2 h-3.5 w-3.5" />
                   Clear AI Events ({storedAIPassEventCount})
                 </Button>
@@ -1774,20 +2921,17 @@ Return a corrected compact card for this same window. Keep timeline events only 
               </AlertDialogContent>
             </AlertDialog>
           )}
-          {isExploration && cards.length > 0 && (
-            <Button type="button" variant="outline" onClick={reassessExplorationSequence} disabled={running || reassessing} className="h-8">
-              {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-              Reassess Foley Sequence
-            </Button>
-          )}
-          <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8">
-            {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
-            {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Pass" : "Start at 0:00") : "Run Pass"}
+          <Button type="button" variant="outline" onClick={restoreLatestLocalVisionResult} disabled={!selectedVideo || localVisionRunning} className="h-8 w-full border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/10 sm:w-auto">
+            Review Latest Local Results
+          </Button>
+          <Button type="button" onClick={analyzeAdaptiveLocally} disabled={localVisionRunning || !selectedVideo} className="h-8 w-full sm:w-auto">
+            {localVisionRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Eye className="mr-2 h-3.5 w-3.5" />}
+            Run Local Analysis
           </Button>
         </div>
       </div>
 
-      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto_auto_auto_auto_auto]">
+      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto_auto_auto]">
         <select
           value={selectedVideo?.path || selectedPath}
           onChange={(event) => setSelectedPath(event.target.value)}
@@ -1810,49 +2954,35 @@ Return a corrected compact card for this same window. Keep timeline events only 
           </select>
         </label>
         <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
-          Mode
+          Analysis Type
           <select
-            value={scanMode}
-            onChange={(event) => setScanMode(event.target.value)}
-            className="bg-transparent text-foreground outline-none"
+            value={localAnalysisType}
+            onChange={(event) => setLocalAnalysisType(event.target.value)}
+            className="max-w-44 bg-transparent text-foreground outline-none"
           >
-            <option value="smart">Smart windows</option>
-            <option value="continue">Continue forward</option>
+            {LOCAL_ANALYSIS_TYPES.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </label>
-        <label className={`flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs ${scanMode === "continue" ? "text-muted-foreground" : "text-muted-foreground/50"}`}>
-          <input
-            type="checkbox"
-            checked={autoContinue}
-            disabled={scanMode !== "continue"}
-            onChange={(event) => setAutoContinue(event.target.checked)}
-            className="h-3.5 w-3.5 accent-primary"
-          />
-          Auto-continue
-        </label>
         <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
-          Windows
-          <input
-            type="number"
-            min="1"
-            max="8"
-            value={windowCount}
-            onChange={(event) => setWindowCount(clamp(Number(event.target.value) || 1, 1, 8))}
-            className="w-12 bg-transparent text-foreground outline-none"
-          />
-        </label>
-        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
-          Seconds
-          <input
-            type="number"
-            min="8"
-            max="30"
-            value={clipSeconds}
-            onChange={(event) => setClipSeconds(clamp(Number(event.target.value) || 24, 8, 30))}
-            className="w-12 bg-transparent text-foreground outline-none"
-          />
+          Mode
+          <select
+            value={localAnalysisMode}
+            onChange={(event) => setLocalAnalysisMode(event.target.value)}
+            className="max-w-44 bg-transparent text-foreground outline-none"
+          >
+            {LOCAL_ANALYSIS_MODES.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
         </label>
       </div>
+      <p className={`mt-2 rounded-lg border px-3 py-2 text-xs ${localAnalysisMode === "deep_forensic" ? "border-amber-400/25 bg-amber-400/5 text-amber-100" : "border-emerald-500/15 bg-emerald-500/5 text-muted-foreground"}`}>
+        <span className="font-semibold text-emerald-200">{localAnalysisTypeLabel(localAnalysisType)} · {localAnalysisModeLabel(localAnalysisMode)}:</span>{" "}
+        {localAnalysisModeHelper(localAnalysisMode)}
+        {localAnalysisMode === "deep_forensic" ? " This is opt-in for slow, GPU-heavy review; Balanced is the normal default." : ""}
+      </p>
       {selectedVideoRoleHelper && (
         <p className="mt-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
           <span className="font-semibold text-primary">{videoRoleLabel(selectedVideoRole)} focus:</span> {selectedVideoRoleHelper}
@@ -1964,7 +3094,880 @@ Return a corrected compact card for this same window. Keep timeline events only 
         </div>
       )}
 
-      <div className="mt-3 rounded-xl border border-border bg-card/60 p-3">
+      <div className="mt-3 max-w-full overflow-hidden rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h5 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+              <ShieldCheck className="h-3.5 w-3.5" /> Local Results
+            </h5>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Review the latest local-only visual evidence. Frame claims cite sampled evidence and local mode never falls back to cloud.
+            </p>
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+          <span className="max-w-full truncate rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 font-semibold text-emerald-200">
+            Local-only: no cloud frame upload
+          </span>
+          <span className="max-w-full truncate rounded-full border border-border bg-background px-2 py-1 text-muted-foreground">
+            Range {fmtMmSs(localVisionRange().start)}-{fmtMmSs(localVisionRange().end)}
+          </span>
+          <span className="max-w-full truncate rounded-full border border-border bg-background px-2 py-1 text-muted-foreground">
+            Qwen2.5-VL service on localhost
+          </span>
+          <span className="max-w-full truncate rounded-full border border-border bg-background px-2 py-1 text-muted-foreground">
+            Type {localAnalysisTypeLabel(localAnalysisType)}
+          </span>
+          <span className="max-w-full truncate rounded-full border border-border bg-background px-2 py-1 text-muted-foreground">
+            Mode {localAnalysisModeLabel(localAnalysisMode)}
+          </span>
+          <span className={`max-w-full truncate rounded-full border px-2 py-1 ${localVisionHealth?.ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-destructive/30 bg-destructive/10 text-destructive"}`}>
+            {localVisionHealth?.ok ? `Service ready · ${localVisionHealth?.model?.name || localVisionHealth?.model || "model"}` : (localVisionHealth?.error || "Service not checked")}
+          </span>
+        </div>
+        {(localVisionStatus || localVisionError) && (
+          <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${localVisionError ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"}`}>
+            {localVisionError || localVisionStatus}
+          </div>
+        )}
+        {localVisionRunning && localVisionProgress && (
+          <div className="mt-3 rounded-lg border border-emerald-500/20 bg-background/70 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                {String(localVisionProgress.phase || "running").replace(/_/g, " ")}
+              </p>
+              {localVisionProgress.total > 0 && (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {localVisionProgress.current || 0}/{localVisionProgress.total}
+                </span>
+              )}
+            </div>
+            {localVisionProgress.total > 0 && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-emerald-400 transition-all"
+                  style={{ width: `${Math.max(4, Math.min(100, ((localVisionProgress.current || 0) / localVisionProgress.total) * 100))}%` }}
+                />
+              </div>
+            )}
+            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4">
+              {[
+                ["Planned frames", localVisionProgress.planned_frames],
+                ["Sampled", localVisionProgress.sampled_frames],
+                ["CV frames scanned", localVisionProgress.framesScanned ?? localVisionProgress.scanned_frames],
+                ["Scan position", localVisionProgress.current_timestamp_ms != null ? fmtMmSs((localVisionProgress.current_timestamp_ms || 0) / 1000) : null],
+                ["Range scanned", localVisionProgress.percent_scanned != null ? `${Math.round(localVisionProgress.percent_scanned)}%` : (localVisionProgress.scanPercent != null ? `${Math.round(localVisionProgress.scanPercent)}%` : null)],
+                ["Candidates found", localVisionProgress.candidatesFound ?? localVisionProgress.candidates_found ?? localVisionProgress.candidate_events],
+                ["Qwen selected", localVisionProgress.candidatesSelectedForQwen ?? localVisionProgress.candidates_selected_for_qwen],
+                ["Qwen calls", localVisionProgress.qwenCallsTotal != null ? `${localVisionProgress.qwenCallsCompleted || 0}/${localVisionProgress.qwenCallsTotal}` : null],
+                ["Confirmed", localVisionProgress.confirmedFindingsCount ?? localVisionProgress.confirmed_findings_count],
+                ["Strong candidates", localVisionProgress.strongCandidatesCount ?? localVisionProgress.strong_candidates_count],
+                ["Not confirmed", localVisionProgress.notConfirmedCount ?? localVisionProgress.not_confirmed_count],
+                ["Down/rejected", localVisionProgress.downgradedRejectedCandidatesCount ?? localVisionProgress.downgraded_rejected_candidates_count],
+                ["Blocked", localVisionProgress.blocked_claims],
+                ["Batch frames", localVisionProgress.frame_count],
+              ].filter(([, value]) => value != null).map(([label, value]) => (
+                <div key={label} className="rounded-md border border-border bg-muted/10 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+                  <p className="font-mono text-sm text-foreground">{value}</p>
+                </div>
+              ))}
+            </div>
+            {progressCandidate(localVisionProgress) && (
+              <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-xs">
+                {(() => {
+                  const candidate = progressCandidate(localVisionProgress);
+                  const reasons = arrayFromMaybe(candidate.reasons || localVisionProgress.latest_candidate_reasons);
+                  const questionIds = arrayFromMaybe(candidate.selected_question_ids || localVisionProgress.selected_question_ids);
+                  return (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Current Qwen Checkpoint</p>
+                        {candidate.score != null && (
+                          <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-mono text-[10px] text-primary">
+                            score {Math.round(Number(candidate.score || 0) * 100)}%
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 font-semibold text-foreground">
+                        {candidateLabel(candidate)}
+                        {candidate.start_ms != null && (
+                          <span className="ml-2 font-mono text-muted-foreground">
+                            {fmtMmSs((candidate.start_ms || 0) / 1000)}-{fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)}
+                          </span>
+                        )}
+                      </p>
+                      {reasons.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {reasons.slice(0, 4).map((reason) => (
+                            <span key={reason} className="rounded-full border border-border bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                        {candidate.qwen_index != null && candidate.qwen_total != null && (
+                          <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Qwen Window</p>
+                            <p className="font-mono text-sm text-foreground">{candidate.qwen_index}/{candidate.qwen_total}</p>
+                          </div>
+                        )}
+                        {(candidate.qwen_sampled_frames != null || localVisionProgress.sampled_frames != null) && (
+                          <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Frames To Qwen</p>
+                            <p className="font-mono text-sm text-foreground">{candidate.qwen_sampled_frames ?? localVisionProgress.sampled_frames}</p>
+                          </div>
+                        )}
+                        {questionIds.length > 0 && (
+                          <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Focused Questions</p>
+                            <p className="font-mono text-sm text-foreground">{questionIds.length}</p>
+                          </div>
+                        )}
+                      </div>
+                      {candidate.qwen_result_summary && (
+                        <p className="mt-2 rounded-md border border-border bg-background/70 px-2 py-1.5 text-muted-foreground">
+                          Latest Qwen read: {candidate.qwen_result_summary}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+            {localVisionProgress.top_candidates?.length > 0 && (
+              <details className="mt-3 rounded-lg border border-border bg-muted/10">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Top CV Candidate Windows ({localVisionProgress.top_candidates.length})
+                </summary>
+                <div className="space-y-1.5 border-t border-border p-2">
+                  {localVisionProgress.top_candidates.map((candidate) => (
+                    <button
+                      type="button"
+                      key={candidate.candidate_id}
+                      onClick={() => seekPreviewVideo(sessionTimeForSource((candidate.start_ms || 0) / 1000, selectedVideo))}
+                      className="w-full rounded-md border border-border bg-background/70 px-2 py-1.5 text-left text-xs hover:border-primary/50"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">
+                          {fmtMmSs((candidate.start_ms || 0) / 1000)}-{fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)} · {candidateLabel(candidate)}
+                        </span>
+                        <span className="font-mono text-muted-foreground">{Math.round(Number(candidate.score || 0) * 100)}%</span>
+                      </div>
+                      {candidate.reasons?.length > 0 && (
+                        <p className="mt-1 text-muted-foreground">{candidate.reasons.slice(0, 3).join("; ")}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            )}
+            {localVisionProgress.latest_summary && (
+              <p className="mt-2 rounded-md border border-border bg-muted/10 px-2 py-1.5 text-xs text-muted-foreground">
+                Latest batch: {localVisionProgress.latest_summary}
+              </p>
+            )}
+            {(localVisionProgress.latest_rolling_state || localVisionProgress.rolling_state) && (
+              <div className="mt-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1.5 text-xs text-muted-foreground">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Rolling State</p>
+                <p className="mt-1">{formatLocalVisionRollingState(localVisionProgress.latest_rolling_state || localVisionProgress.rolling_state) || "Chronological state is updating."}</p>
+              </div>
+            )}
+            {localVisionLiveLog.length > 0 && (
+              <div className="mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Live Evidence Feed</p>
+                  <span className="text-[10px] text-muted-foreground">newest first</span>
+                </div>
+                <div className="mt-2 space-y-1.5">
+                  {localVisionLiveLog.slice(0, 6).map((entry) => (
+                    <div key={entry.key} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
+                          {entry.phase}
+                        </span>
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {fmtClockTime(entry.at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 leading-relaxed text-foreground/85">{entry.text}</p>
+                      {entry.details && (
+                        <p className="mt-1 font-mono text-[10px] text-muted-foreground">{entry.details}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {localVisionProgress.latest_frame?.image_path && (
+              <button
+                type="button"
+                onClick={() => seekPreviewVideo(sessionTimeForSource((localVisionProgress.latest_frame.time_ms || 0) / 1000, selectedVideo))}
+                className="mt-3 flex w-full items-center gap-3 rounded-md border border-border bg-muted/10 p-2 text-left hover:border-emerald-400/50"
+              >
+                <img
+                  src={base44.integrations.Core.localVisionAssetUrl(localVisionProgress.latest_frame.image_path)}
+                  alt={`Latest sampled local vision frame ${localVisionProgress.latest_frame.frame_id}`}
+                  className="h-16 w-28 rounded bg-black object-cover"
+                />
+                <span className="min-w-0 text-xs">
+                  <span className="block font-semibold text-foreground">Latest sampled frame</span>
+                  <span className="block font-mono text-muted-foreground">
+                    {localVisionProgress.latest_frame.frame_id} · {fmtMmSs((localVisionProgress.latest_frame.time_ms || 0) / 1000)}
+                  </span>
+                </span>
+              </button>
+            )}
+          </div>
+        )}
+        {!localVisionRunning && !localVisionResult && !localVisionError && (
+          <div className="mt-3 rounded-lg border border-border bg-background/70 p-3 text-xs text-muted-foreground">
+            Run a local full-range pass or reload the latest saved local result to review timeline evidence here.
+          </div>
+        )}
+        {localVisionResult && (
+          <div className="mt-3 grid min-w-0 gap-3">
+            <div className="max-w-full overflow-hidden rounded-lg border border-border bg-background/70 p-3">
+              <div className="grid min-w-0 gap-2 sm:flex sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Sarah Local Read</p>
+                  <p className="mt-1 break-words text-sm leading-relaxed text-foreground/90">{sarahLocalVisionSummary(localVisionResult)}</p>
+                </div>
+                <Button type="button" size="sm" variant="outline" onClick={copyLocalVisionJson} className="h-8 w-full justify-center sm:h-7 sm:w-auto sm:shrink-0">
+                  <Copy className="mr-1 h-3.5 w-3.5" /> Copy JSON
+                </Button>
+              </div>
+              <div className="mt-3 grid min-w-0 gap-2 sm:grid-cols-3">
+                <div className="min-w-0 rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Overall</p>
+                  <p className="font-mono text-sm text-foreground">{Math.round((localVisionResult.confidence?.overall || 0) * 100)}%</p>
+                </div>
+                <div className="min-w-0 rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Visibility</p>
+                  <p className="font-mono text-sm text-foreground">{Math.round((localVisionResult.confidence?.visibility_quality || 0) * 100)}%</p>
+                </div>
+                <div className="min-w-0 rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Engine</p>
+                  <p className="min-w-0 break-all text-sm text-foreground sm:truncate">{localVisionResult.engine} · {localVisionResult.model?.name || localVisionResult.model}</p>
+                </div>
+              </div>
+              <div className="mt-3 grid min-w-0 gap-2 sm:grid-cols-3">
+                <div className="min-w-0 rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actionable</p>
+                  <p className="font-mono text-sm text-foreground">{localVisionResult.actionable_findings?.length ?? localVisionResult.timeline_events?.length ?? 0}</p>
+                </div>
+                <div className="min-w-0 rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Strong Candidates</p>
+                  <p className="font-mono text-sm text-foreground">{localVisionResult.strong_candidates?.length || 0}</p>
+                </div>
+                <div className="min-w-0 rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Not Confirmed</p>
+                  <p className="font-mono text-sm text-foreground">{localVisionResult.not_confirmed?.length || 0}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Coverage / What Actually Ran</p>
+              {(() => {
+                const coverage = localVisionCoverageSummary(localVisionResult);
+                return (
+                  <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                    <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Selected Range Scanned</p>
+                      <p className="font-mono text-sm text-foreground">{coverage.rangeText}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Scan Method</p>
+                      <p className="text-foreground">{coverage.scannedText} · {coverage.candidateText}</p>
+                      <p className="mt-1 text-muted-foreground">{coverage.coverageText}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Local Qwen Review</p>
+                      <p className="text-foreground">{coverage.qwenText}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Promoted Output</p>
+                      <p className="text-foreground">{coverage.confirmedText}</p>
+                      <p className="mt-1 text-muted-foreground">{coverage.candidateReviewText}</p>
+                    </div>
+                  </div>
+                );
+              })()}
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                Balanced local analysis scans the whole selected range cheaply, then sends coverage-aware candidate windows to Qwen. Frame IDs may restart inside targeted windows; timestamps are the source of truth.
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Session Story From Local Evidence</p>
+              <div className="mt-2 space-y-1.5">
+                {localVisionSessionStory(localVisionResult).map((line, index) => (
+                  <p key={`${index}-${line.slice(0, 20)}`} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs leading-relaxed text-foreground/90">
+                    {line}
+                  </p>
+                ))}
+              </div>
+              {!localVisionResult.timeline_events?.length && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  No confirmed timeline event was promoted. Candidate windows may still be useful for manual review, but they are not treated as session facts.
+                </p>
+              )}
+            </div>
+
+            {localVisionResult.actionable_findings?.length > 0 && (
+              <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Actionable Findings</p>
+                <p className="mt-1 text-xs text-muted-foreground">Confirmed visual events only. These are safe to pass into AI Session Analysis as local visual findings.</p>
+                <div className="mt-2 space-y-2">
+                  {localVisionTierRows(localVisionResult.actionable_findings).map((finding, index) => (
+                    <button
+                      type="button"
+                      key={finding.event_id || finding.finding_id || `${finding.label}-${index}`}
+                      onClick={() => seekPreviewVideo(sessionTimeForSource((finding.start_ms || 0) / 1000, selectedVideo))}
+                      className="w-full rounded-md border border-emerald-500/20 bg-background/70 px-2 py-1.5 text-left text-xs hover:border-emerald-400/50"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">{fmtMmSs((finding.start_ms || 0) / 1000)} · {finding.label || finding.event_type || "confirmed finding"}</span>
+                        <span className="font-mono text-muted-foreground">{Math.round((finding.confidence || 0) * 100)}%</span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">{finding.basis || finding.summary || "Confirmed by local visual evidence."}</p>
+                      {finding.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-emerald-200">{finding.frame_refs.join(", ")}</p>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {localVisionResult.coverage_segments?.length > 0 && (
+              <details open className="rounded-lg border border-border bg-background/70">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Whole-Range Coverage ({localVisionResult.coverage_segments.length})
+                </summary>
+                <div className="space-y-2 border-t border-border p-3">
+                  {localVisionTierRows(localVisionResult.coverage_segments, 20).map((segment, index) => {
+                    const range = localVisionMsRange(segment);
+                    return (
+                      <button
+                        type="button"
+                        key={segment.candidate_id || `${segment.type}-${segment.start_ms}-${index}`}
+                        onClick={() => seekPreviewVideo(sessionTimeForSource((segment.start_ms || 0) / 1000, selectedVideo))}
+                        className="w-full rounded-md border border-border bg-muted/15 px-2 py-1.5 text-left text-xs hover:border-primary/50"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-foreground">
+                            {formatLocalVisionMs(range.start)}-{formatLocalVisionMs(range.end)} · {String(segment.label || segment.type || "coverage").replace(/_/g, " ")}
+                          </span>
+                          <span className="rounded-full border border-border bg-background/70 px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {segment.status || "unknown"} · {segment.reviewed_by_qwen ? "Qwen" : "CV"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-muted-foreground">{segment.basis || "Chronological local coverage segment."}</p>
+                        {segment.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-primary">{segment.frame_refs.slice(0, 12).join(", ")}</p>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </details>
+            )}
+
+            {localVisionResult.strong_candidates?.length > 0 && (
+              <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Strong Candidates</p>
+                <p className="mt-1 text-xs text-muted-foreground">Likely windows worth review. These stay labeled as unconfirmed unless visual gates are met.</p>
+                <div className="mt-2 space-y-2">
+                  {localVisionTierRows(localVisionResult.strong_candidates).map((candidate, index) => (
+                    <button
+                      type="button"
+                      key={candidate.candidate_id || `${candidate.type}-${candidate.start_ms}-${index}`}
+                      onClick={() => seekPreviewVideo(sessionTimeForSource((candidate.start_ms || 0) / 1000, selectedVideo))}
+                      className="w-full rounded-md border border-border bg-muted/15 px-2 py-1.5 text-left text-xs hover:border-primary/50"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">{fmtMmSs((candidate.start_ms || 0) / 1000)}-{fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)} · {candidateLabel(candidate)}</span>
+                        <span className="font-mono text-muted-foreground">{Math.round(((candidate.confidence ?? candidate.score) || 0) * 100)}%</span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">{candidate.basis || candidate.reasons?.join("; ") || "Candidate found by local CV/Qwen review."}</p>
+                      {candidate.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-primary">{candidate.frame_refs.join(", ")}</p>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {localVisionResult.not_confirmed?.length > 0 && (
+              <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Not Confirmed</p>
+                <p className="mt-1 text-xs text-muted-foreground">Important checks that did not have enough visible evidence. These are not fed to Session Analysis as facts.</p>
+                <div className="mt-2 space-y-1.5">
+                  {arrayFromMaybe(localVisionResult.not_confirmed).slice(0, 12).map((item, index) => {
+                    const label = typeof item === "string" ? item : item.label || item.claim || item.type || "not confirmed";
+                    const reason = typeof item === "string" ? "" : item.reason || item.basis || item.status || "";
+                    return (
+                      <div key={`${label}-${index}`} className="rounded-md border border-destructive/15 bg-background/70 px-2 py-1.5 text-xs">
+                        <p className="font-semibold text-foreground">{String(label).replace(/_/g, " ")}</p>
+                        {reason && <p className="mt-1 text-muted-foreground">{reason}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {localVisionResult.session_analysis_export && (
+              <details open className="rounded-lg border border-emerald-500/25 bg-background/70">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                  Session Analysis Export Preview
+                </summary>
+                <div className="space-y-2 border-t border-border p-3 text-xs">
+                  <p className="text-muted-foreground">
+                    This is the compact local-vision package for AI Session Analysis: confirmed findings first, labeled candidates second, and unsupported checks as not-confirmed.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Confirmed</p>
+                      <p className="font-mono text-sm text-foreground">{localVisionResult.session_analysis_export?.confirmed_findings?.length || 0}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Candidates</p>
+                      <p className="font-mono text-sm text-foreground">{localVisionResult.session_analysis_export?.strong_candidates?.length || 0}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/15 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Not Confirmed</p>
+                      <p className="font-mono text-sm text-foreground">{localVisionResult.session_analysis_export?.not_confirmed?.length || 0}</p>
+                    </div>
+                  </div>
+                  {localVisionResult.session_analysis_export?.summary && (
+                    <p className="rounded-md border border-border bg-muted/10 px-2 py-1.5 text-muted-foreground">
+                      {localVisionResult.session_analysis_export.summary}
+                    </p>
+                  )}
+                </div>
+              </details>
+            )}
+
+            {localVisionResult.frame_evidence?.length > 0 && (
+              <details open className="rounded-lg border border-border bg-background/70">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Frame Evidence ({localVisionResult.frame_evidence.length})
+                </summary>
+                <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4 lg:grid-cols-6">
+                  {localVisionResult.frame_evidence.map((frame) => (
+                    <a key={frame.frame_id} href={base44.integrations.Core.localVisionAssetUrl(frame.image_path)} target="_blank" rel="noreferrer" className="overflow-hidden rounded-md border border-border bg-card">
+                      <img src={base44.integrations.Core.localVisionAssetUrl(frame.image_path)} alt={`Local vision frame ${frame.frame_id}`} loading="lazy" className="aspect-video w-full object-cover" />
+                      <span className="block px-1.5 py-1 text-[10px] text-muted-foreground">
+                        {frame.frame_id} · {fmtMmSs((frame.time_ms || 0) / 1000)}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {localVisionResult.timeline_events?.length > 0 && (
+              <div className="rounded-lg border border-border bg-background/70 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Unified Timeline</p>
+                <div className="mt-2 space-y-2">
+                  {localVisionResult.timeline_events.slice(0, 12).map((event) => (
+                    <button
+                      type="button"
+                      key={event.event_id || `${event.label}-${event.start_ms}`}
+                      onClick={() => seekPreviewVideo(sessionTimeForSource((event.start_ms || 0) / 1000, selectedVideo))}
+                      className="w-full rounded-md border border-border bg-muted/15 px-2 py-1.5 text-left text-xs hover:border-emerald-400/50"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">{fmtMmSs((event.start_ms || 0) / 1000)} · {event.label}</span>
+                        <span className="font-mono text-muted-foreground">{Math.round((event.confidence || 0) * 100)}%</span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">{event.basis}</p>
+                      {event.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-emerald-200">{event.frame_refs.join(", ")}</p>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!localVisionResult.timeline_events?.length && (
+              <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-200">Unified Timeline</p>
+                <p className="mt-1 text-sm leading-relaxed text-foreground/90">
+                  No confirmed timeline event was promoted. Candidate windows may still be useful for manual review, but Sarah is leaving the event timeline empty rather than converting uncertain evidence into a false event.
+                </p>
+              </div>
+            )}
+
+            {localVisionResult.state_segments?.length > 0 && (
+              <div className="rounded-lg border border-border bg-background/70 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">State Segments</p>
+                <div className="mt-2 space-y-2">
+                  {localVisionResult.state_segments.slice(0, 12).map((segment) => (
+                    <button
+                      type="button"
+                      key={`${segment.state}-${segment.start_ms}-${segment.end_ms}`}
+                      onClick={() => seekPreviewVideo(sessionTimeForSource((segment.start_ms || 0) / 1000, selectedVideo))}
+                      className="w-full rounded-md border border-border bg-muted/15 px-2 py-1.5 text-left text-xs hover:border-emerald-400/50"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">
+                          {fmtMmSs((segment.start_ms || 0) / 1000)}-{fmtMmSs((segment.end_ms || 0) / 1000)} · {String(segment.state || "state").replace(/_/g, " ")}
+                        </span>
+                        <span className="font-mono text-muted-foreground">{Math.round((segment.confidence || 0) * 100)}%</span>
+                      </div>
+                      {segment.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-emerald-200">{segment.frame_refs.join(", ")}</p>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="rounded-lg border border-border bg-background/70 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Stage Candidates</p>
+                <div className="mt-2 space-y-2">
+                  {(localVisionResult.stage_candidates || []).filter((stage) => stage.stage && stage.stage !== "unknown").slice(0, 6).map((stage) => (
+                    <div key={`${stage.stage}-${stage.basis}`} className="rounded-md border border-border bg-muted/15 px-2 py-1.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-foreground">{stage.stage.replace(/_/g, " ")}</span>
+                        <span className="font-mono text-muted-foreground">{Math.round((stage.confidence || 0) * 100)}%</span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">{stage.basis}</p>
+                      {stage.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-primary">{stage.frame_refs.join(", ")}</p>}
+                    </div>
+                  ))}
+                  {!(localVisionResult.stage_candidates || []).some((stage) => stage.stage && stage.stage !== "unknown") && (
+                    <div className="rounded-md border border-border bg-muted/15 px-2 py-1.5 text-xs text-muted-foreground">
+                      No specific stage passed the local visibility gates.
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-lg border border-border bg-background/70 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Forbidden / Not Visible</p>
+                <div className="mt-2 space-y-2">
+                  {(localVisionResult.forbidden_or_not_visible || []).slice(0, 8).map((item) => (
+                    <div key={`${item.claim}-${item.reason}`} className="rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1.5 text-xs">
+                      <div className="font-semibold text-foreground">{item.claim}</div>
+                      <p className="mt-1 text-muted-foreground">{item.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {localVisionFluidDynamics && (
+              <div className="rounded-lg border border-cyan-400/25 bg-cyan-400/5 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-200">Visible Fluid Dynamics Proxy</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Clinical visual proxy only. This does not estimate true physical force.
+                </p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["Release", localVisionFluidDynamics.release_detected],
+                    ["Onset", localVisionFluidDynamics.onset_ms != null ? fmtMmSs(localVisionFluidDynamics.onset_ms / 1000) : "unavailable"],
+                    ["Duration", localVisionFluidDynamics.duration_ms != null ? `${Math.round(localVisionFluidDynamics.duration_ms)} ms` : "unavailable"],
+                    ["Pulses", localVisionFluidDynamics.pulse_count ?? "unavailable"],
+                    ["Distance px", localVisionFluidDynamics.max_projected_distance_px ?? "unavailable"],
+                    ["Distance cm", localVisionFluidDynamics.max_projected_distance_cm ?? "unavailable"],
+                    ["Angle", localVisionFluidDynamics.trajectory_angle_degrees != null ? `${localVisionFluidDynamics.trajectory_angle_degrees}°` : "unavailable"],
+                    ["Velocity px/s", localVisionFluidDynamics.velocity_proxy_px_per_sec ?? "unavailable"],
+                    ["Velocity cm/s", localVisionFluidDynamics.velocity_proxy_cm_per_sec ?? "unavailable"],
+                    ["Volume proxy", localVisionFluidDynamics.volume_proxy],
+                    ["Confidence", `${Math.round((localVisionFluidDynamics.confidence || 0) * 100)}%`],
+                    ["Frames", localVisionFluidDynamics.frame_refs?.join(", ") || "none"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+                      <p className="truncate text-sm text-foreground">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                {localVisionFluidDynamics.limitations?.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {localVisionFluidDynamics.limitations.map((limitation) => (
+                      <p key={limitation} className="rounded-md border border-cyan-400/20 bg-background/60 px-2 py-1 text-xs text-muted-foreground">
+                        {limitation}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <details className="rounded-lg border border-border bg-background/70">
+              <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Debug / Raw Evidence Buckets
+              </summary>
+              <div className="grid gap-3 border-t border-border p-3 lg:grid-cols-2">
+              <details className="rounded-lg border border-border bg-background/70">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Object Evidence ({localVisionStatusSummary(localVisionResult.visible_objects)})
+                </summary>
+                <div className="space-y-1.5 p-3">
+                  {localVisionEvidenceRows(localVisionResult.visible_objects).map((item, index) => (
+                    <div key={`${item.label}-${item.status}-${index}`} className="flex items-start justify-between gap-2 rounded-md bg-muted/15 px-2 py-1.5 text-xs">
+                      <span className="min-w-0">
+                        <span className="font-semibold text-foreground">{item.label.replace(/_/g, " ")}</span>
+                        <span className="ml-2 text-muted-foreground">{item.status}</span>
+                      </span>
+                      <span className="font-mono text-muted-foreground">{Math.round((item.confidence || 0) * 100)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+              <details className="rounded-lg border border-border bg-background/70">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Action Evidence ({localVisionStatusSummary(localVisionResult.visible_actions)})
+                </summary>
+                <div className="space-y-1.5 p-3">
+                  {localVisionEvidenceRows(localVisionResult.visible_actions).map((item, index) => (
+                    <div key={`${item.label}-${item.status}-${index}`} className="flex items-start justify-between gap-2 rounded-md bg-muted/15 px-2 py-1.5 text-xs">
+                      <span className="min-w-0">
+                        <span className="font-semibold text-foreground">{item.label.replace(/_/g, " ")}</span>
+                        <span className="ml-2 text-muted-foreground">{item.status}</span>
+                      </span>
+                      <span className="font-mono text-muted-foreground">{Math.round((item.confidence || 0) * 100)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+              </div>
+            </details>
+
+            {((localVisionResult.warnings || []).length > 0 || (localVisionResult.limitations || []).length > 0) && (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {(localVisionResult.warnings || []).length > 0 && (
+                  <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-200">Warnings</p>
+                    <div className="mt-2 space-y-1">
+                      {localVisionResult.warnings.map((warning) => (
+                        <p key={warning} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs text-muted-foreground">{warning}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(localVisionResult.limitations || []).length > 0 && (
+                  <div className="rounded-lg border border-border bg-background/70 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Limitations</p>
+                    <div className="mt-2 space-y-1">
+                      {localVisionResult.limitations.map((limitation) => (
+                        <p key={limitation} className="rounded-md border border-border bg-muted/15 px-2 py-1.5 text-xs text-muted-foreground">{limitation}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <details className="mt-3 rounded-xl border border-border bg-card/60">
+        <summary className="cursor-pointer px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Advanced / Legacy Tools
+        </summary>
+        <div className="grid gap-3 border-t border-border p-3">
+          <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-200">Legacy / Cloud Analysis</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Existing Sarah/Claude window pass. May send sampled frames/context to the configured cloud provider. Useful for comparison, not the preferred local workflow.
+                </p>
+              </div>
+              <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                {isExploration && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={reassessExplorationSequence}
+                    disabled={!cards.length || running || reassessing}
+                    className="h-8 w-full sm:w-auto"
+                    title={!cards.length ? "Run a Body Exploration video pass first; reassessment appears once draft cards are loaded." : "Recheck the visible Foley sequence across the loaded draft cards."}
+                  >
+                    {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+                    {cards.length ? "Reassess Foley Sequence" : "Reassess after cards load"}
+                  </Button>
+                )}
+                <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
+                  {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
+                  {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Sarah Pass" : "Start Sarah at 0:00") : "Run Sarah Window Pass"}
+                </Button>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                Mode
+                <select
+                  value={scanMode}
+                  onChange={(event) => setScanMode(event.target.value)}
+                  className="min-w-0 bg-transparent text-foreground outline-none"
+                >
+                  <option value="smart">Smart windows</option>
+                  <option value="continue">Continue forward</option>
+                </select>
+              </label>
+              <label className={`flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs ${scanMode === "continue" ? "text-muted-foreground" : "text-muted-foreground/50"}`}>
+                <input
+                  type="checkbox"
+                  checked={autoContinue}
+                  disabled={scanMode !== "continue"}
+                  onChange={(event) => setAutoContinue(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                Auto-continue
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                Windows
+                <input
+                  type="number"
+                  min="1"
+                  max="8"
+                  value={windowCount}
+                  onChange={(event) => setWindowCount(clamp(Number(event.target.value) || 1, 1, 8))}
+                  className="w-12 bg-transparent text-foreground outline-none"
+                />
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                Seconds
+                <input
+                  type="number"
+                  min="8"
+                  max="30"
+                  value={clipSeconds}
+                  onChange={(event) => setClipSeconds(clamp(Number(event.target.value) || 24, 8, 30))}
+                  className="w-12 bg-transparent text-foreground outline-none"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Diagnostic Current Window</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Manual single-window check around the preview cursor. This is for troubleshooting evidence, not the main full-range pass.
+                </p>
+              </div>
+              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                <label className="flex h-8 w-full items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground sm:w-auto">
+                  Focus
+                  <select
+                    value={localVisionFocus}
+                    onChange={(event) => setLocalVisionFocus(event.target.value)}
+                    className="bg-transparent text-foreground outline-none"
+                  >
+                    <option value="foley">Foley/procedure</option>
+                    <option value="body">Body exploration/masturbation</option>
+                    <option value="combined">Combined</option>
+                  </select>
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={analyzeWindowLocally}
+                  disabled={localVisionRunning || !selectedVideo || !plannedWindows.length}
+                  className="h-8 w-full justify-center border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/10 sm:w-auto"
+                >
+                  Analyze Diagnostic Window
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <details className="rounded-lg border border-amber-400/25 bg-amber-400/5">
+            <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+              Legacy Full-Session Qwen Scan
+            </summary>
+            <div className="border-t border-amber-400/15 p-3">
+              <p className="text-xs text-muted-foreground">
+                Old continuous scan path. It can be very slow because it sends the full sampled range through Qwen. Use the adaptive modes above for normal work.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={analyzeContinuousLocally}
+                disabled={localVisionRunning || !selectedVideo}
+                className="mt-3 h-8 w-full justify-center border-amber-400/35 text-amber-100 hover:bg-amber-400/10 sm:w-auto"
+              >
+                Run Legacy Full Qwen Scan
+              </Button>
+            </div>
+          </details>
+
+          <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Ask a Targeted Question About Local Analysis</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Uses local evidence, timeline events, and frame refs when available. Best for specific follow-ups like "Was fluid release visible?" or "Was this catheter advancement or tubing handling?"
+            </p>
+            <div className="mt-3 grid min-w-0 gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+              <input
+                value={localVisionQuestion}
+                onChange={(event) => setLocalVisionQuestion(event.target.value)}
+                className="h-9 min-w-0 rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-emerald-400"
+                placeholder="Ask from visible local evidence only..."
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={askVideoLocally}
+                disabled={localVisionRunning || !localVisionQuestion.trim()}
+                className="h-9 justify-center border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/10 max-[420px]:w-full"
+              >
+                Ask Targeted Question
+              </Button>
+            </div>
+            {localVisionQaResult && (
+              <div className="mt-3 rounded-lg border border-border bg-background/70 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Local Evidence Answer</p>
+                    <p className="mt-1 text-sm text-foreground/90">{localVisionQaResult.answer?.short_answer}</p>
+                  </div>
+                  <span className="rounded-full border border-border bg-muted/15 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                    {Math.round((localVisionQaResult.answer?.confidence || 0) * 100)}%
+                  </span>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">{localVisionQaResult.answer?.basis}</p>
+                {localVisionQaResult.answer?.frame_refs?.length > 0 && (
+                  <p className="mt-2 font-mono text-[10px] text-emerald-200">
+                    Frames: {localVisionQaResult.answer.frame_refs.join(", ")}
+                  </p>
+                )}
+                {localVisionQaResult.answer?.limitations?.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {localVisionQaResult.answer.limitations.map((limitation) => (
+                      <p key={limitation} className="rounded-md border border-border bg-muted/10 px-2 py-1 text-xs text-muted-foreground">{limitation}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <details className="rounded-lg border border-border bg-background/70">
+            <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Raw JSON / Debug Output
+            </summary>
+            <div className="border-t border-border p-3">
+              <Button type="button" size="sm" variant="outline" onClick={copyLocalVisionJson} disabled={!localVisionResult && !localVisionQaResult} className="h-8">
+                <Copy className="mr-1 h-3.5 w-3.5" /> Copy Latest Local JSON
+              </Button>
+              {(localVisionResult || localVisionQaResult) ? (
+                <pre className="mt-3 max-h-80 overflow-auto rounded-md border border-border bg-black/30 p-3 text-[10px] leading-relaxed text-muted-foreground">
+                  {JSON.stringify(localVisionQaResult || localVisionResult, null, 2)}
+                </pre>
+              ) : (
+                <p className="mt-3 text-xs text-muted-foreground">No local JSON result loaded yet.</p>
+              )}
+            </div>
+          </details>
+
+          <div className="rounded-xl border border-border bg-card/60 p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h5 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
@@ -2035,6 +4038,8 @@ Return a corrected compact card for this same window. Keep timeline events only 
           </div>
         )}
       </div>
+        </div>
+      </details>
 
       {cards.length > 0 && (
         <div className="mt-3 grid gap-3">
@@ -2042,6 +4047,8 @@ Return a corrected compact card for this same window. Keep timeline events only 
             const isExpanded = expanded[card.id];
             const accepted = isCardAccepted(card, session, acceptedIds, isExploration);
             const compactAccepted = accepted && !isExpanded;
+            const showCardVideoPreview = Boolean(card.clipUrl) && !card.localVision;
+            const cardFramePreview = card.thumbnailUrl || card.sampledFrames?.[0]?.url || "";
             return (
               <article key={card.id} className={`overflow-hidden rounded-xl border bg-card transition-opacity ${accepted ? "border-primary/25 opacity-80" : "border-border"}`}>
                 <div className={`${compactAccepted ? "p-3" : "grid gap-3 p-3 lg:grid-cols-[minmax(15rem,22rem)_1fr]"}`}>
@@ -2074,18 +4081,31 @@ Return a corrected compact card for this same window. Keep timeline events only 
                     onClick={() => setExpanded((prev) => ({ ...prev, [card.id]: !prev[card.id] }))}
                     className="group relative overflow-hidden rounded-lg border border-border bg-black text-left"
                   >
-                    <video
-                      src={card.clipUrl}
-                      muted
-                      playsInline
-                      preload="metadata"
-                      className={`w-full bg-black object-contain ${isExpanded ? "max-h-[28rem]" : "aspect-video"}`}
-                      controls={isExpanded}
-                    />
+                    {showCardVideoPreview ? (
+                      <video
+                        src={card.clipUrl}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        className={`w-full bg-black object-contain ${isExpanded ? "max-h-[28rem]" : "aspect-video"}`}
+                        controls={isExpanded}
+                      />
+                    ) : cardFramePreview ? (
+                      <img
+                        src={cardFramePreview}
+                        alt={`${card.localVision ? "Local evidence" : "Sampled"} frame preview`}
+                        loading="lazy"
+                        className={`w-full bg-black object-contain ${isExpanded ? "max-h-[28rem]" : "aspect-video"}`}
+                      />
+                    ) : (
+                      <div className="flex aspect-video w-full items-center justify-center bg-black px-3 text-center text-xs text-muted-foreground">
+                        Preview unavailable. Open frame evidence below.
+                      </div>
+                    )}
                     {!isExpanded && (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-90 transition-opacity group-hover:opacity-100">
                         <span className="rounded-full bg-background/80 p-2 text-foreground shadow">
-                          <Play className="h-5 w-5" />
+                          {showCardVideoPreview ? <Play className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                         </span>
                       </div>
                     )}
@@ -2123,7 +4143,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
                     {Array.isArray(card.sampledFrames) && card.sampledFrames.length > 0 && (
                       <details className="rounded-lg border border-border bg-muted/15">
                         <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Sampled Frames Sarah Saw ({card.sampledFrames.length})
+                          {card.localVision ? "Local Frame Evidence" : "Sampled Frames Sarah Saw"} ({card.sampledFrames.length})
                         </summary>
                         <div className="grid grid-cols-3 gap-2 p-2 sm:grid-cols-4 lg:grid-cols-6">
                           {card.sampledFrames.map((frame, index) => (
@@ -2153,6 +4173,13 @@ Return a corrected compact card for this same window. Keep timeline events only 
                     <p className="rounded-md border border-primary/15 bg-primary/5 px-2 py-1 text-[10px] text-muted-foreground">
                       Accepting this card saves the summary, finding cards, clip range, and draft events into the {recordLabel} AI details.
                     </p>
+                    {card.events.length === 0 && (
+                      <div className="flex justify-end">
+                        <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => acceptEvents(card)} disabled={accepted}>
+                          <Check className="mr-1 h-3.5 w-3.5" /> {accepted ? "Accepted" : "Save Findings"}
+                        </Button>
+                      </div>
+                    )}
                     <div className="space-y-1.5">
                       {card.findings.map((finding, index) => (
                         <div key={`${finding.title}-${index}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
@@ -2161,6 +4188,15 @@ Return a corrected compact card for this same window. Keep timeline events only 
                             <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{finding.confidence}</span>
                           </div>
                           <p className="mt-1 text-sm leading-relaxed text-foreground/85">{finding.text}</p>
+                          {finding.evidenceRefs?.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {finding.evidenceRefs.slice(0, 8).map((ref) => (
+                                <span key={ref} className="rounded-full border border-border bg-background/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                                  {ref}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2202,12 +4238,20 @@ Return a corrected compact card for this same window. Keep timeline events only 
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Batch Review Ready</p>
                 <p className="text-xs text-muted-foreground">
-                  Saves all unaccepted Sarah video-pass finding cards and edited timeline events in this list.
+                  Saves all unaccepted {cards.some((card) => card.localVision) ? "local/Qwen or Sarah" : "Sarah"} video-pass finding cards and edited timeline events in this list.
                 </p>
               </div>
-              <Button type="button" size="sm" onClick={acceptAllDraftCards} className="h-8">
-                <Check className="mr-2 h-3.5 w-3.5" /> Accept All Findings & Events
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {isExploration && (
+                  <Button type="button" size="sm" variant="outline" onClick={reassessExplorationSequence} disabled={running || reassessing} className="h-8">
+                    {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+                    Reassess Foley Sequence
+                  </Button>
+                )}
+                <Button type="button" size="sm" onClick={acceptAllDraftCards} className="h-8">
+                  <Check className="mr-2 h-3.5 w-3.5" /> Accept All Findings & Events
+                </Button>
+              </div>
             </div>
           )}
         </div>

@@ -82,6 +82,7 @@ The app is still evolving quickly, but the core standalone stack is usable local
 ### Mobile / PWA
 
 - Installable PWA/SWA-style experience on Android.
+- Capacitor Android APK scaffold under `android/`; see [`docs/APK_BUILD.md`](docs/APK_BUILD.md) for the debug APK build path.
 - Service worker shell caching tuned to reduce foreground-return reloads.
 - Local notification support for Settings test alerts and background task completion alerts while the app/service worker is available.
 - Current notification support is local browser/PWA notification support, not full remote push. True closed-app push would require VAPID keys, push subscriptions, subscription storage, and backend send routes.

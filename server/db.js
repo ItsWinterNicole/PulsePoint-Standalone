@@ -37,7 +37,31 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_entities_entity_created ON entities(entity, created_date);
     CREATE INDEX IF NOT EXISTS idx_entities_entity_updated ON entities(entity, updated_date);
+
+    CREATE TABLE IF NOT EXISTS local_vision_results (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      record_type TEXT NOT NULL,
+      video_path TEXT NOT NULL,
+      start_ms INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      engine TEXT NOT NULL,
+      model_name TEXT,
+      analysis_type TEXT NOT NULL DEFAULT 'window',
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_vision_results_session ON local_vision_results(session_id, record_type, created_at);
   `);
+
+  const localVisionColumns = db.prepare("PRAGMA table_info(local_vision_results)").all().map((row) => row.name);
+  if (!localVisionColumns.includes('model_name')) {
+    db.exec("ALTER TABLE local_vision_results ADD COLUMN model_name TEXT");
+  }
+  if (!localVisionColumns.includes('analysis_type')) {
+    db.exec("ALTER TABLE local_vision_results ADD COLUMN analysis_type TEXT NOT NULL DEFAULT 'window'");
+  }
 
   const count = db.prepare("SELECT COUNT(*) AS c FROM entities WHERE entity = 'User'").get().c;
   if (!count) {

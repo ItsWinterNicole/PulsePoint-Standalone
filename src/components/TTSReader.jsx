@@ -19,6 +19,7 @@ import { base44 } from "@/api/base44Client";
 import { buildAudioChapterBundle, downloadChapterSidecars } from "@/lib/audioChapters";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { serverUrl } from "@/lib/mobileApiBase";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -954,9 +955,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const triggerRemoteChapterDownloads = (exportRecord = savedServerExport) => {
     const links = [
-      { url: exportRecord?.chapter_json_url, suffix: ".chapters.json" },
-      { url: exportRecord?.chapter_cue_url, suffix: ".cue" },
-      { url: exportRecord?.chapter_txt_url, suffix: ".chapters.txt" },
+      { url: serverUrl(exportRecord?.chapter_json_url), suffix: ".chapters.json" },
+      { url: serverUrl(exportRecord?.chapter_cue_url), suffix: ".cue" },
+      { url: serverUrl(exportRecord?.chapter_txt_url), suffix: ".chapters.txt" },
     ].filter((entry) => entry.url);
     links.forEach((entry, index) => {
       window.setTimeout(() => {
@@ -1020,7 +1021,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const triggerSavedExportDownload = (exportRecord) => {
     const a = document.createElement("a");
-    a.href = exportRecord.file_url;
+    a.href = serverUrl(exportRecord.file_url);
     a.download = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
     a.click();
     saveDownloadRecord({
@@ -1044,7 +1045,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
     const filename = getAudioDownloadFilename(rendered.format || exportFormat);
     const a = document.createElement("a");
-    a.href = rendered.file_url;
+    a.href = serverUrl(rendered.file_url);
     a.download = filename;
     a.click();
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
+import { serverUrl } from "@/lib/mobileApiBase";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw, History, Image as ImageIcon, Upload, X } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
@@ -228,6 +229,68 @@ function normalizeAnatomicalProfileResult(raw) {
     return { overview: parsed.raw };
   }
   return parsed;
+}
+
+function normalizeImageReviewAnnotations(raw = {}) {
+  const annotationImages = Array.isArray(raw.annotated_images) ? raw.annotated_images : [];
+  const regionFindings = Array.isArray(raw.image_region_findings) ? raw.image_region_findings : [];
+  return {
+    annotated_images: annotationImages
+      .map((image, index) => ({
+        image_id: String(image?.image_id || `img_${String(index + 1).padStart(3, "0")}`),
+        view_label: String(image?.view_label || image?.label || "").trim(),
+        body_position: String(image?.body_position || "").trim(),
+        coverage: String(image?.coverage || "").trim(),
+        visibility_notes: String(image?.visibility_notes || "").trim(),
+        major_regions_visible: Array.isArray(image?.major_regions_visible)
+          ? image.major_regions_visible.map((item) => String(item || "").trim()).filter(Boolean)
+          : [],
+      }))
+      .filter((image) => image.image_id),
+    image_region_findings: regionFindings
+      .map((finding, index) => {
+        const pin = finding?.pin && typeof finding.pin === "object"
+          ? {
+            x: Number.isFinite(Number(finding.pin.x)) ? Math.max(0, Math.min(100, Number(finding.pin.x))) : null,
+            y: Number.isFinite(Number(finding.pin.y)) ? Math.max(0, Math.min(100, Number(finding.pin.y))) : null,
+          }
+          : null;
+        const box = finding?.box && typeof finding.box === "object"
+          ? {
+            x: Number.isFinite(Number(finding.box.x)) ? Math.max(0, Math.min(100, Number(finding.box.x))) : null,
+            y: Number.isFinite(Number(finding.box.y)) ? Math.max(0, Math.min(100, Number(finding.box.y))) : null,
+            width: Number.isFinite(Number(finding.box.width)) ? Math.max(0, Math.min(100, Number(finding.box.width))) : null,
+            height: Number.isFinite(Number(finding.box.height)) ? Math.max(0, Math.min(100, Number(finding.box.height))) : null,
+          }
+          : null;
+        return {
+          finding_id: String(finding?.finding_id || `finding_${String(index + 1).padStart(3, "0")}`),
+          image_id: String(finding?.image_id || "").trim(),
+          section_key: String(finding?.section_key || "").trim(),
+          region: String(finding?.region || "").trim(),
+          label: String(finding?.label || finding?.region || "Visible finding").trim(),
+          finding: String(finding?.finding || finding?.summary || "").trim(),
+          confidence: String(finding?.confidence || "uncertain").trim(),
+          visibility: String(finding?.visibility || "").trim(),
+          evidence_level: String(finding?.evidence_level || "").trim(),
+          limitations: Array.isArray(finding?.limitations)
+            ? finding.limitations.map((item) => String(item || "").trim()).filter(Boolean)
+            : [],
+          pin: pin?.x != null && pin?.y != null ? pin : null,
+          box: box?.x != null && box?.y != null && box?.width != null && box?.height != null ? box : null,
+        };
+      })
+      .filter((finding) => finding.image_id && (finding.finding || finding.region || finding.label)),
+  };
+}
+
+function normalizeImageReviewResult(raw) {
+  const parsed = normalizeAnatomicalProfileResult(raw);
+  if (!parsed) return null;
+  return {
+    ...parsed,
+    ...normalizeImageReviewAnnotations(parsed),
+  };
 }
 
 function aiErrorMessage(error) {
@@ -714,6 +777,117 @@ function imageFileToPayload(file) {
   });
 }
 
+function stripDataUrl(value) {
+  return String(value || "").replace(/^data:[^;]+;base64,/, "");
+}
+
+function normalizeMediaType(value = "") {
+  const mediaType = String(value || "").trim();
+  if (mediaType.startsWith("image/")) return mediaType;
+  return "image/jpeg";
+}
+
+function scoreSavedProfileImageGroup({ message, replyText = "", purpose = "general" }) {
+  const text = `${message?.text || ""} ${replyText}`.toLowerCase();
+  if (!text.trim()) return 0;
+
+  const countMatches = (terms) => terms.reduce((sum, term) => sum + (text.includes(term) ? 1 : 0), 0);
+  const headToToePositive = [
+    "full-body", "full body", "whole-body", "whole body", "head-to-toe", "head to toe",
+    "standing", "anterior", "posterior", "lateral", "front view", "back view", "side view",
+    "baseline set", "body baseline", "body-reference", "body reference", "posture", "alignment",
+    "habitus", "torso", "abdomen", "chest", "shoulder", "build", "table position",
+  ];
+  const headToToeNegative = [
+    "close-up", "pelvic", "perineal", "perianal", "genital", "glans", "meatus", "foreskin",
+    "scrotal", "catheter", "foley", "sounding", "dilator", "urethral", "lithotomy",
+  ];
+  const pelvicPositive = [
+    "pelvic", "perineal", "perianal", "genital", "glans", "meatus", "foreskin", "shaft",
+    "scrotal", "scrotum", "anus", "anal", "catheter", "foley", "sounding", "dilator",
+    "urethral", "lithotomy", "table-position", "table position",
+  ];
+  const pelvicNegative = ["full-body", "full body", "whole-body", "whole body", "standing views"];
+
+  if (purpose === "head_to_toe_body_reference") {
+    return countMatches(headToToePositive) * 4 - countMatches(headToToeNegative) * 3;
+  }
+  if (purpose === "pelvic_genital") {
+    return countMatches(pelvicPositive) * 4 - countMatches(pelvicNegative) * 2;
+  }
+  return 0;
+}
+
+function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose = "general" } = {}) {
+  const messages = Array.isArray(userProfile?.profile_chat_messages) ? userProfile.profile_chat_messages : [];
+  const seen = new Set();
+  const groups = [];
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
+    const attachments = Array.isArray(message?.imageAttachments) ? message.imageAttachments : [];
+    const imageAttachments = attachments.filter((attachment) => !attachment?.sourceVideo);
+    if (!imageAttachments.length) continue;
+    const reply = messages.slice(messageIndex + 1).find((candidate) => candidate?.role !== "user" && String(candidate?.text || "").trim());
+    const replyText = String(reply?.text || "");
+    const groupScore = scoreSavedProfileImageGroup({ message, replyText, purpose });
+    const createdAt = imageAttachments.map((attachment) => attachment.createdAt).filter(Boolean).sort().at(-1) || "";
+    const items = [];
+    for (const attachment of imageAttachments) {
+      if (attachment?.sourceVideo) continue;
+      const url = attachment.previewUrl || attachment.storagePath || "";
+      if (!url) continue;
+      const key = attachment.storagePath || attachment.previewUrl || attachment.id || attachment.filename;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        id: attachment.id || key,
+        filename: attachment.filename || "saved-profile-image.jpg",
+        media_type: normalizeMediaType(attachment.mimeType || attachment.media_type),
+        url,
+        saved_at: attachment.createdAt || message.createdAt || null,
+        source: "saved_profile_qa_attachment",
+        selection_score: groupScore,
+        selection_context: purpose,
+      });
+    }
+    if (items.length) groups.push({ score: groupScore, createdAt, items });
+  }
+
+  const sortedGroups = groups
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0);
+    });
+
+  return sortedGroups.flatMap((group) => group.items).slice(0, limit);
+}
+
+async function savedAttachmentToPayload(attachment) {
+  const url = serverUrl(attachment.url);
+  if (!url) throw new Error(`Saved image ${attachment.filename || ""} has no reusable URL.`);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not load saved image ${attachment.filename || url}.`);
+  const blob = await response.blob();
+  const mediaType = normalizeMediaType(blob.type || attachment.media_type);
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error(`Could not read saved image ${attachment.filename || url}.`));
+    reader.readAsDataURL(blob);
+  });
+  return {
+    id: attachment.id || `${attachment.filename}-${attachment.saved_at || ""}`,
+    filename: attachment.filename || "saved-profile-image.jpg",
+    media_type: mediaType,
+    data: stripDataUrl(dataUrl),
+    previewUrl: dataUrl,
+    storagePath: attachment.url || "",
+    source: attachment.source || "saved_profile_qa_attachment",
+    saved_at: attachment.saved_at || null,
+  };
+}
+
 function compactProfileJsonValue(value) {
   if (value == null) return null;
   if (typeof value === "string") return value.trim() ? value.trim() : null;
@@ -786,6 +960,7 @@ function buildProfileImageReviewContext({ userProfile, sessions = [], bodyExplor
   const qaEntries = normalizeProfileQaFindings(userProfile?.profile_qa_findings);
   const qaCards = buildProfileQaFindingCards(userProfile?.profile_qa_findings, userProfile?.first_name).slice(0, 45);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+  const reusableProfileImages = collectSavedProfileImageAttachments(userProfile, { limit: 12, purpose: "pelvic_genital" });
   const compactMetrics = compactProfileJsonValue({
     anatomical_mechanical_profile: userProfile?.anatomical_mechanical_profile,
     profile_notes: userProfile?.profile_notes || userProfile?.notes,
@@ -805,10 +980,14 @@ function buildProfileImageReviewContext({ userProfile, sessions = [], bodyExplor
   return `
 PROFILE IMAGE REVIEW SOURCE CONTEXT:
 - If fresh images are attached in this run, use them as the primary source for directly visible anatomy, position, tissue state, and image-limited observations.
-- If no fresh images are attached, synthesize from the existing uploaded/reviewed evidence below: saved Q&A visual reviews, session image/video findings, body-exploration image/video findings, entered profile metrics, and session evidence.
-- Use saved Q&A findings, entered profile metrics, and session/body-exploration evidence as historical/mechanical context. Reconcile them with fresh images when present instead of ignoring them.
+- If no fresh images are attached, make existing saved evidence the primary evidence base: saved Profile Q&A visual reviews, reusable saved Profile Q&A image attachments when available, session image/video findings, body-exploration image/video findings, entered profile metrics, and session evidence.
+- Use saved Q&A findings, reusable saved media, entered profile metrics, and session/body-exploration evidence as first-class profile evidence. Reconcile them with fresh images when present instead of ignoring them.
 - If saved context conflicts with fresh images or with another saved visual review, state the mismatch and explain which source is stronger for that claim.
 - Do not let profile history make you overcall something that is not visible.
+
+REUSABLE SAVED PROFILE Q&A IMAGE ATTACHMENTS:
+- Saved non-video Profile Q&A image attachments available for reuse: ${reusableProfileImages.length}.
+${reusableProfileImages.length ? reusableProfileImages.slice(0, 12).map((image, index) => `- Reference view ${reviewImageLetter(index)}${image.saved_at ? ` saved ${formatGeneratedAt(image.saved_at)}` : ""}.`).join("\n") : "- None reusable from saved chat messages."}
 
 SAVED PROFILE Q&A FINDINGS (${qaEntries.length} entries; showing up to ${qaCards.length} deduplicated findings):
 ${qaCards.length ? qaCards.map((card, index) => `${index + 1}. ${card.finding} (${card.sourceLabel}, ${card.timestamp})`).join("\n") : "- None saved."}
@@ -826,12 +1005,92 @@ ${visualEvidence.text}
 `;
 }
 
+function buildHeadToToeImageReviewContext({
+  userProfile,
+  sessions = [],
+  bodyExplorations = [],
+  hasFreshImages = false,
+  hasReusedSavedImages = false,
+}) {
+  const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+  const qaEntries = normalizeProfileQaFindings(userProfile?.profile_qa_findings);
+  const qaCards = buildProfileQaFindingCards(userProfile?.profile_qa_findings, userProfile?.first_name).slice(0, 36);
+  const reusableProfileImages = collectSavedProfileImageAttachments(userProfile, { limit: 12, purpose: "head_to_toe_body_reference" });
+  const compactMetrics = compactProfileJsonValue({
+    age: userProfile?.age,
+    sex: userProfile?.sex,
+    height: userProfile?.height,
+    weight: userProfile?.weight,
+    fitness_level: userProfile?.fitness_level,
+    profile_notes: userProfile?.profile_notes || userProfile?.notes,
+    medical_context: userProfile?.medical_context,
+    physiology_notes: userProfile?.physiology_notes,
+  });
+
+  return `
+HEAD-TO-TOE BODY REFERENCE SOURCE CONTEXT:
+- Fresh images attached in this run: ${hasFreshImages ? "yes" : "no"}.
+- Saved Profile Q&A images reloaded in this run: ${hasReusedSavedImages ? "yes" : "no"}.
+- Use fresh attached images, when present, as the primary source for directly visible whole-body anatomy, posture, habitus, alignment, skin/surface findings, and reference quality.
+- If saved Profile Q&A images were reloaded, review them directly as saved/reused body-reference evidence. Do not act as if prior photos are absent.
+- If no image payload is attached, use saved Profile Q&A visual findings and saved media-review digests as previously reviewed evidence. Do not reduce them to "nothing available."
+- Saved profile metrics may provide limited context for age, height, weight, general fitness/body context, or known non-visual limitations, but they do not create visible findings.
+- Existing reviewed visual evidence is allowed as evidence when it directly describes whole-body, torso, abdomen, posture, limb, foot, skin/surface, habitus, symmetry, or body-reference visibility.
+- Do not mine saved evidence for a long pelvic, device-fit, urethral, stimulation, ejaculation, session chronology, or foot-arousal-history narrative in this head-to-toe artifact.
+- If saved evidence is mostly pelvic, genital, device, foot-camera, or session-specific, keep that material brief and state the head-to-toe limits. If saved/reused images actually show body regions, assess those regions instead of saying no reference exists.
+- Genital/pelvic findings may be mentioned only briefly as a visible body region when fresh head-to-toe/body-reference images show them. Detailed meatal, catheter, sound/dilator, Foley, urethral accommodation, genital measurement, device-fit, arousal-state, ejaculation, or stimulation-mechanics material belongs in the dedicated pelvic/genital review, not here.
+- Foot and lower-limb observations should be anatomical reference observations only: resting posture, toe/foot alignment, symmetry, visible swelling/deformity, skin/surface findings, or image limitations. Do not turn session foot-camera motion history into arousal/climax physiology in this artifact.
+- Avoid dates, session names, event sequences, device sizes, sensory maps, stimulation techniques, and previously reviewed close-up genital chronology unless they are needed to explain why a region cannot be assessed in the head-to-toe reference.
+
+REUSABLE SAVED PROFILE Q&A IMAGE ATTACHMENTS:
+- Saved non-video Profile Q&A image attachments available for reuse: ${reusableProfileImages.length}.
+${reusableProfileImages.length ? reusableProfileImages.slice(0, 12).map((image, index) => `- Reference view ${reviewImageLetter(index)}${image.saved_at ? ` saved ${formatGeneratedAt(image.saved_at)}` : ""}.`).join("\n") : "- None reusable from saved chat messages."}
+
+SAVED PROFILE Q&A FINDINGS (${qaEntries.length} entries; showing up to ${qaCards.length} deduplicated findings):
+${qaCards.length ? qaCards.map((card, index) => `${index + 1}. ${card.finding} (${card.sourceLabel}, ${card.timestamp})`).join("\n") : "- None saved."}
+
+ENTERED GENERAL PROFILE CONTEXT:
+${compactMetrics ? JSON.stringify(compactMetrics, null, 2) : "- None saved."}
+
+EXISTING REVIEWED VISUAL EVIDENCE DIGEST:
+- Session visual-review entries: ${visualEvidence.counts.session_visual_entries}.
+- Session video-pass finding cards: ${visualEvidence.counts.session_video_passes}.
+- Body exploration visual-review entries: ${visualEvidence.counts.body_exploration_visual_entries}.
+- Body exploration video-pass finding cards: ${visualEvidence.counts.body_exploration_video_passes}.
+
+${visualEvidence.text}
+`;
+}
+
+function reviewImageLetter(index) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const safe = Math.max(0, Number(index) || 0);
+  if (safe < alphabet.length) return alphabet[safe];
+  return `${alphabet[safe % alphabet.length]}${Math.floor(safe / alphabet.length) + 1}`;
+}
+
+function buildImageReviewReferences(images = []) {
+  return images.map((image, index) => ({
+    image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
+    display_label: image.display_label || `Reference view ${reviewImageLetter(index)}`,
+    source: image.source || "fresh_upload",
+    preview_url: image.source === "saved_profile_qa_attachment" ? (image.storagePath || image.url || "") : "",
+    media_type: image.media_type || "image/jpeg",
+  }));
+}
+
 function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, evidenceCounts = {}) {
+  const freshImages = images.filter((image) => image.source !== "saved_profile_qa_attachment");
+  const reusedImages = images.filter((image) => image.source === "saved_profile_qa_attachment");
+  const reviewedImages = buildImageReviewReferences(images);
   return {
     ...buildProfileAIContentMeta(sessions, previousMeta, null),
-    fresh_image_count: images.length,
+    fresh_image_count: freshImages.length,
+    reused_saved_image_count: reusedImages.length,
     image_count: images.length,
     image_filenames: images.map((image) => image.filename).filter(Boolean),
+    reused_saved_image_filenames: reusedImages.map((image) => image.filename).filter(Boolean),
+    reviewed_images: reviewedImages,
     source_kind: "profile_image_review",
     existing_visual_evidence_counts: evidenceCounts,
   };
@@ -841,6 +1100,162 @@ function profileReviewResultSections(config) {
   return config.sections || [];
 }
 
+function imageReviewReferencePromptLines(images = []) {
+  const refs = buildImageReviewReferences(images);
+  if (!refs.length) return "- No directly attached images in this run.";
+  return refs.map((ref) => (
+    `- ${ref.image_id}: ${ref.display_label}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`
+  )).join("\n");
+}
+
+function confidenceLabel(value = "") {
+  const text = String(value || "").replace(/_/g, " ").trim();
+  return text || "uncertain";
+}
+
+function sectionLabelForKey(sections = [], key = "") {
+  return sections.find((section) => section.key === key)?.label || String(key || "").replace(/_/g, " ");
+}
+
+function profileImageById(result, imageId, transientImages = []) {
+  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
+  const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
+  const transient = transientImages.map((image, index) => ({
+    image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
+    preview_url: image.previewUrl || "",
+    display_label: image.display_label || `Reference view ${reviewImageLetter(index)}`,
+  }));
+  const image = reviewed.find((item) => item.image_id === imageId) || {};
+  const annotation = annotated.find((item) => item.image_id === imageId) || {};
+  const transientImage = transient.find((item) => item.image_id === imageId) || {};
+  return {
+    ...image,
+    ...transientImage,
+    ...annotation,
+    display_label: annotation.view_label || transientImage.display_label || image.display_label || "Reviewed view",
+  };
+}
+
+function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primary))", transientImages = [] }) {
+  const findings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
+  const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
+  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
+  const imageIds = [...new Set([
+    ...reviewed.map((image) => image.image_id).filter(Boolean),
+    ...annotated.map((image) => image.image_id).filter(Boolean),
+    ...findings.map((finding) => finding.image_id).filter(Boolean),
+  ])];
+
+  if (!imageIds.length && !findings.length) return null;
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/10 p-3 space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
+            <ImageIcon className="h-3.5 w-3.5" /> Annotated Anatomy Reference
+          </h4>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Sarah-linked body-region findings. Pins are approximate visual anchors, not measurement-grade anatomy marks.
+          </p>
+        </div>
+        <Badge variant="outline" className="text-[10px]">{findings.length} region finding{findings.length === 1 ? "" : "s"}</Badge>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {imageIds.map((imageId) => {
+          const image = profileImageById(result, imageId, transientImages);
+          const imageFindings = findings.filter((finding) => finding.image_id === imageId);
+          const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
+          return (
+            <div key={imageId} className="overflow-hidden rounded-lg border border-border bg-card/80">
+              <div className="relative aspect-[4/3] bg-black">
+                {image.preview_url ? (
+                  <img src={serverUrl(image.preview_url)} alt={image.display_label || "Reviewed anatomy reference"} className="h-full w-full object-contain" />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
+                    Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews.
+                  </div>
+                )}
+                {pinnedFindings.map((finding, index) => (
+                  <div
+                    key={`${finding.finding_id}-pin`}
+                    className="absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-primary text-[10px] font-bold text-primary-foreground shadow-lg"
+                    style={{ left: `${finding.pin.x}%`, top: `${finding.pin.y}%` }}
+                    title={finding.label}
+                  >
+                    {index + 1}
+                  </div>
+                ))}
+                {imageFindings.filter((finding) => finding.box).map((finding) => (
+                  <div
+                    key={`${finding.finding_id}-box`}
+                    className="absolute rounded border-2 border-primary/80 bg-primary/10"
+                    style={{
+                      left: `${finding.box.x}%`,
+                      top: `${finding.box.y}%`,
+                      width: `${finding.box.width}%`,
+                      height: `${finding.box.height}%`,
+                    }}
+                    title={finding.label}
+                  />
+                ))}
+              </div>
+              <div className="space-y-2 p-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{image.display_label || "Reviewed view"}</p>
+                  {(image.body_position || image.coverage || image.visibility_notes) && (
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                  {Array.isArray(image.major_regions_visible) && image.major_regions_visible.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {image.major_regions_visible.slice(0, 8).map((region) => (
+                        <Badge key={region} variant="secondary" className="text-[10px]">{region}</Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {imageFindings.length > 0 ? (
+                  <div className="space-y-2">
+                    {imageFindings.map((finding, index) => (
+                      <div key={finding.finding_id} className="rounded-lg border border-border bg-background/60 p-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {finding.pin && (
+                            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                              {index + 1}
+                            </span>
+                          )}
+                          <span className="text-xs font-semibold text-foreground">{finding.label || finding.region || "Visible finding"}</span>
+                          <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
+                          {finding.section_key && (
+                            <Badge variant="secondary" className="h-5 text-[10px]">{sectionLabelForKey(sections, finding.section_key)}</Badge>
+                          )}
+                        </div>
+                        {finding.finding && (
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{finding.finding}</p>
+                        )}
+                        {finding.limitations?.length > 0 && (
+                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                            Limits: {finding.limitations.join("; ")}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No region-specific callouts were returned for this view.</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   title: "Head-to-Toe Image Review",
   shortTitle: "Head-to-Toe",
@@ -848,27 +1263,50 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   resultKey: "head_to_toe_image_review_result",
   archiveKey: "head_to_toe_image_review_archive",
   ttsSessionId: "profile-head-to-toe-image-review",
+  contextScope: "head_to_toe_body_reference",
+  maxImages: 5,
   icon: <ImageIcon className="w-4 h-4" />,
   color: "hsl(var(--chart-4))",
-  purpose: "Nude whole-body image review in anatomical position, standing, prone, supine, seated, or on-table positioning.",
-  helper: "Review saved whole-body/profile evidence from Q&A, sessions, body exploration, entered metrics, and prior Sarah media reviews. Fresh images are optional add-on evidence for posture, alignment, body habitus, skin/surface findings, table positioning, and profile-context fit.",
-  emptyText: "Click Review Existing Evidence to synthesize saved profile/media evidence, or add anatomical-position/table-position images if you want a fresh visual reference in this run.",
+  purpose: "Whole-body anatomical reference review in anatomical position, standing, prone, supine, seated, or supported positioning.",
+  helper: "Review saved whole-body/profile evidence from Q&A, sessions, body exploration, entered metrics, and prior Sarah media reviews. Fresh images are optional add-on evidence for posture, alignment, body habitus, skin/surface findings, body symmetry, and reference quality.",
+  emptyText: "Review Existing Evidence uses saved profile/body-reference findings first. Add anatomical-position/body-reference images only when you want to expand the reference set; pelvic/session-specific evidence will stay limited here.",
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
-- Focus on whole-body anatomy and physiology-relevant visual context: posture, alignment, symmetry, body habitus, soft tissue distribution, skin/surface findings, limb positioning, hands, feet, and table/standing setup.
-- Include pelvic/genital visibility only as broad positioning context. Save detailed genital, meatal, scrotal, perineal, instrumentation, or pelvic-floor review for the dedicated pelvic/genital panel.
-- Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics. Highlight useful continuity and mismatches.
-- Describe image-taking limitations that would improve future reviews, such as missing anterior/posterior/lateral views, posture angle, lighting, cropping, scale reference, or supine/prone mismatch.
+- Produce a detailed anatomical and A&P-focused review of the image set while keeping the analysis centered on the body.
+- Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and limitations.
+- Use the environment only as brief context for lighting quality, camera angle, image completeness, visibility limitations, posture/reference setup, or support surfaces that directly affect body position.
+- Do not write a room inventory. Do not identify, speculate about, or side-investigate incidental objects, pocket contents, phone outlines, equipment, screen details, clutter, waistband shapes, or holster/device prints unless they directly affect body visibility, positioning, safety of interpretation, image quality, or frame/reference context.
+- If an incidental object is visible but not clinically/image-review relevant, ignore it.
+- Keep the language clinical, neutral, practical, and anatomically literate. Adult anatomy and nudity are in scope when present, but the review must not become erotic or moralizing.
+- Separate visible findings from interpretation. Do not infer psychology, arousal, pain, function, dominance, intent, or session state from static posture alone.
+- If nudity or genital anatomy is visible, describe only clinically relevant visibility, position, symmetry, skin/surface findings, resting state, and limitations. Use cautious terms such as flaccid, partial erection, erection, obscured, or uncertain only when visually assessable.
+- Do not use this head-to-toe review to summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, device-fit, or genital measurement history. Those belong in the pelvic/genital or session analysis artifacts.
+- If fresh images are absent or the available saved evidence does not include actual head-to-toe/body-reference views, keep the review appropriately short: state what evidence exists, what body regions are not assessable, and what reference images are needed next. Do not compensate by adding unrelated detailed pelvic/session findings.
+- Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
+- Organize the output using these body-centered sections:
+  1. Image Set Overview: number of images/views, body positions/views captured, clothing/nude status where relevant to visibility, image quality, lighting, adequacy for anatomical reference, and major limitations. Keep this concise and do not catalog the room.
+  2. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, stance/positioning, and what can/cannot be assessed.
+  3. Posture & Alignment: head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, anterior/posterior/lateral differences, and limitations from clothing/angle/stance.
+  4. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible, and confidence limits.
+  5. Skin & Surface Findings: only visible skin tone, redness, bruising, rash, swelling, scars/marks, vascularity, surface asymmetry, and limitations. Do not invent skin findings.
+  6. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
+  7. Region-Specific Anatomical Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis/genital region, gluteal/posterior pelvis, upper limbs/hands, lower limbs/feet when visible and appropriate.
+  8. Reference Value for PulsePoint: usefulness as a baseline for posture, body symmetry, limb alignment, body habitus, visible surface findings, future session comparison, and motion/telemetry/video interpretation.
+  9. Limitations: clothing/shoes coverage, missing scale reference, camera angle/perspective, lighting/resolution, occluded regions, static-image limitations, and what cannot be assessed.
+  10. Suggested Next Reference Images: only if useful, recommend barefoot anterior/posterior/lateral views, anatomical position with arms relaxed, supine/prone/seated views, closer regional images for skin/surface findings, scale reference, and consistent lighting/camera distance.
+- Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "cannot be assessed" over stronger wording.
 `,
   sections: [
+    { key: "image_set_overview", label: "Image Set Overview", color: "hsl(var(--chart-1))" },
     { key: "overall_body_overview", label: "Overall Body Overview", color: "hsl(var(--chart-4))" },
     { key: "posture_alignment", label: "Posture & Alignment", color: "hsl(var(--chart-2))" },
     { key: "body_habitus_soft_tissue", label: "Body Habitus & Soft Tissue", color: "hsl(var(--primary))" },
     { key: "skin_surface_findings", label: "Skin & Surface Findings", color: "hsl(var(--chart-3))" },
     { key: "musculoskeletal_and_limb_findings", label: "Musculoskeletal, Limb, Hand & Foot Findings", color: "hsl(var(--chart-5))" },
-    { key: "positioning_and_table_context", label: "Positioning & Table Context", color: "hsl(var(--chart-1))" },
-    { key: "profile_context_reconciliation", label: "Profile Context Reconciliation", color: "hsl(var(--chart-2))" },
-    { key: "limitations_and_next_images", label: "Limitations & Next Images", color: "hsl(var(--muted-foreground))", required: false },
+    { key: "region_specific_anatomical_findings", label: "Region-Specific Anatomical Findings", color: "hsl(var(--chart-2))" },
+    { key: "reference_value_for_pulsepoint", label: "Reference Value for PulsePoint", color: "hsl(var(--chart-1))" },
+    { key: "limitations", label: "Limitations", color: "hsl(var(--muted-foreground))" },
+    { key: "suggested_next_reference_images", label: "Suggested Next Reference Images", color: "hsl(var(--muted-foreground))", required: false },
   ],
 };
 
@@ -882,8 +1320,8 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   icon: <User className="w-4 h-4" />,
   color: "hsl(var(--chart-2))",
   purpose: "Detailed pelvis, external genital, anal/perianal, glans/meatus/foreskin, scrotal/perineal, tissue-state, physiology, and visible device-fit context review grounded in supplied photos and video clips.",
-  helper: "Review saved pelvic/genital visual evidence from Q&A, sessions, body exploration, entered measurements, and prior Sarah media reviews. Fresh focused images are optional when you want to add new visible evidence to the existing profile.",
-  emptyText: "Click Review Existing Evidence to synthesize saved pelvic/genital visual findings, or add focused images if you want fresh review of external anatomy, tissue context, meatus/glans/foreskin, scrotum/perineum, anus/perianal anatomy, and fit/instrumentation context.",
+  helper: "Review saved pelvic/genital visual evidence from Q&A photos, sessions, body exploration, entered measurements, and prior Sarah media reviews. Saved evidence is the default; fresh focused images are optional add-on evidence.",
+  emptyText: "Click Review Existing Evidence to reuse saved Profile Q&A image evidence and synthesize saved pelvic/genital findings. Add focused images only when you want to add new evidence to the existing profile.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
 - Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and evidence limitations.
@@ -948,35 +1386,99 @@ function ProfileImageReviewPanel({
     setLoading(true);
     setError("");
     try {
-      const groundingContext = buildAIGroundingContext(userProfile);
+      const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
       const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
-      const imageReviewContext = buildProfileImageReviewContext({ userProfile, sessions, bodyExplorations });
+      const freshImagePayload = images
+        .map((image) => ({
+          filename: image.filename,
+          media_type: image.media_type,
+          data: image.data,
+          source: "fresh_upload",
+        }))
+        .filter((image) => image.media_type && image.data)
+        .slice(0, config.maxImages || 5);
+      let reusedSavedImages = [];
+      let savedImageLoadWarning = "";
+      if (!freshImagePayload.length) {
+        const savedAttachments = collectSavedProfileImageAttachments(userProfile, {
+          limit: config.maxImages || 5,
+          purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
+        });
+        const loaded = [];
+        for (const attachment of savedAttachments) {
+          try {
+            loaded.push(await savedAttachmentToPayload(attachment));
+          } catch (savedImageError) {
+            savedImageLoadWarning = savedImageError?.message || "Some saved Profile Q&A images could not be reloaded.";
+          }
+        }
+        reusedSavedImages = loaded.slice(0, config.maxImages || 5);
+      }
+      const imagePayload = (freshImagePayload.length ? freshImagePayload : reusedSavedImages)
+        .slice(0, config.maxImages || 5)
+        .map((image, index) => ({
+          ...image,
+          image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
+          display_label: image.display_label || `Reference view ${reviewImageLetter(index)}`,
+        }));
+      const hasFreshImages = freshImagePayload.length > 0;
+      const hasImagePayload = imagePayload.length > 0;
+      const hasReusedSavedImages = !freshImagePayload.length && reusedSavedImages.length > 0;
+      const groundingContext = isHeadToToeBodyReference ? "" : buildAIGroundingContext(userProfile);
+      const imageReviewContext = isHeadToToeBodyReference
+        ? buildHeadToToeImageReviewContext({ userProfile, sessions, bodyExplorations, hasFreshImages, hasReusedSavedImages })
+        : buildProfileImageReviewContext({ userProfile, sessions, bodyExplorations });
       const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
-      const imagePayload = images.map((image) => ({
-        filename: image.filename,
-        media_type: image.media_type,
-        data: image.data,
-      }));
+      const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
+      const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
+      const imagePresenceRules = hasImagePayload
+        ? hasReusedSavedImages
+          ? `SAVED IMAGE REUSE DIRECTIVE - HIGHEST PRIORITY:
+- ${imagePayload.length} saved Profile Q&A image${imagePayload.length === 1 ? " has" : "s have"} been reloaded and attached to this request.
+- Review these saved images directly as reused profile evidence. They are not new uploads, but they are available to inspect in this run.
+- Do not say the prior photos are unavailable or that direct image review is not occurring.
+- Reconcile these saved images with saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements.`
+          : `FRESH IMAGE DIRECTIVE - HIGHEST PRIORITY:
+- ${imagePayload.length} fresh image${imagePayload.length === 1 ? " is" : "s are"} attached to this request and included in the model message.
+- Review those attached image${imagePayload.length === 1 ? "" : "s"} directly as the primary evidence.
+- Do not say "no fresh images are attached", "no fresh images are available", or "direct re-examination is not occurring."
+- Existing saved evidence is supporting context and must be reconciled with the attached photos.`
+        : `SAVED EVIDENCE DIRECTIVE:
+- No fresh or reusable saved image payload is attached to this request.
+- Use previously reviewed/saved Profile Q&A visual findings, session/body-exploration visual findings, entered metrics, and saved media digests as the evidence base.
+- Say "saved reviewed evidence" or "previously reviewed evidence" instead of implying the profile has no images.
+- Do not frame additional photos as required; list them only as optional ways to improve coverage.`;
       const raw = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         max_tokens: 7000,
-        ...(imagePayload.length ? { images: imagePayload } : {}),
+        ...(imagePayload.length ? {
+          images: imagePayload.map((image) => ({
+            filename: `${image.image_id || "profile_reference"}.jpg`,
+            media_type: image.media_type,
+            data: image.data,
+          })),
+        } : {}),
         prompt: `You are Sarah, performing a dedicated profile image review for PulsePoint.
 
 Review type: ${config.title}
 Review purpose: ${config.purpose}
+Attached fresh image count: ${freshImagePayload.length}.
+Attached reused saved image count: ${hasReusedSavedImages ? imagePayload.length : 0}.
+${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
 
 ${groundingContext}
 ${imageReviewContext}
-${ANATOMICAL_REFERENCE_FOCUS_RULE}
+${imagePresenceRules}
+${anatomicalFocusRule}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
-${SESSION_CONTEXT_GROUNDING_RULE}
+${sessionGroundingRule}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
-- If fresh images are attached to this request, analyze what is visible in those images and reconcile it with saved profile context.
-- If no fresh images are attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying you are directly seeing the original media again.
+- If fresh images are attached to this request, analyze what is visible in those images first and reconcile cautiously with saved profile context where useful.
+- If saved Profile Q&A images are reloaded into this request, analyze them directly as saved/reused visual evidence and reconcile them with saved findings.
+- If no image payload is attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying the profile has no images.
 - Use existing Q&A findings, entered profile metrics, and session/video/body-exploration evidence as context, not as permission to invent visible findings.
 - Keep this artifact focused on anatomical/media-reference evidence. Do not expand into broad personal history, psychological backstory, reclaiming/history framing, whole-life meaning, or session optimization unless it directly explains a visible anatomical, mechanical, device-fit, safety, or session-specific physiological finding.
 - Do not eroticize the image or write arousal-focused prose.
@@ -987,27 +1489,96 @@ IMAGE REVIEW RULES:
 - Separate direct visual observations from cautious profile implications.
 - Prefer specific observations over generic filler.
 - Preserve uncertainty. Use "appears", "is visible", "may reflect", or "cannot be assessed from this image" where appropriate.
+- Do not mention uploaded filenames, storage IDs, camera roll numbers, or raw image numbers in the user-facing review.
+- When distinguishing views, use plain view labels such as anterior standing view, posterior standing view, lateral view, table-position view, close-up pelvic view, or saved image set.
+- Do not write paragraphs that begin "Image 1", "Image 2", or a filename. Integrate the views into the anatomy sections naturally.
 
 ${config.reviewInstructions}
 
 Return a detailed structured review. Keep each paragraph TTS-ready: complete sentences, no markdown bullets, no clipped fragments.
 
-Fresh uploaded image filenames for this run:
-${images.length ? images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n") : "- None. Use existing uploaded/reviewed evidence and entered metrics."}`,
+Fresh uploaded images attached for this run:
+${freshImagePayload.length ? `- ${freshImagePayload.length} fresh image${freshImagePayload.length === 1 ? "" : "s"} attached. Use plain view labels in the review, not filenames.` : "- None."}
+
+Reused saved Profile Q&A images attached for this run:
+${hasReusedSavedImages ? `- ${imagePayload.length} saved image${imagePayload.length === 1 ? "" : "s"} reloaded. Use plain view labels in the review, not filenames.` : "- None attached. Use saved reviewed findings and entered metrics."}
+
+Attached image reference IDs for structured callouts:
+${imageReviewReferencePromptLines(imagePayload)}
+
+ANNOTATED IMAGE OUTPUT RULES:
+- Also return annotated_images and image_region_findings when direct image payload is attached.
+- Use image_id values exactly as listed above.
+- Use natural clinical view labels such as anterior standing view, right lateral standing view, posterior standing view, supine/table-position view, lithotomy pelvic view, close-up pelvic view, perineal view, or genital close-up.
+- Do not put filenames, storage IDs, camera roll IDs, or raw image numbers in annotated_images, image_region_findings, or the prose review.
+- image_region_findings should be concise, clinically useful callouts linked to the same sections used in the prose.
+- For pin and box coordinates, use approximate percentages from zero to one hundred with origin at the top-left of the displayed image. Only include pin or box when the location is reasonably clear; otherwise omit that field.
+- Callouts should stay anatomical and evidence-grounded: body region, visible posture/alignment, habitus/soft tissue, skin/surface finding, tissue state, visibility limitation, or clinical reference value.
+- For genital/pelvic regions, use neutral anatomical terms and do not infer arousal, pleasure, pain, intent, or function unless directly visible and relevant.`,
         response_json_schema: {
           type: "object",
           properties: {
             overview: { type: "string" },
             ...Object.fromEntries(profileReviewResultSections(config).map((section) => [section.key, { type: "array", items: { type: "string" } }])),
+            annotated_images: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  image_id: { type: "string" },
+                  view_label: { type: "string" },
+                  body_position: { type: "string" },
+                  coverage: { type: "string" },
+                  visibility_notes: { type: "string" },
+                  major_regions_visible: { type: "array", items: { type: "string" } },
+                },
+                required: ["image_id", "view_label", "coverage", "visibility_notes"],
+              },
+            },
+            image_region_findings: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  finding_id: { type: "string" },
+                  image_id: { type: "string" },
+                  section_key: { type: "string" },
+                  region: { type: "string" },
+                  label: { type: "string" },
+                  finding: { type: "string" },
+                  confidence: { type: "string" },
+                  visibility: { type: "string" },
+                  evidence_level: { type: "string" },
+                  limitations: { type: "array", items: { type: "string" } },
+                  pin: {
+                    type: "object",
+                    properties: {
+                      x: { type: "number" },
+                      y: { type: "number" },
+                    },
+                  },
+                  box: {
+                    type: "object",
+                    properties: {
+                      x: { type: "number" },
+                      y: { type: "number" },
+                      width: { type: "number" },
+                      height: { type: "number" },
+                    },
+                  },
+                },
+                required: ["finding_id", "image_id", "region", "label", "finding", "confidence"],
+              },
+            },
           },
           required: ["overview", ...profileReviewResultSections(config).filter((section) => section.required !== false).map((section) => section.key)],
         },
       });
-      const parsed = normalizeAnatomicalProfileResult(typeof raw === "string" ? JSON.parse(raw) : raw);
+      const parsed = normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw);
       if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
       const storedResult = {
         ...parsed,
-        _meta: buildImageReviewMeta(images, sessions, result?._meta, visualEvidence.counts),
+        _meta: buildImageReviewMeta(imagePayload, sessions, result?._meta, visualEvidence.counts),
       };
       setResult(storedResult);
       const nextArchive = await saveProfileResultWithArchive({
@@ -1071,6 +1642,12 @@ ${images.length ? images.map((image, index) => `${index + 1}. ${image.filename}`
 
         <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{existingEvidenceCount} saved visual/video evidence items</Badge>
+          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+            {collectSavedProfileImageAttachments(userProfile, {
+              limit: 99,
+              purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
+            }).length} relevant reusable Profile Q&A images
+          </Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{sessions.length} sessions loaded</Badge>
           {bodyExplorations.length > 0 && (
             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{bodyExplorations.length} body exploration sessions loaded</Badge>
@@ -1084,8 +1661,9 @@ ${images.length ? images.map((image, index) => `${index + 1}. ${image.filename}`
           <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
             <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
             <span>Fresh images reviewed: {result?._meta?.fresh_image_count ?? result?._meta?.image_count ?? 0}</span>
-            {Array.isArray(result?._meta?.image_filenames) && result._meta.image_filenames.length > 0 && (
-              <span className="max-w-full truncate">Files: {result._meta.image_filenames.join(", ")}</span>
+            <span>Saved images reused: {result?._meta?.reused_saved_image_count ?? 0}</span>
+            {Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0 && (
+              <span>{result._meta.reviewed_images.length} reference view{result._meta.reviewed_images.length === 1 ? "" : "s"} linked</span>
             )}
           </div>
         )}
@@ -1100,6 +1678,28 @@ ${images.length ? images.map((image, index) => `${index + 1}. ${image.filename}`
 
         {!profileLoading && !images.length && (
           <p className="text-xs text-muted-foreground">{config.emptyText}</p>
+        )}
+
+        {images.length > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Fresh image files stay attached only for this browser session. If you reload the page, re-add the photos before running review again.
+          </p>
+        ) : collectSavedProfileImageAttachments(userProfile, {
+          limit: 99,
+          purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
+        }).length > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No fresh images selected. This review will reuse the most relevant saved Profile Q&A images when they can be reloaded, then synthesize saved visual findings and profile evidence.
+          </p>
+        ) : null}
+
+        {!images.length && collectSavedProfileImageAttachments(userProfile, {
+          limit: 99,
+          purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
+        }).length === 0 && existingEvidenceCount > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Saved visual findings are available, but no reusable Profile Q&A image files were found in saved chat attachments.
+          </p>
         )}
 
         {images.length > 0 && (
@@ -1124,6 +1724,15 @@ ${images.length ? images.map((image, index) => `${index + 1}. ${image.filename}`
         )}
 
         <CompactError message={error} />
+
+        {result && (
+          <ImageAnnotationBoard
+            result={result}
+            sections={sections}
+            color={config.color}
+            transientImages={images}
+          />
+        )}
 
         {result && (
           <TTSReader
