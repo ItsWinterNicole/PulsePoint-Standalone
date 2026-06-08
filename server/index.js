@@ -12,6 +12,7 @@ import { jobsRouter } from './routes/jobs.js';
 import { statusRouter } from './routes/status.js';
 import { liveCaptureRouter } from './routes/liveCapture.js';
 import { localVisionRouter } from './routes/localVision.js';
+import { localAiRouter } from './routes/localAi.js';
 import { startHeartRateRelay } from './services/hrRelay.js';
 import { restorePersistedJobs } from './services/jobQueue.js';
 
@@ -35,6 +36,7 @@ app.use('/api/jobs', jobsRouter);
 app.use('/api/status', statusRouter);
 app.use('/api/live-capture', liveCaptureRouter);
 app.use('/api/local-vision', localVisionRouter);
+app.use('/api/local-ai', localAiRouter);
 app.use('/api/auth', authRouter);
 
 app.listen(port, () => {

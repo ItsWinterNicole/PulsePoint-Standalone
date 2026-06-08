@@ -1,4 +1,4 @@
-import { richTextToPlainText } from "@/lib/richText";
+import { richTextToPlainText } from "./richText.js";
 
 export const VISUAL_REVIEW_SOURCES = [
   "profile_sarah_image_review",

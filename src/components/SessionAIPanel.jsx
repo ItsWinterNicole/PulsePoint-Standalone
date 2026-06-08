@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
@@ -12,6 +12,14 @@ import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessi
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
+import {
+  buildSarahSessionSynthesisPrompt,
+  buildSessionAnalysisEvidencePacket,
+  evidencePacketPreview,
+  normalizeGoldStandardSessionAnalysis,
+  requiredAnalysisSectionsPresent,
+  SARAH_SESSION_ANALYSIS_SCHEMA,
+} from "@/lib/sessionEvidencePacket";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -111,12 +119,7 @@ COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
 - Address the person directly throughout. Never write "the user," "the user's notes," "the subject," "the participant," or "the patient." Say "your notes," "you observed," "your body," "your pattern," or "your recovery."
 - Produce one interpretive pass through the timeline only. The executive summary should preview the central arc without replaying details. The chronological deep dive is the only place to narrate sequential events.
 - Do not re-explain the same insertion, heart-rate shift, movement event, or sensory note in multiple sections. Later sections should synthesize implications, not retell the event sequence.
-- Organize the existing response keys as follows:
-  * summary = Executive Summary: rich and concise.
-  * arousal_arc = Chronological Deep Dive: one ordered, phase-by-phase timeline pass.
-  * event_analysis = Motion Telemetry Interpretation and evidence integration: asymmetry, cadence proxy, movement patterns, conflicts between sources, and new implications only; do not replay chronology.
-  * notable_findings = Pattern Recognition / Cross-Session Context and clearly identified hypotheses.
-  * recommendations = Recommendations / Experiments: focused next steps grounded in supported findings.
+- Organize the response into the required Sarah sections: Executive Summary, Chronological Deep Dive, Motion & Evidence Interpretation, HR/HRV / Telemetry Interpretation, EMG Analysis, Patterns & Hypotheses, Recommendations & Experiments, Limitations, and Provenance Summary.
 - Prefix speculative mechanisms with "Hypothesis:" or "One possible explanation:" and qualify them with wording such as "may suggest" or "is consistent with."
 - Describe observed findings confidently, but never say evidence "proves," "confirms," or "indicates definitively" an inferred physiological mechanism.
 - If a subjective note conflicts with stronger direct visual review, reviewed media-derived evidence, telemetry, or a corrected later observation, prefer the stronger evidence and explicitly acknowledge the discrepancy. Do not build recommendations on a disputed note as though it were settled fact.
@@ -130,6 +133,7 @@ const SECTION_COLORS = {
   primary: "hsl(var(--primary))",
   "chart-1": "hsl(var(--chart-1))",
   "chart-2": "hsl(var(--chart-2))",
+  "chart-3": "hsl(var(--chart-3))",
   "chart-4": "hsl(var(--chart-4))",
   accent: "hsl(var(--accent))",
   destructive: "hsl(var(--destructive))",
@@ -159,7 +163,7 @@ function isNewerCompletedJob(job, savedResult) {
 function toAnalysisTextArray(value) {
   if (Array.isArray(value)) {
     return value
-      .map((item) => repairCharacterSplitParagraph(String(item || "").trim()))
+      .map((item) => repairCharacterSplitParagraph(String(typeof item === "object" ? item.paragraph || item.text || item.summary || "" : item || "").trim()))
       .filter(Boolean);
   }
   if (typeof value === "string") {
@@ -171,8 +175,10 @@ function toAnalysisTextArray(value) {
 
 function normalizeAnalysisShape(value) {
   if (!value || typeof value !== "object") return value;
+  const gold = normalizeGoldStandardSessionAnalysis(value);
   return {
     ...value,
+    ...gold,
     summary: typeof value.summary === "string" ? repairCharacterSplitParagraph(value.summary) : value.summary,
     arousal_arc: toAnalysisTextArray(value.arousal_arc),
     phase_analysis: toAnalysisTextArray(value.phase_analysis),
@@ -216,11 +222,38 @@ function sessionAIPreflight(session, timelineRows = []) {
   };
 }
 
+function preflightFromPacket(packet) {
+  const preview = evidencePacketPreview(packet);
+  return {
+    eventCount: preview.eventNotesCount,
+    usefulEventCount: preview.usefulEventNotesCount,
+    aiEventCount: 0,
+    localCandidateEventCount: preview.localAnnotationCardsCount,
+    videoPassCount: preview.savedSarahVideoCardsCount,
+    videoDraftEventCount: packet?.counts?.saved_sarah_video_draft_events || 0,
+    videoFindingCount: packet?.visual_evidence?.saved_sarah_video_findings_count || 0,
+    contextItems: preview.contextItems,
+    contextEvidenceCount: preview.contextItems.length,
+    hasTelemetry: preview.hrPresent,
+    hrvPresent: preview.hrvPresent,
+    emgPresent: preview.emgPresent,
+    profileContextPresent: preview.profileContextPresent,
+    journalContextPresent: preview.journalContextPresent,
+    limitationsPresent: preview.limitationsPresent,
+    limitations: preview.limitations,
+    readiness: preview.readiness,
+    readinessLabel: preview.readinessLabel,
+    creditRisk: preview.readiness !== "ready_for_full_sarah_synthesis",
+  };
+}
+
 function normalizeSessionAnalysis(res) {
   const raw = typeof res === "string" ? JSON.parse(res) : res;
   const parsed = raw?.response ?? raw;
   const hasContent =
+    parsed?.executive_summary ||
     parsed?.summary ||
+    parsed?.chronological_deep_dive?.length ||
     parsed?.arousal_arc?.length ||
     parsed?.phase_analysis?.length ||
     parsed?.event_analysis?.length ||
@@ -293,12 +326,32 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(repairSessionAnalysisResult(session[analysisField] ?? null));
   const [error, setError] = useState("");
+  const [localHealth, setLocalHealth] = useState(null);
+  const [localEvidencePacket, setLocalEvidencePacket] = useState(null);
   const resultStale = isSessionAIContentStale(result, session);
-  const evidencePreflight = sessionAIPreflight(session, timelineRows);
+  const evidencePacket = useMemo(
+    () => buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows, userProfile, sessionJournal, mode }),
+    [emgRows, mode, session, sessionJournal, timelineRows, userProfile],
+  );
+  const evidencePreflight = preflightFromPacket(evidencePacket);
 
   useEffect(() => {
     setResult(repairSessionAnalysisResult(session[analysisField] ?? null));
   }, [analysisField, session]);
+
+  useEffect(() => {
+    let cancelled = false;
+    base44.integrations.Core.GetLocalSarahHealth()
+      .then((health) => {
+        if (!cancelled) setLocalHealth(health);
+      })
+      .catch((err) => {
+        if (!cancelled) setLocalHealth({ ok: false, error: err?.message || "Local Sarah health check failed." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -331,7 +384,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
         if (!isNewerCompletedJob(completedJob, result || session[analysisField])) return;
 
-        const parsed = normalizeSessionAnalysis(completedJob.result);
+        const parsed = normalizeGoldStandardSessionAnalysis(normalizeSessionAnalysis(completedJob.result), evidencePacket);
         const storedResult = {
           ...parsed,
           _meta: buildSessionAIContentMeta(session, (result || session[analysisField])?._meta, completedAt(completedJob)),
@@ -362,7 +415,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, onAnalysisSaved, result, session, session.id]);
+  }, [analysisField, analysisLabel, evidencePacket, onAnalysisSaved, result, session, session.id]);
 
   const analyze = async () => {
     setLoading(true);
@@ -465,6 +518,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       hr_max: Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))),
     } : null;
     const hrvEvidence = buildSessionHrvEvidence(timelineRows, session);
+    const sharedEvidencePacket = buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows, userProfile, sessionJournal, mode });
+    setLocalEvidencePacket(sharedEvidencePacket);
 
     // Sample HR trajectory for the prompt (~1 point every 15s)
     const hrTrajectory = (() => {
@@ -655,6 +710,10 @@ ${JSON.stringify(hrvEvidence, null, 2)}
 
 Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.` : ""}
 
+SHARED SARAH SESSION EVIDENCE PACKET:
+Claude and Local Sarah synthesis both receive this same packet for honest comparison. Treat it as the authoritative structured evidence source, and preserve provenance in the output.
+${JSON.stringify(sharedEvidencePacket, null, 2)}
+
 Session data:
 ${JSON.stringify({
   date: session.date ? (() => {
@@ -725,28 +784,8 @@ ${journalContext}
 Provide ${isTechnical
   ? "a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience. It should be detailed enough to explain the HR arc, phase shifts, stimulation effectiveness, distinctive sensations, and recovery pattern, while remaining smooth enough for text-to-speech narration."
   : "a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience."}`,
-      response_json_schema: {
-        type: "object",
-        properties: {
-          summary: isTechnical
-            ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, HR/HRV-supported autonomic interpretation when available, and why the session behaved the way it did." }
-            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including HRV only when it changes or strengthens the interpretation, without retelling the full chronology." },
-          arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR and usable HRV autonomic arc, exploration or stimulation links, supported anatomy, body-state transitions, pre-climax/climax/recovery shifts when present, and why the session progressed as it did." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful body-state transitions and explain what the body appears to be doing at those moments, weaving in usable HRV when it clarifies a transition." },
-          event_analysis: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR/HRV-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
-            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, HRV where relevant, and evidence discrepancies without replaying the chronology." },
-          emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
-          notable_findings: isTechnical
-            ? { type: "array", items: { type: "string" } }
-            : { type: "array", items: { type: "string" }, description: "Pattern recognition, cross-session context when supported, and clearly labelled hypotheses with calibrated mechanism language." },
-          recommendations: isTechnical
-            ? { type: "array", items: { type: "string" } }
-            : { type: "array", items: { type: "string" }, description: "Focused recommendations or experiments grounded in supported findings rather than repeated narrative." },
-        },
-        required: ["summary", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
-      },
+      response_json_schema: SARAH_SESSION_ANALYSIS_SCHEMA,
+      evidence_packet: sharedEvidencePacket,
       label: analysisLabel,
     };
 
@@ -769,7 +808,7 @@ Provide ${isTechnical
       onProgress: setJobStatus,
     });
 
-    const parsed = normalizeSessionAnalysis(completedJob.result);
+    const parsed = normalizeGoldStandardSessionAnalysis(normalizeSessionAnalysis(completedJob.result), sharedEvidencePacket);
     const storedResult = {
       ...parsed,
       _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
@@ -795,6 +834,96 @@ Provide ${isTechnical
     }
   };
 
+  const analyzeLocally = async () => {
+    const sharedEvidencePacket = buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows, userProfile, sessionJournal, mode });
+    setLocalEvidencePacket(sharedEvidencePacket);
+    setLoading(true);
+    setError("");
+    setCollapsed(false);
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: "Building shared evidence packet for local Sarah synthesis...",
+        local_only: true,
+        cloud_fallback: false,
+      },
+    });
+    try {
+      const prompt = buildSarahSessionSynthesisPrompt({
+        packet: sharedEvidencePacket,
+        mode,
+        local: true,
+      });
+      const startedJob = await startBackgroundJob("local_session_synthesis", {
+        prompt,
+        response_json_schema: SARAH_SESSION_ANALYSIS_SCHEMA,
+        evidence_packet: sharedEvidencePacket,
+        label: `Local ${analysisLabel}`,
+      }, {
+        sessionId: session.id,
+        label: `Local ${analysisLabel}`,
+        source: "local_sarah_session_synthesis",
+        route: window.location.pathname,
+      });
+      setJobStatus(startedJob);
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1200,
+        onProgress: setJobStatus,
+      });
+      const parsed = normalizeGoldStandardSessionAnalysis(completedJob.result, sharedEvidencePacket);
+      const sectionPresence = requiredAnalysisSectionsPresent(parsed);
+      const storedResult = {
+        ...parsed,
+        _meta: {
+          ...buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
+          source: "local_sarah_session_synthesis",
+          local_only: true,
+          cloud_fallback: false,
+          provider: completedJob.result?._local_synthesis_meta?.provider || localHealth?.provider || null,
+          model: completedJob.result?._local_synthesis_meta?.model || localHealth?.model || null,
+          evidence_packet_readiness: sharedEvidencePacket.readiness,
+          required_sections_present: sectionPresence,
+        },
+      };
+      setResult(storedResult);
+      await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
+      onAnalysisSaved?.(analysisField, storedResult);
+      setJobStatus({
+        ...completedJob,
+        progress: {
+          ...(completedJob.progress || {}),
+          phase: "complete",
+          current: 3,
+          total: 3,
+          message: "Local Sarah synthesis complete.",
+          local_only: true,
+          cloud_fallback: false,
+        },
+      });
+    } catch (err) {
+      setError(`${aiErrorMessage(err)} Local Sarah synthesis failed; Claude analysis was not run.`);
+      setJobStatus((previous) => previous ? {
+        ...previous,
+        status: previous.status === "starting" ? "error" : previous.status,
+        progress: {
+          ...(previous.progress || {}),
+          phase: "error",
+          message: "Local Sarah synthesis failed; Claude analysis was not run.",
+          provider: localHealth?.provider,
+          model: localHealth?.model,
+          local_only: true,
+          cloud_fallback: false,
+          evidence_packet_preserved: true,
+        },
+      } : null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="bg-card rounded-xl border border-border p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -804,34 +933,43 @@ Provide ${isTechnical
           </h3>
           {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" /> : <ChevronUp className="w-4 h-4 text-muted-foreground ml-1" />}
         </button>
-        <Button size="sm" onClick={analyze} disabled={loading} className="h-7 text-xs gap-1.5">
-          {loading
-            ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Working…</>
-            : <><Brain className="w-3 h-3" />Analyze</>}
-        </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={analyzeLocally} disabled={loading || !localHealth?.ok} className="h-7 text-xs gap-1.5">
+            {loading
+              ? <><span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Working…</>
+              : <><Brain className="w-3 h-3" />Run Local Sarah</>}
+          </Button>
+          <Button size="sm" onClick={analyze} disabled={loading} className="h-7 text-xs gap-1.5">
+            {loading
+              ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Working…</>
+              : <><Brain className="w-3 h-3" />Analyze with Claude</>}
+          </Button>
+        </div>
       </div>
 
       {!collapsed && loading && <AnalysisStatus job={jobStatus} />}
 
-      {!collapsed && !result && !loading && (
+      {!collapsed && !loading && (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
             {isTechnical
-              ? "Click Analyze for the newer deeper technical pass across physiology, timeline structure, and session turning points. Uses Claude Sonnet."
-              : "Click Analyze to generate the original warm AI physiological session analysis. Uses Claude Sonnet."}
+              ? "Run Local Sarah for private local synthesis, or Analyze with Claude for the reference/gold path. Both use the same shared evidence packet."
+              : "Run Local Sarah for private local synthesis, or Analyze with Claude for the reference/gold path. Both use the same shared evidence packet."}
           </p>
           <div className={`rounded-lg border px-3 py-2 text-xs ${evidencePreflight.creditRisk ? "border-amber-400/35 bg-amber-400/10 text-amber-100" : "border-primary/20 bg-primary/5 text-muted-foreground"}`}>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-foreground">Evidence preflight</span>
+              <span className="font-semibold text-foreground">Evidence Packet Preview</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.readinessLabel}</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.usefulEventCount} useful event notes</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoPassCount} saved video cards</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoDraftEventCount} video draft events</span>
-              {evidencePreflight.localCandidateEventCount > 0 && (
-                <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local candidates</span>
-              )}
-              {evidencePreflight.contextEvidenceCount > 0 && (
-                <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.contextEvidenceCount} logged context fields</span>
-              )}
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local annotation cards</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.contextEvidenceCount} logged context fields</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">HR {evidencePreflight.hasTelemetry ? "present" : "missing"}</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">HRV {evidencePreflight.hrvPresent ? "present" : "missing"}</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">EMG {evidencePreflight.emgPresent ? "present" : "missing"}</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">Profile {evidencePreflight.profileContextPresent ? "present" : "missing"}</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">Journal {evidencePreflight.journalContextPresent ? "present" : "missing"}</span>
             </div>
             {evidencePreflight.contextItems?.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -844,9 +982,28 @@ Provide ${isTechnical
             )}
             <p className="mt-1 leading-relaxed">
               {evidencePreflight.creditRisk
-                ? "Credit caution: Sarah has telemetry/profile/logged context, but not much accepted video/event evidence. This run may be generic unless you save useful annotation findings first."
-                : "This looks usable for Session Analysis. Sarah will see accepted event notes, saved video-pass findings, telemetry, logged context/influences, and profile context."}
+                ? "Evidence caution: Sarah has a shared packet, but this run may be limited unless more accepted visual/event evidence is saved. You can still run local or Claude analysis."
+                : "This looks usable for Session Analysis. Both local Sarah and Claude will see the same event notes, saved video-pass findings, telemetry, logged context/influences, and profile context."}
             </p>
+            <p className="mt-1 leading-relaxed">
+              Local Sarah is private/local and model-dependent. Claude remains the reference path. Local mode will not silently fall back to cloud.
+              {!localHealth?.ok ? ` Local Sarah unavailable: ${localHealth?.error || "health check did not pass."}` : ` Local Sarah configured: ${localHealth.provider || "local"} / ${localHealth.model || "model unknown"}.`}
+            </p>
+            {evidencePreflight.limitations?.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {evidencePreflight.limitations.slice(0, 4).map((item) => (
+                  <p key={item} className="rounded-md border border-border bg-background/70 px-2 py-1 text-[10px] text-muted-foreground">{item}</p>
+                ))}
+              </div>
+            )}
+            <details className="mt-2 rounded-md border border-border bg-background/60">
+              <summary className="cursor-pointer px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Raw Evidence Packet / Debug
+              </summary>
+              <pre className="max-h-64 overflow-auto border-t border-border p-2 text-[10px] text-muted-foreground">
+                {JSON.stringify(localEvidencePacket || evidencePacket, null, 2)}
+              </pre>
+            </details>
           </div>
         </div>
       )}
@@ -859,20 +1016,26 @@ Provide ${isTechnical
       )}
 
       {!collapsed && result && (() => {
-        // Support both old schema (hr_analysis/phase_analysis) and new schema (arousal_arc/event_analysis)
-        const arousalItems = toAnalysisTextArray(result.arousal_arc?.length ? result.arousal_arc : result.phase_analysis);
-        const eventItems = toAnalysisTextArray(result.event_analysis?.length ? result.event_analysis : result.hr_analysis);
+        const summaryText = result.executive_summary || result.summary;
+        const arousalItems = toAnalysisTextArray(result.chronological_deep_dive?.length ? result.chronological_deep_dive : (result.arousal_arc?.length ? result.arousal_arc : result.phase_analysis));
+        const eventItems = toAnalysisTextArray(result.motion_evidence_interpretation?.length ? result.motion_evidence_interpretation : (result.event_analysis?.length ? result.event_analysis : result.hr_analysis));
+        const telemetryItems = toAnalysisTextArray(result.telemetry_interpretation);
         const emgItems = toAnalysisTextArray(result.emg_analysis);
-        const notableItems = toAnalysisTextArray(result.notable_findings);
-        const recommendationItems = toAnalysisTextArray(result.recommendations);
+        const notableItems = toAnalysisTextArray(result.patterns_hypotheses?.length ? result.patterns_hypotheses : result.notable_findings);
+        const recommendationItems = toAnalysisTextArray(result.recommendations_experiments?.length ? result.recommendations_experiments : result.recommendations);
+        const limitationItems = toAnalysisTextArray(result.limitations);
+        const provenanceItems = toAnalysisTextArray(result.provenance_summary);
 
         const paras = [
-          result.summary,
+          summaryText,
           ...arousalItems,
           ...eventItems,
+          ...telemetryItems,
           ...emgItems,
           ...notableItems,
           ...recommendationItems,
+          ...limitationItems,
+          ...provenanceItems,
         ]
           .filter(Boolean)
           .map(repairCharacterSplitParagraph);
@@ -880,12 +1043,15 @@ Provide ${isTechnical
         // Build a flat index → section label map for rendering
         let idx = 0;
         const sections = [];
-        if (result.summary) sections.push({ label: null, color: "primary", items: [result.summary], start: idx++ });
-        if (arousalItems.length) { sections.push({ label: isTechnical ? "Arousal Arc" : "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
-        if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
+        if (summaryText) sections.push({ label: "Executive Summary", color: "primary", items: [summaryText], start: idx++ });
+        if (arousalItems.length) { sections.push({ label: "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
+        if (eventItems.length) { sections.push({ label: "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
+        if (telemetryItems.length) { sections.push({ label: "HR/HRV / Telemetry Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: telemetryItems, start: idx }); idx += telemetryItems.length; }
         if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
-        if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
-        if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
+        if (notableItems.length) { sections.push({ label: "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
+        if (recommendationItems.length) { sections.push({ label: "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); idx += recommendationItems.length; }
+        if (limitationItems.length) { sections.push({ label: "Limitations", color: "destructive", icon: <AlertCircle className="w-3.5 h-3.5" />, items: limitationItems, start: idx }); idx += limitationItems.length; }
+        if (provenanceItems.length) { sections.push({ label: "Provenance Summary", color: "primary", icon: <Activity className="w-3.5 h-3.5" />, items: provenanceItems, start: idx }); }
 
         return (
           <div className="space-y-3">
@@ -912,8 +1078,8 @@ Provide ${isTechnical
                 for (const sec of sections) {
                   if (paraIdx >= sec.start) section = sec;
                 }
-                return section.label === null
-                  ? { type: "summary", color: "hsl(var(--primary))" }
+                return section.label === "Executive Summary"
+                  ? { type: "section", sec: { key: "Executive Summary", label: "Executive Summary", color: "hsl(var(--primary))", icon: section.icon } }
                   : {
                     type: "section",
                     sec: {
